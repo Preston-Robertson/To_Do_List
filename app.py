@@ -865,7 +865,8 @@ async def admin_env_save(request: Request):
             "partials/admin_env_result.html",
             {"request": request, "ok": False,
              "error": f"could not read {env_path}: {exc}",
-             "changed": [], "unchanged_secrets": []},
+             "changed": [], "unchanged_secrets": [],
+             "hot_reloaded": [], "restart_needed": []},
         )
 
     updates: dict[str, str] = {}
@@ -888,7 +889,8 @@ async def admin_env_save(request: Request):
         return templates.TemplateResponse(
             "partials/admin_env_result.html",
             {"request": request, "ok": True, "error": None,
-             "changed": [], "unchanged_secrets": unchanged_secrets},
+             "changed": [], "unchanged_secrets": unchanged_secrets,
+             "hot_reloaded": [], "restart_needed": []},
         )
 
     try:
@@ -897,21 +899,59 @@ async def admin_env_save(request: Request):
         return templates.TemplateResponse(
             "partials/admin_env_result.html",
             {"request": request, "ok": False, "error": str(exc),
-             "changed": [], "unchanged_secrets": unchanged_secrets},
+             "changed": [], "unchanged_secrets": unchanged_secrets,
+             "hot_reloaded": [], "restart_needed": []},
         )
     except Exception as exc:
         return templates.TemplateResponse(
             "partials/admin_env_result.html",
             {"request": request, "ok": False,
              "error": f"{type(exc).__name__}: {exc}",
-             "changed": [], "unchanged_secrets": unchanged_secrets},
+             "changed": [], "unchanged_secrets": unchanged_secrets,
+             "hot_reloaded": [], "restart_needed": []},
         )
+
+    hot_reloaded, restart_needed = _hot_reload_env(changed, updates)
 
     return templates.TemplateResponse(
         "partials/admin_env_result.html",
         {"request": request, "ok": True, "error": None,
-         "changed": changed, "unchanged_secrets": unchanged_secrets},
+         "changed": changed, "unchanged_secrets": unchanged_secrets,
+         "hot_reloaded": hot_reloaded, "restart_needed": restart_needed},
     )
+
+
+# Keys we can safely apply live by mutating os.environ + rebuilding singletons.
+# Anything not listed here still needs a systemctl restart to take effect.
+_HOT_RELOADABLE = {
+    "LUIGI_WEB_UI_TOKEN",           # auth.py reads os.environ per-request
+    "LUIGI_WEB_LLM_PROVIDER",
+    "LUIGI_WEB_LLM_BASE_URL",
+    "LUIGI_WEB_LLM_API_KEY",
+    "LUIGI_WEB_LLM_MODEL",
+    "LUIGI_WEB_LLM_TIMEOUT",
+    "LUIGI_WEB_LLM_MAX_TOOL_ITERATIONS",
+}
+
+
+def _hot_reload_env(changed: list[str], updates: dict[str, str]) -> tuple[list[str], list[str]]:
+    """Push freshly-saved values into os.environ and rebuild any live singletons
+    that depend on them. Returns (hot_reloaded_keys, restart_needed_keys)."""
+    global _LLM_PROVIDER
+    hot: list[str] = []
+    cold: list[str] = []
+    llm_touched = False
+    for key in changed:
+        if key in _HOT_RELOADABLE:
+            os.environ[key] = updates[key]
+            hot.append(key)
+            if key.startswith("LUIGI_WEB_LLM_"):
+                llm_touched = True
+        else:
+            cold.append(key)
+    if llm_touched:
+        _LLM_PROVIDER = llm_mod.build_provider_from_env()
+    return hot, cold
 
 
 def _run(cmd: list[str], cwd: Path, env: dict[str, str] | None = None,

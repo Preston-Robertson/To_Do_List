@@ -5,12 +5,21 @@
       {% if changed %}
         Saved {{ changed|length }} key{{ 's' if changed|length != 1 else '' }}:
         <code>{{ changed|join(', ') }}</code>.
-        <strong>Restart required</strong> for changes to take effect.
       {% else %}
         No changes to save (secrets left blank were kept).
       {% endif %}
     </div>
-    {% if changed %}
+    {% if hot_reloaded %}
+      <p class="muted-hint" style="margin-top:6px;">
+        <strong>Applied live</strong> (no restart needed):
+        <code>{{ hot_reloaded|join(', ') }}</code>.
+      </p>
+    {% endif %}
+    {% if restart_needed %}
+      <div class="admin-banner-warn" style="margin-top:8px;">
+        <strong>Restart required</strong> for:
+        <code>{{ restart_needed|join(', ') }}</code>.
+      </div>
       <div class="form-actions" style="border-top:none;padding-top:8px;">
         <button
           class="btn btn-danger"
