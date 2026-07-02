@@ -1,0 +1,37 @@
+{# One-shot render of the env save result. Shown in #env-result via HTMX. #}
+{% if ok %}
+  {% if changed or unchanged_secrets %}
+    <div class="admin-banner-ok">
+      {% if changed %}
+        Saved {{ changed|length }} key{{ 's' if changed|length != 1 else '' }}:
+        <code>{{ changed|join(', ') }}</code>.
+        <strong>Restart required</strong> for changes to take effect.
+      {% else %}
+        No changes to save (secrets left blank were kept).
+      {% endif %}
+    </div>
+    {% if changed %}
+      <div class="form-actions" style="border-top:none;padding-top:8px;">
+        <button
+          class="btn btn-danger"
+          hx-post="/admin/restart"
+          hx-target="#admin-result"
+          hx-swap="innerHTML"
+          hx-confirm="Restart now to apply the new env values?"
+        >Restart to apply</button>
+      </div>
+    {% endif %}
+    {% if unchanged_secrets %}
+      <p class="muted-hint" style="margin-top:6px;">
+        Kept existing values for secret keys:
+        <code>{{ unchanged_secrets|join(', ') }}</code>.
+      </p>
+    {% endif %}
+  {% else %}
+    <div class="admin-banner-ok">Nothing changed.</div>
+  {% endif %}
+{% else %}
+  <div class="admin-banner-err">
+    <strong>Save failed:</strong> {{ error }}
+  </div>
+{% endif %}

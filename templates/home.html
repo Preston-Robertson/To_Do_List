@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
+{% include "partials/chat_panel.html" %}
+
 <section class="board-header">
   <div class="home-title">
     <h1>Home</h1>
@@ -9,8 +11,13 @@
   <details class="widget-customizer">
     <summary class="btn btn-ghost">Customize widgets ▾</summary>
     <div class="widget-toggle-list">
+      <label><input type="checkbox" class="widget-toggle" data-widget="overdue" checked> Overdue</label>
+      <label><input type="checkbox" class="widget-toggle" data-widget="upcoming" checked> Upcoming (7 days)</label>
       <label><input type="checkbox" class="widget-toggle" data-widget="open-tasks" checked> Open tasks</label>
       <label><input type="checkbox" class="widget-toggle" data-widget="disc-pending" checked> Discipline (today)</label>
+      <label><input type="checkbox" class="widget-toggle" data-widget="disc-streaks" checked> Discipline streaks</label>
+      <label><input type="checkbox" class="widget-toggle" data-widget="follow-ups" checked> Follow-ups</label>
+      <label><input type="checkbox" class="widget-toggle" data-widget="recent-done" checked> Recent completions</label>
       <label><input type="checkbox" class="widget-toggle" data-widget="disc-week" checked> Discipline this week</label>
       <label><input type="checkbox" class="widget-toggle" data-widget="task-week" checked> Tasks completed this week</label>
     </div>
@@ -18,6 +25,60 @@
 </section>
 
 <section class="home-grid">
+  <!-- Widget: Overdue tasks -->
+  <article class="widget" data-widget="overdue">
+    <header class="widget-header">
+      <h2>Overdue</h2>
+      <span class="widget-count">{{ overdue_tasks|length }}</span>
+    </header>
+    <div class="widget-body scroll-y">
+      {% if overdue_tasks %}
+        <ul class="widget-list">
+          {% for t in overdue_tasks %}
+            <li class="widget-row">
+              <span class="card-priority p{{ t.priority or 0 }}">P{{ t.priority or 0 }}</span>
+              <span class="widget-row-title" title="{{ t.task }}">{{ t.task }}</span>
+              <span class="widget-row-meta">
+                <span class="chip chip-overdue">{{ t.due_date[:10] }}</span>
+                {% if t.catagory %}<span class="chip">{{ t.catagory }}</span>{% endif %}
+                {% if t.source == 'recurring' %}<span class="chip chip-muted">↻</span>{% endif %}
+              </span>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="empty">Nothing overdue.</p>
+      {% endif %}
+    </div>
+  </article>
+
+  <!-- Widget: Upcoming (next 7 days) -->
+  <article class="widget" data-widget="upcoming">
+    <header class="widget-header">
+      <h2>Upcoming &middot; 7 days</h2>
+      <span class="widget-count">{{ upcoming_tasks|length }}</span>
+    </header>
+    <div class="widget-body scroll-y">
+      {% if upcoming_tasks %}
+        <ul class="widget-list">
+          {% for t in upcoming_tasks %}
+            <li class="widget-row">
+              <span class="card-priority p{{ t.priority or 0 }}">P{{ t.priority or 0 }}</span>
+              <span class="widget-row-title" title="{{ t.task }}">{{ t.task }}</span>
+              <span class="widget-row-meta">
+                <span class="chip chip-due">{{ t.due_date[:10] }}</span>
+                {% if t.catagory %}<span class="chip">{{ t.catagory }}</span>{% endif %}
+                {% if t.source == 'recurring' %}<span class="chip chip-muted">↻</span>{% endif %}
+              </span>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="empty">Nothing scheduled this week.</p>
+      {% endif %}
+    </div>
+  </article>
+
   <!-- Widget: Open tasks -->
   <article class="widget" data-widget="open-tasks">
     <header class="widget-header">
@@ -80,6 +141,94 @@
         </ul>
       {% else %}
         <p class="empty">All disciplines done for today. 🎉</p>
+      {% endif %}
+    </div>
+  </article>
+
+  <!-- Widget: Discipline streaks -->
+  <article class="widget" data-widget="disc-streaks">
+    <header class="widget-header">
+      <h2>Discipline &middot; Streaks</h2>
+      <span class="widget-count">{{ discipline_streaks|length }}</span>
+    </header>
+    <div class="widget-body scroll-y">
+      {% if discipline_streaks %}
+        <ul class="widget-list">
+          {% for d in discipline_streaks %}
+            <li class="widget-row">
+              <span class="streak-badge" title="Current streak">
+                {{ d.current_streak or 0 }}<small>d</small>
+              </span>
+              <span class="widget-row-title" title="{{ d.task }}">{{ d.task }}</span>
+              <span class="widget-row-meta">
+                {% if d.catagory %}<span class="chip">{{ d.catagory }}</span>{% endif %}
+                <span class="chip chip-muted">{{ d.frequency_per_week }}/wk</span>
+              </span>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="empty">No active disciplines.</p>
+      {% endif %}
+    </div>
+  </article>
+
+  <!-- Widget: Follow-ups -->
+  <article class="widget" data-widget="follow-ups">
+    <header class="widget-header">
+      <h2>Follow-ups</h2>
+      <span class="widget-count">{{ follow_ups|length }}</span>
+    </header>
+    <div class="widget-body scroll-y">
+      {% if follow_ups %}
+        <ul class="widget-list">
+          {% for f in follow_ups %}
+            <li class="widget-row">
+              <span class="card-priority p{{ f.priority or 0 }}">P{{ f.priority or 0 }}</span>
+              <span class="widget-row-title" title="{{ f.follow_up_task }}">
+                {{ f.follow_up_task }}
+                <small class="muted-hint">← {{ f.trigger_task }}</small>
+              </span>
+              <span class="widget-row-meta">
+                {% if f.catagory %}<span class="chip">{{ f.catagory }}</span>{% endif %}
+                {% if f.due_offset_days is not none %}
+                  <span class="chip chip-muted">+{{ f.due_offset_days }}d</span>
+                {% endif %}
+              </span>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="empty">No follow-ups defined.</p>
+      {% endif %}
+    </div>
+  </article>
+
+  <!-- Widget: Recent completions -->
+  <article class="widget" data-widget="recent-done">
+    <header class="widget-header">
+      <h2>Recently completed</h2>
+      <span class="widget-count">{{ recent_completions|length }}</span>
+    </header>
+    <div class="widget-body scroll-y">
+      {% if recent_completions %}
+        <ul class="widget-list">
+          {% for t in recent_completions %}
+            <li class="widget-row">
+              <span class="check-badge" aria-hidden="true">✓</span>
+              <span class="widget-row-title" title="{{ t.task }}">{{ t.task }}</span>
+              <span class="widget-row-meta">
+                {% if t.catagory %}<span class="chip">{{ t.catagory }}</span>{% endif %}
+                {% if t.completed_time %}
+                  <span class="chip chip-muted">{{ t.completed_time[:10] }}</span>
+                {% endif %}
+                {% if t.source == 'recurring' %}<span class="chip chip-muted">↻</span>{% endif %}
+              </span>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="empty">Nothing completed yet.</p>
       {% endif %}
     </div>
   </article>

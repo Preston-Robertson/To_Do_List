@@ -619,3 +619,144 @@ def weekly_task_completion_counts(anchor: date | None = None) -> list[dict[str, 
         {"date": d.isoformat(), "dow": labels[i], "count": counts.get(d.isoformat(), 0)}
         for i, d in enumerate(days)
     ]
+
+
+def list_overdue_tasks(limit: int | None = 10) -> list[dict[str, Any]]:
+    """Open tasks whose due_date is strictly before today, worst first."""
+    lim = "" if limit is None else f"LIMIT {int(limit)}"
+    today = today_iso()
+    q = text(f"""
+        SELECT uuid, task, priority, status, due_date, catagory, 'task' AS source
+        FROM tasks
+        WHERE completed = 0 AND due_date IS NOT NULL AND due_date < :today
+        UNION ALL
+        SELECT uuid, task, priority, status, due_date, catagory, 'recurring' AS source
+        FROM recurring_tasks
+        WHERE completed = 0 AND due_date IS NOT NULL AND due_date < :today
+        ORDER BY due_date ASC, priority DESC NULLS LAST
+        {lim}
+    """)
+    with get_engine().connect() as conn:
+        return _rows(conn.execute(q, {"today": today}))
+
+
+def list_upcoming_tasks(days: int = 7, limit: int | None = 10) -> list[dict[str, Any]]:
+    """Open tasks due today through today+``days`` (inclusive)."""
+    lim = "" if limit is None else f"LIMIT {int(limit)}"
+    today = date.today()
+    end = (today + timedelta(days=int(days))).isoformat()
+    q = text(f"""
+        SELECT uuid, task, priority, status, due_date, catagory, 'task' AS source
+        FROM tasks
+        WHERE completed = 0 AND due_date IS NOT NULL
+          AND due_date >= :today AND due_date <= :end
+        UNION ALL
+        SELECT uuid, task, priority, status, due_date, catagory, 'recurring' AS source
+        FROM recurring_tasks
+        WHERE completed = 0 AND due_date IS NOT NULL
+          AND due_date >= :today AND due_date <= :end
+        ORDER BY due_date ASC, priority DESC NULLS LAST
+        {lim}
+    """)
+    with get_engine().connect() as conn:
+        return _rows(conn.execute(q, {"today": today.isoformat(), "end": end}))
+
+
+def list_recent_completions(limit: int = 8) -> list[dict[str, Any]]:
+    """Most-recently completed tasks + recurring rows."""
+    q = text(f"""
+        SELECT uuid, task, priority, catagory, completed_time, 'task' AS source
+        FROM tasks
+        WHERE completed = 1 AND completed_time IS NOT NULL
+        UNION ALL
+        SELECT uuid, task, priority, catagory, completed_time, 'recurring' AS source
+        FROM recurring_tasks
+        WHERE completed = 1 AND completed_time IS NOT NULL
+        ORDER BY completed_time DESC
+        LIMIT {int(limit)}
+    """)
+    with get_engine().connect() as conn:
+        return _rows(conn.execute(q))
+
+
+def list_discipline_streaks(limit: int = 8) -> list[dict[str, Any]]:
+    """Active disciplines sorted by current_streak DESC, then task ASC."""
+    q = text(f"""
+        SELECT uuid, task, catagory, frequency_per_week, current_streak
+        FROM discipline_list
+        WHERE active = 1
+        ORDER BY current_streak DESC NULLS LAST, task ASC
+        LIMIT {int(limit)}
+    """)
+    with get_engine().connect() as conn:
+        return _rows(conn.execute(q))
+
+
+def list_follow_ups_preview(limit: int = 8) -> list[dict[str, Any]]:
+    """Highest-priority follow-ups for the Home dashboard."""
+    q = text(f"""
+        SELECT uuid, trigger_task, follow_up_task, catagory, priority,
+               due_offset_days
+        FROM follow_up_tasks
+        ORDER BY priority DESC NULLS LAST, trigger_task ASC
+        LIMIT {int(limit)}
+    """)
+    with get_engine().connect() as conn:
+        return _rows(conn.execute(q))
+
+
+# --------------------------------------------------------------------------- #
+# Chat / LLM helpers
+# --------------------------------------------------------------------------- #
+
+def find_tasks_by_name(
+    query: str,
+    include_completed: bool = False,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """Case-insensitive substring match over ``tasks`` + ``recurring_tasks``.
+
+    Used by the chat agent to resolve a natural-language task reference to a
+    ``uuid`` before performing a mutation. Returns the shape the caller needs
+    to disambiguate: uuid, task, status, due_date, source.
+    """
+    pattern = f"%{query.strip().lower()}%"
+    where_completed = "" if include_completed else "AND completed = 0"
+    q = text(f"""
+        SELECT uuid, task, status, due_date, catagory, 'task' AS source
+        FROM tasks
+        WHERE LOWER(task) LIKE :p {where_completed}
+        UNION ALL
+        SELECT uuid, task, status, due_date, catagory, 'recurring' AS source
+        FROM recurring_tasks
+        WHERE LOWER(task) LIKE :p {where_completed}
+        ORDER BY task ASC
+        LIMIT {int(limit)}
+    """)
+    with get_engine().connect() as conn:
+        return _rows(conn.execute(q, {"p": pattern}))
+
+
+def find_discipline_by_name(query: str) -> dict[str, Any] | None:
+    """Case-insensitive lookup of an active discipline by name.
+
+    Returns the row if exactly one active discipline matches; otherwise None.
+    The chat tool interprets ``None`` as 'ask the user to disambiguate'.
+    """
+    pattern = f"%{query.strip().lower()}%"
+    q = text("""
+        SELECT uuid, task, catagory, frequency_per_week, active, current_streak
+        FROM discipline_list
+        WHERE active = 1 AND LOWER(task) LIKE :p
+        ORDER BY task ASC
+        LIMIT 5
+    """)
+    with get_engine().connect() as conn:
+        rows = _rows(conn.execute(q, {"p": pattern}))
+    if len(rows) == 1:
+        return rows[0]
+    # Exact match wins even if multiple substring matches exist.
+    exact = [r for r in rows if r["task"].lower() == query.strip().lower()]
+    return exact[0] if len(exact) == 1 else None
+
+

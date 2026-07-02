@@ -1,0 +1,59 @@
+{# Home chat panel — top of the /home page. #}
+{# Collapsible so it doesn't dominate the dashboard when unused. #}
+<section class="chat-panel {% if not chat_enabled %}chat-disabled{% endif %}"
+         id="chat-panel">
+  <header class="chat-header">
+    <div class="chat-title">
+      <span class="chat-dot" aria-hidden="true"></span>
+      <h2>Assistant</h2>
+      {% if chat_enabled %}
+        <span class="chat-badge" title="LLM provider / model">
+          {{ chat_provider }} · {{ chat_model }}
+        </span>
+      {% else %}
+        <span class="chat-badge chat-badge-warn" title="Set LUIGI_WEB_LLM_API_KEY to enable">
+          not configured
+        </span>
+      {% endif %}
+    </div>
+    <div class="chat-actions">
+      <button type="button" class="btn btn-ghost btn-tiny"
+              hx-post="/chat/reset" hx-target="#chat-log" hx-swap="innerHTML"
+              title="Clear chat history (server-side)">Clear</button>
+      <button type="button" class="btn btn-ghost btn-tiny"
+              onclick="document.getElementById('chat-panel').classList.toggle('is-collapsed')"
+              title="Collapse / expand">▾</button>
+    </div>
+  </header>
+
+  <div class="chat-body">
+    <div id="chat-log" class="chat-log" aria-live="polite">
+      {# Messages are appended here by HTMX after each /chat POST. #}
+    </div>
+
+    <form class="chat-composer"
+          hx-post="/chat"
+          hx-target="#chat-log"
+          hx-swap="beforeend"
+          hx-disabled-elt="find button, find textarea"
+          hx-on::after-request="this.reset(); this.querySelector('textarea').focus(); document.getElementById('chat-log').scrollTop = document.getElementById('chat-log').scrollHeight;"
+          {% if not chat_enabled %}onsubmit="return false;"{% endif %}>
+      <textarea name="message" rows="1" required
+                placeholder="{% if chat_enabled %}Add a task, mark a discipline done, ask what's overdue…{% else %}Set LUIGI_WEB_LLM_API_KEY to enable the assistant{% endif %}"
+                {% if not chat_enabled %}disabled{% endif %}
+                onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();this.form.requestSubmit();}"></textarea>
+      <div class="chat-composer-actions">
+        {# Mic button is a placeholder wired to the Web Speech API. It stays #}
+        {# disabled until app.js finds SpeechRecognition on the browser AND  #}
+        {# the panel is enabled. See initChatMic() in static/js/app.js.       #}
+        <button type="button" class="btn btn-ghost btn-tiny chat-mic"
+                data-chat-mic disabled
+                title="Voice input (coming soon)"
+                aria-label="Voice input">🎙</button>
+        <button type="submit" class="btn btn-primary btn-tiny"
+                {% if not chat_enabled %}disabled{% endif %}>Send</button>
+      </div>
+      <span class="htmx-indicator chat-spinner" aria-hidden="true">…</span>
+    </form>
+  </div>
+</section>

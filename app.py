@@ -33,6 +33,17 @@ templates = Jinja2Templates(directory="templates")
 # Repo root (used by the /admin update flow to run git/pip in the right place).
 REPO_DIR = Path(__file__).resolve().parent
 
+# LLM chat: build the provider + tool registry once at import. Provider is
+# either a real OpenAI-compat client or a DisabledProvider that shows a
+# friendly 'not configured' message on use. The registry is the *only* code
+# path the LLM can reach — see chat_tools.py for the security contract.
+import chat_tools
+import llm as llm_mod
+_LLM_PROVIDER = llm_mod.build_provider_from_env()
+_LLM_TOOLS = chat_tools.build_registry()
+
+import env_file
+
 
 def _asset_version() -> str:
     """Highest mtime among static assets — appended to <link>/<script> URLs
@@ -667,6 +678,11 @@ def home_page(request: Request):
     disciplines_pending = db.list_disciplines_pending_today()
     disc_week = db.weekly_discipline_counts(today)
     task_week = db.weekly_task_completion_counts(today)
+    overdue_tasks = db.list_overdue_tasks(limit=10)
+    upcoming_tasks = db.list_upcoming_tasks(days=7, limit=10)
+    recent_completions = db.list_recent_completions(limit=8)
+    discipline_streaks = db.list_discipline_streaks(limit=8)
+    follow_ups = db.list_follow_ups_preview(limit=8)
     return templates.TemplateResponse(
         "home.html",
         {
@@ -677,10 +693,84 @@ def home_page(request: Request):
             "disciplines_pending": disciplines_pending,
             "disc_week": disc_week,
             "task_week": task_week,
+            "overdue_tasks": overdue_tasks,
+            "upcoming_tasks": upcoming_tasks,
+            "recent_completions": recent_completions,
+            "discipline_streaks": discipline_streaks,
+            "follow_ups": follow_ups,
             "week_of": monday.isoformat(),
             "today_iso": today.isoformat(),
+            "chat_enabled": not isinstance(_LLM_PROVIDER, llm_mod.DisabledProvider),
+            "chat_provider": _LLM_PROVIDER.name,
+            "chat_model": _LLM_PROVIDER.model,
         },
     )
+
+
+# --------------------------------------------------------------------------- #
+# CHAT — LLM-driven natural-language interface to the task tools
+# --------------------------------------------------------------------------- #
+# Security notes:
+#   - The LLM can only invoke tools registered in chat_tools.build_registry().
+#   - No shell, no eval, no filesystem write, no dynamic code loading.
+#   - Chat history lives in-memory keyed by the session cookie value; a
+#     restart clears everything.
+
+from auth import COOKIE_NAME as _AUTH_COOKIE  # keep import local — no top-of-file churn
+
+
+def _chat_session_id(request: Request) -> str:
+    """Use the auth cookie itself as the chat session key. Falls back to the
+    remote address so the panel still works for token/bearer-only clients."""
+    sid = request.cookies.get(_AUTH_COOKIE)
+    if sid:
+        return f"cookie:{sid}"
+    client = request.client.host if request.client else "unknown"
+    return f"addr:{client}"
+
+
+@app.post("/chat", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+async def chat_send(request: Request, message: str = Form(...)):
+    _require_v2()
+    text = (message or "").strip()
+    if not text:
+        # Render nothing — HTMX will just no-op the swap.
+        return HTMLResponse("")
+
+    session_id = _chat_session_id(request)
+    history = llm_mod.get_history(session_id)
+    if not history:
+        history.append({"role": "system", "content": chat_tools.SYSTEM_PROMPT})
+    history.append({"role": "user", "content": text})
+
+    try:
+        result = llm_mod.run_chat_with_tools(_LLM_PROVIDER, history, _LLM_TOOLS)
+        reply = result.reply or "(no response)"
+        tool_calls = result.tool_calls
+        error = None
+    except llm_mod.LLMError as exc:
+        # Roll back the user message so a retry doesn't double-log.
+        history.pop()
+        reply = ""
+        tool_calls = []
+        error = str(exc)
+
+    return templates.TemplateResponse(
+        "partials/chat_exchange.html",
+        {
+            "request": request,
+            "user_message": text,
+            "assistant_message": reply,
+            "tool_calls": tool_calls,
+            "error": error,
+        },
+    )
+
+
+@app.post("/chat/reset", dependencies=[Depends(require_auth)])
+def chat_reset(request: Request):
+    llm_mod.reset_history(_chat_session_id(request))
+    return HTMLResponse("")
 
 
 # --------------------------------------------------------------------------- #
@@ -723,6 +813,15 @@ def _git_branch() -> str:
 
 @app.get("/admin", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 def admin_page(request: Request):
+    env_path = env_file.env_file_path(REPO_DIR)
+    writable, unwritable_reason = env_file.env_file_writable(env_path)
+    try:
+        current_env = env_file.read_env_file(env_path)
+    except Exception as exc:  # e.g. permission error on read
+        current_env = {}
+        env_read_error = f"{type(exc).__name__}: {exc}"
+    else:
+        env_read_error = ""
     return templates.TemplateResponse(
         "admin.html",
         {
@@ -735,7 +834,83 @@ def admin_page(request: Request):
             "git_last": _git_status_line(),
             "python_exe": sys.executable,
             "schema_version": _STARTUP_SCHEMA["version"],
+            "env_file_path": str(env_path),
+            "env_file_exists": env_path.exists(),
+            "env_writable": writable,
+            "env_unwritable_reason": unwritable_reason,
+            "env_read_error": env_read_error,
+            "env_groups": env_file.grouped_view(current_env),
         },
+    )
+
+
+@app.post("/admin/env", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+async def admin_env_save(request: Request):
+    """Save changes to the managed keys in the .env file.
+
+    Contract:
+      * Only keys in env_file.KNOWN_KEYS are accepted; anything else is
+        rejected by env_file.update_env_file.
+      * Secret fields sent empty mean 'keep the current value' — see the
+        UI copy on the form. This avoids blanking a password by mistake.
+      * The file itself does the atomic write; we just prepare the payload.
+    """
+    env_path = env_file.env_file_path(REPO_DIR)
+    form = await request.form()
+
+    try:
+        current = env_file.read_env_file(env_path)
+    except Exception as exc:
+        return templates.TemplateResponse(
+            "partials/admin_env_result.html",
+            {"request": request, "ok": False,
+             "error": f"could not read {env_path}: {exc}",
+             "changed": [], "unchanged_secrets": []},
+        )
+
+    updates: dict[str, str] = {}
+    unchanged_secrets: list[str] = []
+    for spec in env_file.KNOWN_KEYS:
+        submitted = form.get(spec.name)
+        if submitted is None:
+            continue
+        new_val = str(submitted)
+        if spec.is_secret and new_val == "":
+            # Blank secret = keep current. Only skip when the user actually
+            # left it blank (submitted == "" but the field was sent).
+            unchanged_secrets.append(spec.name)
+            continue
+        if new_val == current.get(spec.name, ""):
+            continue  # nothing changed — skip the write
+        updates[spec.name] = new_val
+
+    if not updates:
+        return templates.TemplateResponse(
+            "partials/admin_env_result.html",
+            {"request": request, "ok": True, "error": None,
+             "changed": [], "unchanged_secrets": unchanged_secrets},
+        )
+
+    try:
+        changed = env_file.update_env_file(env_path, updates, known_only=True)
+    except env_file.EnvUpdateError as exc:
+        return templates.TemplateResponse(
+            "partials/admin_env_result.html",
+            {"request": request, "ok": False, "error": str(exc),
+             "changed": [], "unchanged_secrets": unchanged_secrets},
+        )
+    except Exception as exc:
+        return templates.TemplateResponse(
+            "partials/admin_env_result.html",
+            {"request": request, "ok": False,
+             "error": f"{type(exc).__name__}: {exc}",
+             "changed": [], "unchanged_secrets": unchanged_secrets},
+        )
+
+    return templates.TemplateResponse(
+        "partials/admin_env_result.html",
+        {"request": request, "ok": True, "error": None,
+         "changed": changed, "unchanged_secrets": unchanged_secrets},
     )
 
 

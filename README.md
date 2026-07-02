@@ -13,19 +13,28 @@ is the first. Both write concurrently — Postgres/MVCC keeps things safe.
 ## UI approach
 
 **Home dashboard** at `/home` — customizable widget grid summarizing what needs
-attention right now:
+attention right now. Each widget has its own accent stripe and scrolls
+internally, so an item with hundreds of rows never pushes the page taller.
 
-* **Open Tasks** — top items from `tasks` + `recurring_tasks` where status is
-  `Not Started` or `In Progress`, sorted by priority then due date.
-* **Discipline · Today** — active disciplines with no completion for today.
-  Each row has an inline "Done" button that POSTs to `/discipline/toggle`.
-* **Discipline · This week** — Mon–Sun bar chart of completions.
-* **Tasks completed · This week** — Mon–Sun bar chart of tasks
-  (`tasks` + `recurring_tasks`) whose `completed_time` falls in the current
-  ISO week.
+| Widget | Query | Accent |
+|---|---|---|
+| **Overdue** | `tasks + recurring_tasks` with `due_date < today` and not completed | red |
+| **Upcoming · 7 days** | open items with `due_date` in `[today, today+7]` | blue |
+| **Open Tasks** | `Not Started` or `In Progress`, priority DESC / due ASC | primary |
+| **Discipline · Today** | active disciplines with no completion for today; inline Done button POSTs to `/discipline/toggle` | amber |
+| **Discipline · Streaks** | active disciplines sorted by `current_streak` DESC | orange |
+| **Follow-ups** | highest-priority `follow_up_tasks` with their trigger shown inline | teal |
+| **Recently completed** | last 8 completed items across `tasks` + `recurring_tasks` | green |
+| **Discipline · This week** | Mon–Sun bar chart of `discipline_completions` | green |
+| **Tasks completed · This week** | Mon–Sun bar chart of items whose `completed_time` falls in the current ISO week | violet |
 
-Each widget can be shown/hidden via the "Customize widgets" dropdown; state is
-persisted in `localStorage` per browser (key `luigi.home.hiddenWidgets`).
+Each widget can be shown/hidden via the "Customize widgets" dropdown; state
+is persisted in `localStorage` per browser (key `luigi.home.hiddenWidgets`).
+All widget queries are read-only, bounded with `LIMIT`, and live in `db.py`
+(`list_open_tasks`, `list_overdue_tasks`, `list_upcoming_tasks`,
+`list_recent_completions`, `list_discipline_streaks`,
+`list_disciplines_pending_today`, `list_follow_ups_preview`,
+`weekly_discipline_counts`, `weekly_task_completion_counts`).
 
 **Kanban board by status.** Tasks and Recurring live on 3×2 Kanban boards. The
 column layout is:
@@ -117,6 +126,13 @@ of `LUIGI_WEB_UI_TOKEN` to get a session cookie.
 | `LUIGI_WEB_UI_TOKEN` | Shared login token — **env-only** |
 | `LUIGI_WEB_BIND` | Uvicorn bind address (default `0.0.0.0`) |
 | `LUIGI_WEB_PORT` | Uvicorn port (default `8080`) |
+| `LUIGI_WEB_ENV_FILE` | Path the Admin env editor writes. Defaults to `<repo>/.env`; set to `/etc/luigi-web.env` on the LXC |
+| `LUIGI_WEB_LLM_PROVIDER` | `openai` (default) or `disabled` |
+| `LUIGI_WEB_LLM_BASE_URL` | OpenAI-compatible endpoint. Default `https://models.github.ai/inference` (GitHub Models) |
+| `LUIGI_WEB_LLM_API_KEY` | Chat panel is disabled when blank. GitHub PAT with `models:read` for GitHub Models |
+| `LUIGI_WEB_LLM_MODEL` | Default `openai/gpt-4o-mini` |
+| `LUIGI_WEB_LLM_TIMEOUT` | HTTP timeout in seconds (default `60`) |
+| `LUIGI_WEB_LLM_MAX_TOOL_ITERATIONS` | Cap on tool round-trips per message (default `5`) |
 
 Secrets **must** live outside the repo — in `/etc/luigi-web.env` on the LXC
 (mode `640 root:luigi-web`) or in `.env` locally. `.gitignore` blocks `.env`.
@@ -131,7 +147,8 @@ Unauthenticated:
 
 Authenticated (session cookie, or `?token=` / `Authorization: Bearer`):
 * `GET  /`                → redirects to `/home`
-* `GET  /home`            → widget dashboard (open tasks, discipline today,
+* `GET  /home`            → widget dashboard (overdue, upcoming, open tasks,
+  discipline today, discipline streaks, follow-ups, recent completions,
   weekly discipline chart, weekly tasks-completed chart)
 * `GET  /tasks`           → Kanban board
 * `POST /tasks`           → create
@@ -156,6 +173,16 @@ Authenticated (session cookie, or `?token=` / `Authorization: Bearer`):
   stdout/stderr and exit codes. Does **not** restart the process.
 * `POST /admin/restart`   → exits the process; systemd relaunches it (see
   *Self-update* below).
+* `POST /admin/env`       → write managed `LUIGI_WEB_*` keys back to the env
+  file (path from `LUIGI_WEB_ENV_FILE`). Only keys in
+  `env_file.KNOWN_KEYS` are accepted; comments and any other lines in the
+  file are preserved untouched. Requires the file to be writable by the
+  service user. Changes take effect only after a restart.
+* `POST /chat`            → send one user message to the assistant; returns
+  an HTML partial containing the user bubble, assistant reply, and any
+  tool-call audit entries. Requires `LUIGI_WEB_LLM_API_KEY`.
+* `POST /chat/reset`      → clear the in-memory chat history for the caller's
+  session.
 
 ---
 
@@ -221,3 +248,51 @@ Constraints:
 * No charts/analytics parity with the bot beyond the two weekly bar charts on
   the Home dashboard.
 * No changes to LuigiBot.
+
+---
+
+## Assistant (LLM chat panel)
+
+A collapsible chat panel at the top of `/home` lets you drive the app in
+natural language: *"add task fix printer priority 3 due tomorrow"*, *"mark
+read discipline done"*, *"what's overdue?"*. It's disabled by default; set
+`LUIGI_WEB_LLM_API_KEY` and restart to enable.
+
+**Security contract** (see `chat_tools.py` for the exact list):
+
+* The LLM can only invoke a fixed allow-list of Python functions that wrap
+  `db.py` helpers. Tool names not in the registry are rejected before any
+  Python code runs.
+* No shell, no `eval`/`exec`, no filesystem writes, no dynamic imports, no
+  arbitrary SQL. The agent cannot modify the app's own code or config.
+* Every tool call returns JSON. Every mutating call also shows up in the
+  chat as an audit row (`<details>` under the assistant bubble).
+* Chat history is in-memory keyed by the session cookie; a restart clears it.
+  Nothing is persisted — the DB writes performed by the tools are the audit
+  trail.
+
+**Provider abstraction** — `llm.py` speaks the OpenAI `/chat/completions`
+format, which works out of the box with:
+
+| Endpoint | `LUIGI_WEB_LLM_BASE_URL` | Key type |
+|---|---|---|
+| GitHub Models (default) | `https://models.github.ai/inference` | GitHub PAT (`models:read`) |
+| OpenAI | `https://api.openai.com/v1` | OpenAI API key |
+| Ollama (local) | `http://<host>:11434/v1` | any string (`ollama`) |
+| LM Studio (local) | `http://<host>:1234/v1` | any string |
+| xAI / DeepSeek / others | their documented base URLs | provider key |
+
+Swap providers by changing `LUIGI_WEB_LLM_BASE_URL` + `LUIGI_WEB_LLM_MODEL`
+(and `LUIGI_WEB_LLM_API_KEY`) and restarting. No code change needed.
+
+**Voice input** — the mic button uses the browser's Web Speech API. It stays
+disabled unless the browser exposes `SpeechRecognition` *and* the chat panel
+is enabled. Chrome/Edge on desktop work; Firefox does not (yet). Dictation
+is auto-submitted when it ends.
+
+**Available tools (v1):** `list_open_tasks`, `list_overdue_tasks`,
+`list_upcoming_tasks`, `search_tasks`, `create_task`, `complete_task`,
+`update_task_status`, `delete_task`, `list_disciplines_pending`,
+`mark_discipline_done`, `add_discipline`, `create_follow_up`. Adding a new
+tool = one Python function + one `Tool(...)` entry in
+`chat_tools.build_registry()`.

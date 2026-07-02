@@ -1,0 +1,50 @@
+{# One user→assistant exchange, appended to #chat-log after each /chat POST. #}
+<div class="chat-msg chat-msg-user">
+  <div class="chat-bubble">{{ user_message }}</div>
+</div>
+
+{% if error %}
+  <div class="chat-msg chat-msg-error">
+    <div class="chat-bubble">
+      <strong>Error:</strong> {{ error }}
+    </div>
+  </div>
+{% else %}
+  <div class="chat-msg chat-msg-assistant">
+    <div class="chat-bubble">
+      {% if assistant_message %}{{ assistant_message }}{% else %}<em class="muted-hint">(no reply)</em>{% endif %}
+      {% if tool_calls %}
+        <details class="chat-tool-log">
+          <summary>{{ tool_calls|length }} tool call{{ 's' if tool_calls|length != 1 else '' }}</summary>
+          <ul>
+            {% for tc in tool_calls %}
+              <li class="chat-tool {% if not tc.ok %}chat-tool-err{% endif %}">
+                <code>{{ tc.name }}</code>
+                {% if tc.ok %}
+                  <span class="chip chip-muted">ok</span>
+                {% else %}
+                  <span class="chip chip-overdue">error</span>
+                  <div class="chat-tool-err-msg">{{ tc.error }}</div>
+                {% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        </details>
+      {% endif %}
+    </div>
+  </div>
+
+  {# If any tool actually changed data, hint that widgets are stale. #}
+  {% set mutated = tool_calls|selectattr('ok')|selectattr('name', 'in',
+        ['create_task','complete_task','update_task_status','delete_task',
+         'mark_discipline_done','add_discipline','create_follow_up']
+      )|list %}
+  {% if mutated %}
+    <div class="chat-msg chat-msg-system">
+      <button type="button" class="btn btn-ghost btn-tiny"
+              onclick="window.location.reload()">
+        Refresh dashboard to see changes ↻
+      </button>
+    </div>
+  {% endif %}
+{% endif %}

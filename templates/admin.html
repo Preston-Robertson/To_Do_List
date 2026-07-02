@@ -57,5 +57,103 @@
       <div id="admin-result" class="admin-result"></div>
     </div>
   </article>
+
+  <article class="widget widget-full">
+    <header class="widget-header">
+      <h2>Environment file</h2>
+      <span class="chip chip-muted"><code>{{ env_file_path }}</code></span>
+    </header>
+    <div class="widget-body">
+      {% if env_read_error %}
+        <div class="admin-banner-err">
+          Cannot read env file: <code>{{ env_read_error }}</code>
+        </div>
+      {% elif not env_file_exists %}
+        <div class="admin-banner-err">
+          File does not exist. Create it (with the required
+          <code>LUIGI_WEB_*</code> secrets) before editing here.
+        </div>
+      {% elif not env_writable %}
+        <div class="admin-banner-err">
+          File is <strong>read-only</strong> for this process:
+          <code>{{ env_unwritable_reason }}</code>.<br>
+          Fix on the host, then reload this page.
+        </div>
+      {% else %}
+        <p class="muted-hint">
+          Changes are written to <code>{{ env_file_path }}</code> atomically.
+          Only the keys listed below are managed here — comments and any other
+          lines in the file are preserved untouched. <strong>Values take
+          effect after a restart.</strong>
+        </p>
+        <p class="muted-hint">
+          Secrets are masked. Leave a secret field blank to keep its current
+          value — only type into it when you actually want to change it.
+        </p>
+      {% endif %}
+
+      <form
+        class="env-form"
+        hx-post="/admin/env"
+        hx-target="#env-result"
+        hx-swap="innerHTML"
+        hx-indicator="#env-spinner"
+        {% if not env_writable %}onsubmit="return false;"{% endif %}
+      >
+        {% for group in env_groups %}
+          <fieldset class="env-group">
+            <legend>{{ group.group }}</legend>
+            {% for e in group.entries %}
+              {% set spec = e.spec %}
+              <div class="env-row">
+                <label for="env-{{ spec.name }}" class="env-label">
+                  <span class="env-key"><code>{{ spec.name }}</code></span>
+                  <span class="env-desc">{{ spec.description }}</span>
+                </label>
+                {% if spec.is_secret %}
+                  <div class="env-secret" data-env-secret>
+                    <input
+                      id="env-{{ spec.name }}"
+                      name="{{ spec.name }}"
+                      type="password"
+                      autocomplete="off"
+                      placeholder="{% if e.has_value %}{{ e.display }} (leave blank to keep){% else %}(not set){% endif %}"
+                      {% if not env_writable %}disabled{% endif %}
+                    >
+                    <button
+                      type="button"
+                      class="btn btn-ghost btn-tiny"
+                      data-env-toggle
+                      title="Show / hide"
+                    >👁</button>
+                  </div>
+                {% else %}
+                  <input
+                    id="env-{{ spec.name }}"
+                    name="{{ spec.name }}"
+                    type="{{ spec.input_type }}"
+                    value="{{ e.value }}"
+                    autocomplete="off"
+                    {% if not env_writable %}disabled{% endif %}
+                  >
+                {% endif %}
+              </div>
+            {% endfor %}
+          </fieldset>
+        {% endfor %}
+
+        <div class="form-actions" style="border-top:none;justify-content:flex-start;padding-top:0;">
+          <button
+            type="submit"
+            class="btn btn-primary"
+            {% if not env_writable %}disabled{% endif %}
+            hx-confirm="Save changes to the env file? Restart required to apply."
+          >Save changes</button>
+          <span id="env-spinner" class="htmx-indicator">saving…</span>
+        </div>
+        <div id="env-result" class="admin-result"></div>
+      </form>
+    </div>
+  </article>
 </section>
 {% endblock %}

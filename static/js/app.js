@@ -136,4 +136,73 @@
   } else {
     initHomeWidgets();
   }
+
+  // ------------------- Chat mic (Web Speech API, feature-detected) -------------------
+  // Kept behind a runtime check so browsers without SpeechRecognition just see
+  // a greyed-out button. When available AND the chat panel is enabled, one
+  // click starts dictation; the recognized text is inserted into the textarea
+  // and the form is submitted. No permissions are requested until the user
+  // clicks the button.
+  function initChatMic() {
+    const btn = document.querySelector("[data-chat-mic]");
+    if (!btn) return;
+    const panel = document.getElementById("chat-panel");
+    if (!panel || panel.classList.contains("chat-disabled")) return;
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      btn.title = "Voice input not supported in this browser";
+      return;
+    }
+    btn.disabled = false;
+    btn.title = "Click to dictate (Web Speech API)";
+
+    let recognition = null;
+    let listening = false;
+
+    btn.addEventListener("click", () => {
+      const textarea = document.querySelector(".chat-composer textarea");
+      if (!textarea) return;
+      if (listening && recognition) { recognition.stop(); return; }
+      recognition = new SpeechRecognition();
+      recognition.lang = navigator.language || "en-US";
+      recognition.interimResults = false;
+      recognition.maxAlternatives = 1;
+      recognition.onstart = () => { listening = true; btn.classList.add("is-listening"); };
+      recognition.onend = () => { listening = false; btn.classList.remove("is-listening"); };
+      recognition.onerror = () => { listening = false; btn.classList.remove("is-listening"); };
+      recognition.onresult = (event) => {
+        const transcript = Array.from(event.results)
+          .map((r) => r[0].transcript).join(" ").trim();
+        if (!transcript) return;
+        textarea.value = textarea.value
+          ? textarea.value.trim() + " " + transcript
+          : transcript;
+        // Auto-send when dictation completes — matches how voice assistants feel.
+        const form = textarea.closest("form");
+        if (form) form.requestSubmit();
+      };
+      try { recognition.start(); } catch (e) { /* already started */ }
+    });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initChatMic);
+  } else {
+    initChatMic();
+  }
+
+  // ------------------- Admin env editor: secret reveal -------------------
+  // Toggle a password field to a text field and back. Purely client-side —
+  // the value never leaves the DOM until the form is submitted normally.
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-env-toggle]");
+    if (!btn) return;
+    const wrap = btn.closest("[data-env-secret]");
+    if (!wrap) return;
+    const input = wrap.querySelector("input");
+    if (!input) return;
+    input.type = input.type === "password" ? "text" : "password";
+    btn.textContent = input.type === "password" ? "👁" : "🙈";
+  });
 })();
