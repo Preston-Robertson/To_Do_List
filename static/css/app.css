@@ -117,12 +117,11 @@ main { padding: 20px; }
    -------------------------------------------------------------------------- */
 .kanban {
   display: grid;
-  grid-template-columns: repeat(6, minmax(220px, 1fr));
+  grid-template-columns: repeat(3, minmax(260px, 1fr));
   gap: 12px;
   align-items: start;
 }
-@media (max-width: 1400px) { .kanban { grid-template-columns: repeat(3, 1fr); } }
-@media (max-width: 800px)  { .kanban { grid-template-columns: 1fr; } }
+@media (max-width: 900px)  { .kanban { grid-template-columns: 1fr; } }
 
 .kanban-column {
   background: var(--bg-elev);
@@ -131,6 +130,8 @@ main { padding: 20px; }
   min-height: 200px;
   display: flex;
   flex-direction: column;
+  /* Cap column height so overflow scrolls inside rather than growing the page. */
+  max-height: calc(100vh - 180px);
 }
 .kanban-column-header {
   display: flex;
@@ -142,6 +143,10 @@ main { padding: 20px; }
   text-transform: uppercase;
   letter-spacing: .5px;
   color: var(--text-dim);
+  position: sticky;
+  top: 0;
+  background: var(--bg-elev);
+  z-index: 1;
 }
 .kanban-column-count {
   background: var(--bg-elev-2);
@@ -155,7 +160,17 @@ main { padding: 20px; }
   flex-direction: column;
   gap: 8px;
   min-height: 100px;
+  overflow-y: auto;
+  flex: 1;
 }
+/* Slim scrollbar so it doesn't dominate narrow columns. */
+.kanban-column-body::-webkit-scrollbar { width: 8px; }
+.kanban-column-body::-webkit-scrollbar-track { background: transparent; }
+.kanban-column-body::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 4px;
+}
+.kanban-column-body::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 .sortable-ghost { opacity: .35; }
 .sortable-drag { box-shadow: var(--shadow); }
 
@@ -457,3 +472,188 @@ main { padding: 20px; }
 .data-table tbody tr:hover { background: var(--bg-hover); }
 .row-actions { display: flex; gap: 4px; }
 .empty { color: var(--text-muted); text-align: center; padding: 24px; }
+
+/* --------------------------------------------------------------------------
+   Discipline list — cap each item's heatmap so long lists scroll cleanly.
+   -------------------------------------------------------------------------- */
+.discipline-list {
+  max-height: calc(100vh - 160px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+/* --------------------------------------------------------------------------
+   Home page — customizable widget grid
+   -------------------------------------------------------------------------- */
+.muted-hint { color: var(--text-dim); font-size: 12px; }
+.home-grid, .admin-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+.widget {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 160px);
+}
+.widget-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.widget-header h2 {
+  margin: 0;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  color: var(--text-dim);
+  flex: 1;
+}
+.widget-count {
+  background: var(--bg-elev-2);
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.widget-body {
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: hidden;
+}
+.scroll-y { overflow-y: auto; }
+.widget-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.widget-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+.widget-row-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.widget-row-meta { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.widget-row .btn-primary { font-size: 12px; }
+
+.widget-customizer { position: relative; }
+.widget-customizer[open] .widget-toggle-list {
+  position: absolute;
+  right: 0;
+  top: 32px;
+  z-index: 5;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 200px;
+}
+.widget-customizer summary { list-style: none; cursor: pointer; }
+.widget-customizer summary::-webkit-details-marker { display: none; }
+.widget-toggle-list label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text);
+}
+.widget.is-hidden { display: none; }
+
+/* --------------------------------------------------------------------------
+   Weekly bar chart (SVG)
+   -------------------------------------------------------------------------- */
+.week-chart {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.chart-axis { stroke: var(--border-strong); stroke-width: 1; }
+.chart-bar { transition: opacity 100ms; }
+.chart-bar:hover { opacity: .8; }
+.chart-label {
+  fill: var(--text-dim);
+  font-size: 10px;
+  font-family: var(--font);
+  text-anchor: middle;
+}
+.chart-value {
+  fill: var(--text);
+  font-size: 10px;
+  font-weight: 600;
+  font-family: var(--font);
+  text-anchor: middle;
+}
+
+/* --------------------------------------------------------------------------
+   Admin page
+   -------------------------------------------------------------------------- */
+.kv {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  margin: 0;
+  font-size: 13px;
+}
+.kv dt { color: var(--text-dim); }
+.kv dd { margin: 0; word-break: break-all; }
+.kv code { font-size: 12px; }
+
+.admin-result { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.admin-banner {
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+.admin-banner-ok  { background: rgba(48,164,108,.15); border: 1px solid var(--success); color: var(--text); }
+.admin-banner-err { background: var(--danger-dim); color: white; }
+.admin-step {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.admin-step-err { border-color: var(--danger); }
+.admin-step summary {
+  padding: 6px 10px;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.admin-step-name { color: var(--text); font-weight: 500; }
+.admin-step-out {
+  margin: 0;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  max-height: 300px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-dim);
+}
+.htmx-indicator {
+  opacity: 0;
+  transition: opacity 200ms;
+  color: var(--text-dim);
+  font-size: 12px;
+  align-self: center;
+}
+.htmx-request .htmx-indicator,
+.htmx-indicator.htmx-request { opacity: 1; }
+

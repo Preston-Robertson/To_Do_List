@@ -1,0 +1,25 @@
+{# Simple SVG bar chart for a 7-day week. Requires ``week`` (list of dicts
+   with keys ``dow`` and ``count``) and optional ``accent`` (CSS color). #}
+{% set max_count = week|map(attribute='count')|max %}
+{% set max_count = max_count if max_count and max_count > 0 else 1 %}
+{% set accent = accent | default('var(--accent)') %}
+<svg viewBox="0 0 280 140" class="week-chart" role="img" aria-label="Weekly counts">
+  <line x1="20" y1="115" x2="270" y2="115" class="chart-axis"/>
+  {% for d in week %}
+    {% set x = 24 + loop.index0 * 35 %}
+    {% set h = (d.count / max_count * 90) | round(1) %}
+    <rect
+      x="{{ x }}" y="{{ (115 - h)|round(1) }}"
+      width="24" height="{{ h }}"
+      rx="2" ry="2"
+      fill="{{ accent }}"
+      class="chart-bar"
+    >
+      <title>{{ d.dow }} — {{ d.count }}</title>
+    </rect>
+    {% if d.count %}
+      <text x="{{ x + 12 }}" y="{{ (110 - h)|round(1) }}" class="chart-value">{{ d.count }}</text>
+    {% endif %}
+    <text x="{{ x + 12 }}" y="132" class="chart-label">{{ d.dow }}</text>
+  {% endfor %}
+</svg>

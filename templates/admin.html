@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="board-header">
+  <h1>Admin</h1>
+</section>
+
+<section class="admin-grid">
+  <article class="widget">
+    <header class="widget-header"><h2>Runtime</h2></header>
+    <div class="widget-body">
+      <dl class="kv">
+        <dt>Repo</dt>          <dd><code>{{ repo_dir }}</code></dd>
+        <dt>Python</dt>        <dd><code>{{ python_exe }}</code></dd>
+        <dt>Git branch</dt>    <dd><code>{{ git_branch or '—' }}</code></dd>
+        <dt>Git HEAD</dt>      <dd><code>{{ git_head or '—' }}</code></dd>
+        <dt>Last commit</dt>   <dd><code>{{ git_last or '—' }}</code></dd>
+        <dt>Schema version</dt><dd><code>{{ schema_version }}</code></dd>
+      </dl>
+    </div>
+  </article>
+
+  <article class="widget">
+    <header class="widget-header"><h2>Self-update</h2></header>
+    <div class="widget-body">
+      <p class="muted-hint">
+        Runs <code>git fetch</code>, <code>git pull --ff-only</code>, and
+        <code>pip install -r requirements.txt</code> in <code>{{ repo_dir }}</code>.
+        After a successful update, click <strong>Restart</strong> to reload the
+        service with the new code. Requires the systemd unit to have
+        <code>Restart=always</code>.
+      </p>
+      <div class="form-actions" style="border-top:none;justify-content:flex-start;padding-top:0;">
+        <button
+          class="btn btn-primary"
+          hx-post="/admin/update"
+          hx-target="#admin-result"
+          hx-swap="innerHTML"
+          hx-indicator="#admin-spinner"
+          hx-confirm="Pull latest code and reinstall dependencies?"
+        >Update</button>
+        <button
+          class="btn btn-danger"
+          hx-post="/admin/restart"
+          hx-target="#admin-result"
+          hx-swap="innerHTML"
+          hx-confirm="Restart the service now?"
+        >Restart</button>
+        <span id="admin-spinner" class="htmx-indicator">working…</span>
+      </div>
+
+      <div id="admin-result" class="admin-result"></div>
+    </div>
+  </article>
+</section>
+{% endblock %}

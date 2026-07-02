@@ -9,7 +9,13 @@ See ``auth.py`` for the auth model.
 from __future__ import annotations
 
 import os
+import shlex
+import subprocess
+import sys
+import threading
+import time
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
@@ -23,6 +29,9 @@ from auth import login_response, logout_response, require_auth
 app = FastAPI(title="LuigiBot Web GUI")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
+
+# Repo root (used by the /admin update flow to run git/pip in the right place).
+REPO_DIR = Path(__file__).resolve().parent
 
 
 # --------------------------------------------------------------------------- #
@@ -99,7 +108,7 @@ def logout():
 
 @app.get("/", dependencies=[Depends(require_auth)])
 def root():
-    return RedirectResponse(url="/tasks", status_code=303)
+    return RedirectResponse(url="/home", status_code=303)
 
 
 # --------------------------------------------------------------------------- #
@@ -125,7 +134,7 @@ def tasks_page(request: Request):
             "request": request,
             "active_nav": "tasks",
             "columns": _kanban_columns(rows),
-            "statuses": db.STATUS_VALUES,
+            "statuses": db.STATUS_DISPLAY_ORDER,
             "endpoint_root": "/tasks",
             "page_title": "Tasks",
         },
@@ -256,7 +265,7 @@ def recurring_page(request: Request):
             "request": request,
             "active_nav": "recurring",
             "columns": _kanban_columns(rows),
-            "statuses": db.STATUS_VALUES,
+            "statuses": db.STATUS_DISPLAY_ORDER,
             "endpoint_root": "/recurring",
             "page_title": "Recurring",
         },
@@ -622,6 +631,173 @@ def follow_ups_delete(row_uuid: str):
     _require_v2()
     db.delete_follow_up(row_uuid)
     return Response(status_code=200, content="", headers={"HX-Trigger": "closeModal"})
+
+
+# --------------------------------------------------------------------------- #
+# HOME (customizable widget dashboard)
+# --------------------------------------------------------------------------- #
+
+@app.get("/home", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def home_page(request: Request):
+    _require_v2()
+    today = date.today()
+    monday = today - timedelta(days=today.weekday())
+    open_tasks = db.list_open_tasks(limit=25)
+    disciplines_pending = db.list_disciplines_pending_today()
+    disc_week = db.weekly_discipline_counts(today)
+    task_week = db.weekly_task_completion_counts(today)
+    return templates.TemplateResponse(
+        "home.html",
+        {
+            "request": request,
+            "active_nav": "home",
+            "page_title": "Home",
+            "open_tasks": open_tasks,
+            "disciplines_pending": disciplines_pending,
+            "disc_week": disc_week,
+            "task_week": task_week,
+            "week_of": monday.isoformat(),
+            "today_iso": today.isoformat(),
+        },
+    )
+
+
+# --------------------------------------------------------------------------- #
+# ADMIN — self-update (git pull + pip install) and restart
+# --------------------------------------------------------------------------- #
+
+def _git_head_short() -> str:
+    """Best-effort short git SHA; returns empty string if git unavailable."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(REPO_DIR), "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def _git_status_line() -> str:
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(REPO_DIR), "log", "-1", "--pretty=%h %s (%cr)"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def _git_branch() -> str:
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(REPO_DIR), "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+@app.get("/admin", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def admin_page(request: Request):
+    return templates.TemplateResponse(
+        "admin.html",
+        {
+            "request": request,
+            "active_nav": "admin",
+            "page_title": "Admin",
+            "repo_dir": str(REPO_DIR),
+            "git_head": _git_head_short(),
+            "git_branch": _git_branch(),
+            "git_last": _git_status_line(),
+            "python_exe": sys.executable,
+            "schema_version": _STARTUP_SCHEMA["version"],
+        },
+    )
+
+
+def _run(cmd: list[str], cwd: Path, env: dict[str, str] | None = None,
+         timeout: int = 180) -> tuple[int, str]:
+    """Run a shell command, capture combined output, return (rc, text)."""
+    try:
+        proc = subprocess.run(
+            cmd, cwd=str(cwd), capture_output=True, text=True,
+            timeout=timeout, env=env,
+        )
+    except FileNotFoundError as exc:
+        return 127, f"$ {' '.join(shlex.quote(c) for c in cmd)}\n{exc}"
+    except subprocess.TimeoutExpired:
+        return 124, f"$ {' '.join(shlex.quote(c) for c in cmd)}\nTIMEOUT after {timeout}s"
+    combined = (proc.stdout or "") + (proc.stderr or "")
+    header = f"$ {' '.join(shlex.quote(c) for c in cmd)}\n"
+    return proc.returncode, header + combined
+
+
+@app.post("/admin/update", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def admin_update(request: Request):
+    """Pull latest git + reinstall requirements. Does NOT restart."""
+    steps: list[dict[str, Any]] = []
+
+    # Environment for subprocesses: force pip to be quiet-ish and cacheless so
+    # systemd's ProtectHome=true doesn't trip us up.
+    env = os.environ.copy()
+    env["PIP_NO_CACHE_DIR"] = "1"
+    env.setdefault("HOME", str(REPO_DIR))  # keep git happy under ProtectHome=true
+
+    # 1. Verify this is a git checkout.
+    if not (REPO_DIR / ".git").exists():
+        steps.append({
+            "name": "git check",
+            "rc": 1,
+            "out": f"{REPO_DIR} is not a git checkout. Cannot self-update.",
+        })
+        return templates.TemplateResponse(
+            "partials/admin_update_result.html",
+            {"request": request, "steps": steps, "ok": False, "restarted": False},
+        )
+
+    # 2. git fetch
+    rc, out = _run(["git", "fetch", "--all", "--prune"], cwd=REPO_DIR, env=env)
+    steps.append({"name": "git fetch", "rc": rc, "out": out})
+    ok = rc == 0
+
+    # 3. git pull (fast-forward only — refuse to auto-merge)
+    if ok:
+        rc, out = _run(["git", "pull", "--ff-only"], cwd=REPO_DIR, env=env)
+        steps.append({"name": "git pull --ff-only", "rc": rc, "out": out})
+        ok = rc == 0
+
+    # 4. pip install -r requirements.txt (uses the running interpreter's venv)
+    if ok:
+        rc, out = _run(
+            [sys.executable, "-m", "pip", "install", "--no-cache-dir",
+             "-r", "requirements.txt"],
+            cwd=REPO_DIR, env=env, timeout=600,
+        )
+        steps.append({"name": "pip install -r requirements.txt", "rc": rc, "out": out})
+        ok = rc == 0
+
+    return templates.TemplateResponse(
+        "partials/admin_update_result.html",
+        {"request": request, "steps": steps, "ok": ok, "restarted": False,
+         "git_head": _git_head_short(), "git_last": _git_status_line()},
+    )
+
+
+@app.post("/admin/restart", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def admin_restart(request: Request):
+    """Exit the process; systemd (Restart=always) brings it back with new code."""
+    def _exit_soon() -> None:
+        time.sleep(0.6)
+        os._exit(0)
+
+    threading.Thread(target=_exit_soon, daemon=True).start()
+    return templates.TemplateResponse(
+        "partials/admin_update_result.html",
+        {"request": request, "steps": [], "ok": True, "restarted": True},
+    )
 
 
 # --------------------------------------------------------------------------- #

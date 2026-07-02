@@ -13,10 +13,12 @@
   <header class="topbar">
     <div class="brand">LuigiBot</div>
     <nav class="tabs">
+      <a href="/home"        class="tab {% if active_nav == 'home' %}active{% endif %}">Home</a>
       <a href="/tasks"       class="tab {% if active_nav == 'tasks' %}active{% endif %}">Tasks</a>
       <a href="/recurring"   class="tab {% if active_nav == 'recurring' %}active{% endif %}">Recurring</a>
       <a href="/discipline"  class="tab {% if active_nav == 'discipline' %}active{% endif %}">Discipline</a>
       <a href="/follow-ups"  class="tab {% if active_nav == 'follow-ups' %}active{% endif %}">Follow-ups</a>
+      <a href="/admin"       class="tab {% if active_nav == 'admin' %}active{% endif %}">Admin</a>
     </nav>
     <form method="post" action="/logout" class="logout">
       <button type="submit" class="btn btn-ghost">Sign out</button>

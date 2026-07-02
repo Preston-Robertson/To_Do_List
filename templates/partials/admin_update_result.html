@@ -1,0 +1,25 @@
+{# Result panel returned by /admin/update and /admin/restart. #}
+{% if restarted %}
+  <div class="admin-banner admin-banner-ok">
+    Restarting the service now. Wait a few seconds, then
+    <a href="/admin">reload the page</a>.
+  </div>
+{% else %}
+  <div class="admin-banner {% if ok %}admin-banner-ok{% else %}admin-banner-err{% endif %}">
+    {% if ok %}
+      Update succeeded. Now at <code>{{ git_head or '?' }}</code> — click
+      <strong>Restart</strong> above to run the new code.
+    {% else %}
+      Update failed. See output below.
+    {% endif %}
+  </div>
+  {% for step in steps %}
+    <details class="admin-step {% if step.rc != 0 %}admin-step-err{% endif %}" open>
+      <summary>
+        <span class="admin-step-name">{{ step.name }}</span>
+        <span class="admin-step-rc">rc={{ step.rc }}</span>
+      </summary>
+      <pre class="admin-step-out">{{ step.out }}</pre>
+    </details>
+  {% endfor %}
+{% endif %}

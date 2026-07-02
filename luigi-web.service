@@ -23,8 +23,8 @@ ExecStart=/opt/luigi-web/.venv/bin/uvicorn app:app \
   --workers 2 \
   --no-access-log
 
-Restart=on-failure
-RestartSec=5s
+Restart=always
+RestartSec=2s
 
 # Hardening
 NoNewPrivileges=true

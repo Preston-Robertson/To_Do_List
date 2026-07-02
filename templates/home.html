@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="board-header">
+  <h1>Home</h1>
+  <span class="muted-hint">Week of {{ week_of }}</span>
+
+  <details class="widget-customizer">
+    <summary class="btn btn-ghost">Customize widgets</summary>
+    <div class="widget-toggle-list">
+      <label><input type="checkbox" class="widget-toggle" data-widget="open-tasks" checked> Open tasks</label>
+      <label><input type="checkbox" class="widget-toggle" data-widget="disc-pending" checked> Discipline (today)</label>
+      <label><input type="checkbox" class="widget-toggle" data-widget="disc-week" checked> Discipline this week</label>
+      <label><input type="checkbox" class="widget-toggle" data-widget="task-week" checked> Tasks completed this week</label>
+    </div>
+  </details>
+</section>
+
+<section class="home-grid">
+  <!-- Widget: Open tasks -->
+  <article class="widget" data-widget="open-tasks">
+    <header class="widget-header">
+      <h2>Open Tasks</h2>
+      <span class="widget-count">{{ open_tasks|length }}</span>
+    </header>
+    <div class="widget-body scroll-y">
+      {% if open_tasks %}
+        <ul class="widget-list">
+          {% for t in open_tasks %}
+            <li class="widget-row">
+              <span class="card-priority p{{ t.priority or 0 }}">P{{ t.priority or 0 }}</span>
+              <span class="widget-row-title">{{ t.task }}</span>
+              <span class="widget-row-meta">
+                {% if t.due_date %}<span class="chip chip-due">{{ t.due_date[:10] }}</span>{% endif %}
+                {% if t.catagory %}<span class="chip">{{ t.catagory }}</span>{% endif %}
+                <span class="chip chip-muted">{{ t.status }}</span>
+                {% if t.source == 'recurring' %}<span class="chip chip-muted">recurring</span>{% endif %}
+              </span>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="empty">Nothing open. Nice.</p>
+      {% endif %}
+    </div>
+  </article>
+
+  <!-- Widget: Discipline pending today -->
+  <article class="widget" data-widget="disc-pending">
+    <header class="widget-header">
+      <h2>Discipline — Today</h2>
+      <span class="widget-count">{{ disciplines_pending|length }}</span>
+    </header>
+    <div class="widget-body scroll-y">
+      {% if disciplines_pending %}
+        <ul class="widget-list">
+          {% for d in disciplines_pending %}
+            <li class="widget-row">
+              <span class="widget-row-title">{{ d.task }}</span>
+              <span class="widget-row-meta">
+                {% if d.catagory %}<span class="chip">{{ d.catagory }}</span>{% endif %}
+                <span class="chip chip-muted">{{ d.frequency_per_week }}/wk</span>
+              </span>
+              <button
+                type="button"
+                class="btn btn-tiny btn-primary"
+                hx-post="/discipline/toggle"
+                hx-target="closest li"
+                hx-swap="delete"
+                hx-vals='{
+                  "task": {{ d.task|tojson }},
+                  "catagory": {{ (d.catagory or "")|tojson }},
+                  "day": "{{ today_iso }}",
+                  "action": "mark"
+                }'
+              >Done</button>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="empty">All disciplines done for today.</p>
+      {% endif %}
+    </div>
+  </article>
+
+  <!-- Widget: Discipline weekly bar chart -->
+  <article class="widget" data-widget="disc-week">
+    <header class="widget-header">
+      <h2>Discipline · Mon–Sun</h2>
+      <span class="widget-count">{{ disc_week|sum(attribute='count') }}</span>
+    </header>
+    <div class="widget-body">
+      {% with week=disc_week, accent='var(--success)' %}
+        {% include "partials/week_chart.html" %}
+      {% endwith %}
+    </div>
+  </article>
+
+  <!-- Widget: Tasks completed weekly bar chart -->
+  <article class="widget" data-widget="task-week">
+    <header class="widget-header">
+      <h2>Tasks completed · Mon–Sun</h2>
+      <span class="widget-count">{{ task_week|sum(attribute='count') }}</span>
+    </header>
+    <div class="widget-body">
+      {% with week=task_week, accent='var(--accent)' %}
+        {% include "partials/week_chart.html" %}
+      {% endwith %}
+    </div>
+  </article>
+</section>
+{% endblock %}

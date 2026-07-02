@@ -96,4 +96,44 @@
       // on the container, not the children.
     }
   });
+
+  // ------------------- Home page widget visibility (localStorage) -------------------
+  const HIDDEN_KEY = "luigi.home.hiddenWidgets";
+  function loadHidden() {
+    try { return new Set(JSON.parse(localStorage.getItem(HIDDEN_KEY) || "[]")); }
+    catch { return new Set(); }
+  }
+  function saveHidden(s) {
+    localStorage.setItem(HIDDEN_KEY, JSON.stringify([...s]));
+  }
+  function initHomeWidgets() {
+    const toggles = document.querySelectorAll(".widget-toggle");
+    if (!toggles.length) return;
+    const hidden = loadHidden();
+    document.querySelectorAll(".widget[data-widget]").forEach((w) => {
+      if (hidden.has(w.dataset.widget)) w.classList.add("is-hidden");
+    });
+    toggles.forEach((cb) => {
+      const id = cb.dataset.widget;
+      cb.checked = !hidden.has(id);
+      cb.addEventListener("change", () => {
+        const target = document.querySelector(`.widget[data-widget="${id}"]`);
+        if (!target) return;
+        if (cb.checked) {
+          target.classList.remove("is-hidden");
+          hidden.delete(id);
+        } else {
+          target.classList.add("is-hidden");
+          hidden.add(id);
+        }
+        saveHidden(hidden);
+      });
+    });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initHomeWidgets);
+  } else {
+    initHomeWidgets();
+  }
 })();

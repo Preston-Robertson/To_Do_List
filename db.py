@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import os
 import uuid as _uuid
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Any, Iterable
 
 from sqlalchemy import create_engine, text
@@ -68,6 +68,20 @@ STATUS_VALUES = (
     "Hiatus",
     "Completed",
 )
+
+# Column display order for the Kanban board (row-major, 3 per row).
+# Row 1: Not Started | In Progress | Completed
+# Row 2: Blocked     | Hiatus      | Pending
+STATUS_DISPLAY_ORDER = (
+    "Not Started",
+    "In Progress",
+    "Completed",
+    "Blocked",
+    "Hiatus",
+    "Pending",
+)
+
+OPEN_STATUSES = ("Not Started", "In Progress")
 
 
 def new_uuid() -> str:
@@ -501,3 +515,107 @@ def delete_follow_up(row_uuid: str) -> None:
     q = text("DELETE FROM follow_up_tasks WHERE uuid = :u")
     with get_engine().begin() as conn:
         conn.execute(q, {"u": row_uuid})
+
+
+# --------------------------------------------------------------------------- #
+# Home-page widget queries
+# --------------------------------------------------------------------------- #
+
+def list_open_tasks(limit: int | None = 20) -> list[dict[str, Any]]:
+    """Tasks + recurring rows in Not Started / In Progress, most urgent first."""
+    lim = "" if limit is None else f"LIMIT {int(limit)}"
+    q = text(f"""
+        SELECT uuid, task, priority, status, due_date, catagory,
+               task_group, sub_group, estimated_time, 'task' AS source
+        FROM tasks
+        WHERE status IN ('Not Started', 'In Progress') AND completed = 0
+        UNION ALL
+        SELECT uuid, task, priority, status, due_date, catagory,
+               task_group, sub_group, estimated_time, 'recurring' AS source
+        FROM recurring_tasks
+        WHERE status IN ('Not Started', 'In Progress') AND completed = 0
+        ORDER BY priority DESC NULLS LAST, due_date ASC NULLS LAST, task ASC
+        {lim}
+    """)
+    with get_engine().connect() as conn:
+        return _rows(conn.execute(q))
+
+
+def list_disciplines_pending_today() -> list[dict[str, Any]]:
+    """Active disciplines that have NOT been marked done for today."""
+    today = today_iso()
+    q = text("""
+        SELECT dl.uuid, dl.task, dl.catagory, dl.frequency_per_week
+        FROM discipline_list dl
+        WHERE dl.active = 1
+          AND NOT EXISTS (
+              SELECT 1 FROM discipline_completions dc
+              WHERE dc.task = dl.task AND dc.completed_date = :today
+          )
+        ORDER BY dl.catagory ASC NULLS LAST, dl.task ASC
+    """)
+    with get_engine().connect() as conn:
+        return _rows(conn.execute(q, {"today": today}))
+
+
+def _week_bounds(anchor: date | None = None) -> tuple[date, list[date]]:
+    """Return (monday_date, [mon..sun]) for the week containing ``anchor``."""
+    if anchor is None:
+        anchor = date.today()
+    monday = anchor - timedelta(days=anchor.weekday())  # Mon=0..Sun=6
+    days = [monday + timedelta(days=i) for i in range(7)]
+    return monday, days
+
+
+def weekly_discipline_counts(anchor: date | None = None) -> list[dict[str, Any]]:
+    """List of 7 entries {date, dow, count} Mon..Sun for the given week."""
+    _, days = _week_bounds(anchor)
+    start, end = days[0].isoformat(), days[-1].isoformat()
+    q = text("""
+        SELECT completed_date, COUNT(*) AS n
+        FROM discipline_completions
+        WHERE completed_date >= :start AND completed_date <= :end
+        GROUP BY completed_date
+    """)
+    counts: dict[str, int] = {}
+    with get_engine().connect() as conn:
+        for row in conn.execute(q, {"start": start, "end": end}):
+            counts[row.completed_date] = int(row.n)
+    labels = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+    return [
+        {"date": d.isoformat(), "dow": labels[i], "count": counts.get(d.isoformat(), 0)}
+        for i, d in enumerate(days)
+    ]
+
+
+def weekly_task_completion_counts(anchor: date | None = None) -> list[dict[str, Any]]:
+    """List of 7 entries {date, dow, count} for tasks completed each day this week.
+
+    Counts both ``tasks`` and ``recurring_tasks`` where ``completed_time`` falls
+    on the day (compared by ISO date prefix).
+    """
+    _, days = _week_bounds(anchor)
+    start, end = days[0].isoformat(), days[-1].isoformat()
+    # completed_time is a full ISO timestamp; compare by its first 10 chars.
+    q = text("""
+        SELECT SUBSTR(completed_time, 1, 10) AS d, COUNT(*) AS n
+        FROM (
+            SELECT completed_time FROM tasks
+            WHERE completed = 1 AND completed_time IS NOT NULL
+              AND SUBSTR(completed_time, 1, 10) BETWEEN :start AND :end
+            UNION ALL
+            SELECT completed_time FROM recurring_tasks
+            WHERE completed = 1 AND completed_time IS NOT NULL
+              AND SUBSTR(completed_time, 1, 10) BETWEEN :start AND :end
+        ) x
+        GROUP BY SUBSTR(completed_time, 1, 10)
+    """)
+    counts: dict[str, int] = {}
+    with get_engine().connect() as conn:
+        for row in conn.execute(q, {"start": start, "end": end}):
+            counts[row.d] = int(row.n)
+    labels = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+    return [
+        {"date": d.isoformat(), "dow": labels[i], "count": counts.get(d.isoformat(), 0)}
+        for i, d in enumerate(days)
+    ]
