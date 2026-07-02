@@ -780,6 +780,16 @@ main { padding: 20px; }
 }
 .admin-banner-ok  { background: rgba(48,164,108,.15); border: 1px solid var(--success); color: var(--text); }
 .admin-banner-err { background: var(--danger-dim); color: white; }
+.admin-banner-warn {
+  background: rgba(245,165,36,.12);
+  border: 1px solid var(--warn);
+  color: var(--text);
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  margin: 8px 0;
+}
+.admin-banner-warn code { background: rgba(0,0,0,.25); padding: 1px 5px; border-radius: 3px; }
 .admin-step {
   background: var(--bg);
   border: 1px solid var(--border);

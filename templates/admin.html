@@ -77,15 +77,28 @@
         <div class="admin-banner-err">
           File is <strong>read-only</strong> for this process:
           <code>{{ env_unwritable_reason }}</code>.<br>
-          Fix on the host, then reload this page.
+          Fix on the host, then reload this page. Recommended: move the file
+          to <code>/opt/luigi-web/luigi.env</code> owned by the service user
+          (<code>luigi-web</code>, mode <code>600</code>) and point
+          <code>EnvironmentFile=</code> in the systemd unit + the
+          <code>LUIGI_WEB_ENV_FILE</code> env var at the new path.
         </div>
       {% else %}
         <p class="muted-hint">
-          Changes are written to <code>{{ env_file_path }}</code> atomically.
-          Only the keys listed below are managed here — comments and any other
-          lines in the file are preserved untouched. <strong>Values take
-          effect after a restart.</strong>
+          Changes are written to <code>{{ env_file_path }}</code>. Only the
+          keys listed below are managed here — comments and any other lines
+          in the file are preserved untouched.
+          <strong>Values take effect after a restart.</strong>
         </p>
+        {% if env_unwritable_reason %}
+          <div class="admin-banner-warn">
+            <strong>Non-atomic saves:</strong> {{ env_unwritable_reason }}.
+            Writes work, but a hard crash mid-save could leave the file
+            half-written. To upgrade to atomic saves, move the file to a
+            directory the service user owns (recommended:
+            <code>/opt/luigi-web/luigi.env</code>).
+          </div>
+        {% endif %}
         <p class="muted-hint">
           Secrets are masked. Leave a secret field blank to keep its current
           value — only type into it when you actually want to change it.

@@ -90,19 +90,33 @@ def env_file_path(repo_dir: Path) -> Path:
 
 
 def env_file_writable(path: Path) -> tuple[bool, str]:
-    """Return (writable, reason). Reason is a short human-readable string.
+    """Return (writable, reason).
 
-    ``writable`` is only True if we can atomically replace the file: the file
-    itself and its parent directory must both be writable by the process user.
+    ``writable`` is True if we can save changes at all. We prefer an atomic
+    replace (sibling tempfile + ``os.replace``), which needs write access on
+    both the file *and* its parent directory. When only the file itself is
+    writable — the typical case for something like ``/etc/luigi-web.env`` —
+    we fall back to an in-place rewrite. ``reason`` is either the blocking
+    error or a hint that we're in the non-atomic path.
     """
     if not path.exists():
         # If the parent is writable we could create it, but the UI's contract
         # is 'edit existing settings' — refuse to create files at admin whim.
         return False, f"{path} does not exist"
     if not os.access(path, os.W_OK):
-        return False, f"{path} is not writable by user {os.getlogin() if hasattr(os, 'getlogin') else os.geteuid()}"
+        try:
+            user = os.getlogin()
+        except OSError:
+            user = str(getattr(os, "geteuid", lambda: "?")())
+        return False, f"{path} is not writable by user {user}"
     if not os.access(path.parent, os.W_OK):
-        return False, f"parent directory {path.parent} is not writable (needed for atomic replace)"
+        # File is writable but the parent isn't → non-atomic in-place rewrite.
+        # Still safe under normal shutdown; only a hard crash mid-write is
+        # risky. Signal this by returning True with a warning reason.
+        return True, (
+            f"parent directory {path.parent} is not writable — saves will use "
+            "in-place rewrite instead of atomic replace"
+        )
     return True, ""
 
 
@@ -232,15 +246,36 @@ def update_env_file(
 
     content = "\n".join(new_lines) + "\n"
 
-    # Atomic replace in the same directory (required for os.replace on Windows
-    # when the source is on a different drive would fail; sibling avoids that).
-    fd, tmp_path = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent),
-    )
+    # Prefer atomic replace via a sibling tempfile — survives a crash mid-write
+    # because the target file is never partially overwritten. Falls back to an
+    # in-place rewrite when the parent directory isn't writable (common when
+    # the env file lives in /etc but is group-writable to the service user).
+    _write_content(path, content)
+
+    # Final order: keys as they appear in the (now-updated) file.
+    final = read_env_file(path)
+    return [k for k in final.keys() if k in validated]
+
+
+def _write_content(path: Path, content: str) -> None:
+    """Write ``content`` to ``path``. Prefers atomic replace; falls back to an
+    in-place truncate+write when the parent directory isn't writable."""
+    try:
+        fd, tmp_path = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent),
+        )
+    except PermissionError:
+        # Parent not writable — do the non-atomic path. The window between
+        # truncate and write is small and this is a short file; a hard crash
+        # here is unlikely to leave a half-written env line that matters.
+        with open(path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(content)
+        return
+
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(content)
-        # Match the mode of the original file so we don't accidentally widen it.
+        # Match the mode of the original so we don't accidentally widen it.
         try:
             os.chmod(tmp_path, path.stat().st_mode & 0o777)
         except OSError:
@@ -252,10 +287,6 @@ def update_env_file(
         except OSError:
             pass
         raise
-
-    # Final order: keys as they appear in the (now-updated) file.
-    final = read_env_file(path)
-    return [k for k in final.keys() if k in validated]
 
 
 # --------------------------------------------------------------------------- #
