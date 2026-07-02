@@ -141,6 +141,12 @@ def handle_search_tasks(args: dict[str, Any]) -> dict[str, Any]:
     return {"count": len(rows), "tasks": _slim_tasks(rows)}
 
 
+def handle_suggest_task_fields(args: dict[str, Any]) -> dict[str, Any]:
+    task_name = _str(args, "task", required=True)
+    suggestions = db.suggest_task_defaults(task_name)
+    return {"task": task_name, "suggestions": suggestions}
+
+
 def handle_create_task(args: dict[str, Any]) -> dict[str, Any]:
     payload = {
         "task": _str(args, "task", required=True),
@@ -312,8 +318,35 @@ def build_registry() -> dict[str, Tool]:
             handler=handle_search_tasks,
         ),
         Tool(
+            name="suggest_task_fields",
+            description=(
+                "Look up past tasks with a similar name and suggest values "
+                "for category / group / sub_group / priority / estimated_time "
+                "/ relevant_link. Returns {matches: int, suggestions: {...}}. "
+                "ALWAYS call this before create_task so you can pre-fill "
+                "fields the user didn't explicitly mention. If matches == 0 "
+                "there is no history to lean on — just create with what the "
+                "user gave you."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string",
+                             "description": "Task name to look up history for."},
+                },
+                "required": ["task"],
+                "additionalProperties": False,
+            },
+            handler=handle_suggest_task_fields,
+        ),
+        Tool(
             name="create_task",
-            description="Create a new one-off task in the tasks table.",
+            description=(
+                "Create a new one-off task in the tasks table. Fill in as "
+                "many fields as you can — use values from suggest_task_fields "
+                "for anything the user did not specify. NEVER guess a due_date; "
+                "if the user did not give one, leave it unset."
+            ),
             parameters={
                 "type": "object",
                 "properties": {
@@ -450,11 +483,19 @@ SYSTEM_PROMPT = (
     "Rules:\n"
     "  - Prefer calling a tool over guessing. If you need a uuid, call "
     "search_tasks first.\n"
-    "  - When creating a task, only fill fields the user actually specified. "
-    "Leave optional fields unset.\n"
+    "  - When creating a task: ALWAYS call suggest_task_fields FIRST with "
+    "the task name. Merge the returned suggestions into your create_task "
+    "arguments, then override with anything the user explicitly said. "
+    "Never overwrite an explicit user value with a suggestion. The user "
+    "expects you to auto-fill category / group / sub_group / priority / "
+    "estimated_time / relevant_link from past similar tasks so they don't "
+    "have to re-enter them.\n"
+    "  - NEVER guess a due_date. Only set due_date when the user explicitly "
+    "gave one — do not use dates from suggest_task_fields output.\n"
     "  - Dates must be YYYY-MM-DD, 'today', or 'tomorrow'.\n"
-    "  - After a mutating call succeeds, reply briefly with what changed. "
-    "Do not restate the whole task list.\n"
+    "  - After a mutating call succeeds, reply briefly with what changed, "
+    "including which fields you auto-filled from history (so the user can "
+    "correct them). Do not restate the whole task list.\n"
     "  - If a tool returns an error, read it and either retry with fixed "
     "arguments or ask the user for the missing info.\n"
     "  - Never invent uuids. Never claim to change something you did not "

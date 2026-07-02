@@ -622,17 +622,26 @@ def weekly_task_completion_counts(anchor: date | None = None) -> list[dict[str, 
 
 
 def list_overdue_tasks(limit: int | None = 10) -> list[dict[str, Any]]:
-    """Open tasks whose due_date is strictly before today, worst first."""
+    """Open tasks whose due_date is strictly before today, worst first.
+
+    Filters on BOTH ``completed = 0`` and ``status != 'Completed'`` — some
+    rows drift out of sync when a status is set through a path that skips
+    the completed flag (e.g. an older LuigiBot write), so we belt-and-suspenders.
+    """
     lim = "" if limit is None else f"LIMIT {int(limit)}"
     today = today_iso()
     q = text(f"""
         SELECT uuid, task, priority, status, due_date, catagory, 'task' AS source
         FROM tasks
-        WHERE completed = 0 AND due_date IS NOT NULL AND due_date < :today
+        WHERE completed = 0
+          AND (status IS NULL OR status != 'Completed')
+          AND due_date IS NOT NULL AND due_date < :today
         UNION ALL
         SELECT uuid, task, priority, status, due_date, catagory, 'recurring' AS source
         FROM recurring_tasks
-        WHERE completed = 0 AND due_date IS NOT NULL AND due_date < :today
+        WHERE completed = 0
+          AND (status IS NULL OR status != 'Completed')
+          AND due_date IS NOT NULL AND due_date < :today
         ORDER BY due_date ASC, priority DESC NULLS LAST
         {lim}
     """)
@@ -648,12 +657,16 @@ def list_upcoming_tasks(days: int = 7, limit: int | None = 10) -> list[dict[str,
     q = text(f"""
         SELECT uuid, task, priority, status, due_date, catagory, 'task' AS source
         FROM tasks
-        WHERE completed = 0 AND due_date IS NOT NULL
+        WHERE completed = 0
+          AND (status IS NULL OR status != 'Completed')
+          AND due_date IS NOT NULL
           AND due_date >= :today AND due_date <= :end
         UNION ALL
         SELECT uuid, task, priority, status, due_date, catagory, 'recurring' AS source
         FROM recurring_tasks
-        WHERE completed = 0 AND due_date IS NOT NULL
+        WHERE completed = 0
+          AND (status IS NULL OR status != 'Completed')
+          AND due_date IS NOT NULL
           AND due_date >= :today AND due_date <= :end
         ORDER BY due_date ASC, priority DESC NULLS LAST
         {lim}
@@ -758,5 +771,67 @@ def find_discipline_by_name(query: str) -> dict[str, Any] | None:
     # Exact match wins even if multiple substring matches exist.
     exact = [r for r in rows if r["task"].lower() == query.strip().lower()]
     return exact[0] if len(exact) == 1 else None
+
+
+def suggest_task_defaults(name: str, limit: int = 25) -> dict[str, Any]:
+    """Look at past tasks with similar names and suggest field values a user
+    would most likely want when creating a new task of that kind.
+
+    Strategy: case-insensitive substring match against both ``tasks`` and
+    ``recurring_tasks`` (including completed rows — history is the point).
+    For each optional field, take the most common non-null value across the
+    matches. ``estimated_time`` uses the median of non-null values.
+
+    Returns a dict with ``matches`` (int, how many past rows were considered)
+    plus each suggestion under its column name. Fields with no signal are
+    omitted so the caller can distinguish "no suggestion" from a real value.
+    """
+    from collections import Counter
+    from statistics import median
+
+    pattern = f"%{name.strip().lower()}%"
+    q = text("""
+        SELECT priority, catagory, task_group, sub_group,
+               relevant_link, estimated_time
+        FROM tasks
+        WHERE LOWER(task) LIKE :p
+        UNION ALL
+        SELECT priority, catagory, task_group, sub_group,
+               relevant_link, estimated_time
+        FROM recurring_tasks
+        WHERE LOWER(task) LIKE :p
+        LIMIT :lim
+    """)
+    with get_engine().connect() as conn:
+        rows = _rows(conn.execute(q, {"p": pattern, "lim": int(limit)}))
+
+    out: dict[str, Any] = {"matches": len(rows)}
+    if not rows:
+        return out
+
+    # Mode for categorical / text fields; skip blanks and null-ish values.
+    for field in ("catagory", "task_group", "sub_group", "relevant_link"):
+        values = [r[field] for r in rows if r.get(field)]
+        if not values:
+            continue
+        top_val, top_count = Counter(values).most_common(1)[0]
+        # Require the mode to appear at least twice OR in the sole row —
+        # avoids proposing a one-off outlier from a bag of 20.
+        if top_count >= 2 or len(rows) == 1:
+            out[field] = top_val
+
+    # Mode for priority (small integer domain).
+    priorities = [int(r["priority"]) for r in rows if r.get("priority") is not None]
+    if priorities:
+        top_p, top_pc = Counter(priorities).most_common(1)[0]
+        if top_pc >= 2 or len(priorities) == 1:
+            out["priority"] = top_p
+
+    # Median for estimated_time (continuous).
+    est = [float(r["estimated_time"]) for r in rows if r.get("estimated_time") is not None]
+    if est:
+        out["estimated_time"] = round(float(median(est)), 2)
+
+    return out
 
 

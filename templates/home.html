@@ -43,6 +43,15 @@
                 {% if t.catagory %}<span class="chip">{{ t.catagory }}</span>{% endif %}
                 {% if t.source == 'recurring' %}<span class="chip chip-muted">↻</span>{% endif %}
               </span>
+              <button
+                type="button"
+                class="btn btn-tiny btn-ghost widget-row-check"
+                title="Mark complete"
+                aria-label="Mark complete"
+                hx-post="/{{ 'recurring' if t.source == 'recurring' else 'tasks' }}/{{ t.uuid }}/complete"
+                hx-target="closest li"
+                hx-swap="delete"
+              >✓</button>
             </li>
           {% endfor %}
         </ul>
@@ -70,6 +79,15 @@
                 {% if t.catagory %}<span class="chip">{{ t.catagory }}</span>{% endif %}
                 {% if t.source == 'recurring' %}<span class="chip chip-muted">↻</span>{% endif %}
               </span>
+              <button
+                type="button"
+                class="btn btn-tiny btn-ghost widget-row-check"
+                title="Mark complete"
+                aria-label="Mark complete"
+                hx-post="/{{ 'recurring' if t.source == 'recurring' else 'tasks' }}/{{ t.uuid }}/complete"
+                hx-target="closest li"
+                hx-swap="delete"
+              >✓</button>
             </li>
           {% endfor %}
         </ul>
@@ -98,6 +116,15 @@
                 <span class="chip chip-muted">{{ t.status }}</span>
                 {% if t.source == 'recurring' %}<span class="chip chip-muted">↻</span>{% endif %}
               </span>
+              <button
+                type="button"
+                class="btn btn-tiny btn-ghost widget-row-check"
+                title="Mark complete"
+                aria-label="Mark complete"
+                hx-post="/{{ 'recurring' if t.source == 'recurring' else 'tasks' }}/{{ t.uuid }}/complete"
+                hx-target="closest li"
+                hx-swap="delete"
+              >✓</button>
             </li>
           {% endfor %}
         </ul>

@@ -668,6 +668,22 @@ main { padding: 20px; }
 }
 .widget-row .btn { font-size: 12px; padding: 4px 10px; }
 
+/* Quick-complete checkmark on task rows in the Home widgets. Compact, ghost
+   by default; goes green on hover so it reads as an action, not a decoration. */
+.widget-row-check {
+  min-width: 26px;
+  padding: 3px 8px;
+  font-weight: 700;
+  line-height: 1;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+.widget-row-check:hover {
+  background: var(--success);
+  color: white;
+  border-color: var(--success);
+}
+
 /* Nicer empty state — dim, centered, a little breathing room. */
 .widget-body .empty {
   color: var(--text-muted);

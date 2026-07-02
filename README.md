@@ -18,8 +18,8 @@ internally, so an item with hundreds of rows never pushes the page taller.
 
 | Widget | Query | Accent |
 |---|---|---|
-| **Overdue** | `tasks + recurring_tasks` with `due_date < today` and not completed | red |
-| **Upcoming · 7 days** | open items with `due_date` in `[today, today+7]` | blue |
+| **Overdue** | `tasks + recurring_tasks` with `due_date < today`, `completed = 0`, `status != 'Completed'` (both flags checked — some rows can drift out of sync when a status change goes through a path that skips the completed flag) | red |
+| **Upcoming · 7 days** | open items with `due_date` in `[today, today+7]`, same completion filter as Overdue | blue |
 | **Open Tasks** | `Not Started` or `In Progress`, priority DESC / due ASC | primary |
 | **Discipline · Today** | active disciplines with no completion for today; inline Done button POSTs to `/discipline/toggle` | amber |
 | **Discipline · Streaks** | active disciplines sorted by `current_streak` DESC | orange |
@@ -176,8 +176,13 @@ Authenticated (session cookie, or `?token=` / `Authorization: Bearer`):
 * `POST /admin/env`       → write managed `LUIGI_WEB_*` keys back to the env
   file (path from `LUIGI_WEB_ENV_FILE`). Only keys in
   `env_file.KNOWN_KEYS` are accepted; comments and any other lines in the
-  file are preserved untouched. Requires the file to be writable by the
-  service user. Changes take effect only after a restart.
+  file are preserved untouched. Prefers an atomic replace via a sibling
+  tempfile; falls back to an in-place rewrite when only the file (not its
+  parent) is writable (e.g. `/etc/luigi-web.env`). LLM keys and
+  `LUIGI_WEB_UI_TOKEN` are hot-reloaded into `os.environ` and the running
+  provider is rebuilt — no restart needed. DB / bind / port changes still
+  require `systemctl restart luigi-web`; the result banner flags which is
+  which.
 * `POST /chat`            → send one user message to the assistant; returns
   an HTML partial containing the user bubble, assistant reply, and any
   tool-call audit entries. Requires `LUIGI_WEB_LLM_API_KEY`.
@@ -193,8 +198,13 @@ See `luigi-web.service`. Summary:
 1. Unprivileged Debian 12 LXC, `onboot=1`, static IP `10.0.0.203/24`.
 2. `apt install python3-venv git` · create user `luigi-web` · clone repo into
    `/opt/luigi-web` · build venv · `pip install -r requirements.txt`.
-3. `/etc/luigi-web.env` (mode `640 root:luigi-web`) holding
-   `LUIGI_WEB_PG_PASSWORD` and `LUIGI_WEB_UI_TOKEN`.
+3. Env file. Recommended: `/opt/luigi-web/luigi.env` owned by `luigi-web`
+   (mode `600`) with `EnvironmentFile=/opt/luigi-web/luigi.env` in the unit
+   AND `LUIGI_WEB_ENV_FILE=/opt/luigi-web/luigi.env` inside the file itself
+   (so the Admin editor targets the same path). This lets the atomic-replace
+   save path work without opening `/etc` for group-write. Legacy layout of
+   `/etc/luigi-web.env` (mode `640 root:luigi-web`) also works — the editor
+   detects the read-only parent and falls back to in-place rewrite.
 4. `cp luigi-web.service /etc/systemd/system/` · `systemctl daemon-reload` ·
    `systemctl enable --now luigi-web`.
 5. UFW: `ufw allow from 10.0.0.0/24 to any port 8080 proto tcp`; default deny.
@@ -291,8 +301,18 @@ is enabled. Chrome/Edge on desktop work; Firefox does not (yet). Dictation
 is auto-submitted when it ends.
 
 **Available tools (v1):** `list_open_tasks`, `list_overdue_tasks`,
-`list_upcoming_tasks`, `search_tasks`, `create_task`, `complete_task`,
-`update_task_status`, `delete_task`, `list_disciplines_pending`,
-`mark_discipline_done`, `add_discipline`, `create_follow_up`. Adding a new
-tool = one Python function + one `Tool(...)` entry in
-`chat_tools.build_registry()`.
+`list_upcoming_tasks`, `search_tasks`, `suggest_task_fields`, `create_task`,
+`complete_task`, `update_task_status`, `delete_task`,
+`list_disciplines_pending`, `mark_discipline_done`, `add_discipline`,
+`create_follow_up`. Adding a new tool = one Python function + one
+`Tool(...)` entry in `chat_tools.build_registry()`.
+
+**Auto-fill on create.** The system prompt requires the agent to call
+`suggest_task_fields` before `create_task`. That tool runs a case-insensitive
+substring search over past tasks (open + completed, both `tasks` and
+`recurring_tasks`) and returns the mode of `catagory` / `task_group` /
+`sub_group` / `relevant_link` / `priority` and the median of
+`estimated_time`. The agent merges those as defaults, then overrides with
+anything the user explicitly said. `due_date` is **never** auto-filled from
+history — the user must supply it. Say *"make a Do Laundry task"* and it
+will pre-fill category / group / hours from your last few laundry tasks.
