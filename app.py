@@ -34,6 +34,27 @@ templates = Jinja2Templates(directory="templates")
 REPO_DIR = Path(__file__).resolve().parent
 
 
+def _asset_version() -> str:
+    """Highest mtime among static assets — appended to <link>/<script> URLs
+    so browsers stop serving stale CSS/JS after a code push. Recomputed on
+    import (fine — every restart bumps the query string)."""
+    static_dir = REPO_DIR / "static"
+    latest = 0.0
+    if static_dir.exists():
+        for p in static_dir.rglob("*"):
+            if p.is_file():
+                try:
+                    m = p.stat().st_mtime
+                    if m > latest:
+                        latest = m
+                except OSError:
+                    pass
+    return str(int(latest)) if latest else "0"
+
+
+templates.env.globals["asset_version"] = _asset_version()
+
+
 # --------------------------------------------------------------------------- #
 # Startup — refuse to serve if the DB schema isn't v2
 # --------------------------------------------------------------------------- #

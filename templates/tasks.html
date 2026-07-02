@@ -1,33 +1,35 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="board-header">
-  <h1>{{ page_title }}</h1>
-  <button
-    class="btn btn-primary"
-    hx-get="{{ endpoint_root }}/new"
-    hx-target="#modal-body"
-    hx-trigger="click"
-    onclick="openModal()"
-  >+ New</button>
-</section>
+<div class="kanban-page">
+  <section class="board-header">
+    <h1>{{ page_title }}</h1>
+    <button
+      class="btn btn-primary"
+      hx-get="{{ endpoint_root }}/new"
+      hx-target="#modal-body"
+      hx-trigger="click"
+      onclick="openModal()"
+    >+ New</button>
+  </section>
 
-<section class="kanban" id="kanban-board">
-  {% for status in statuses %}
-    <div class="kanban-column" data-status="{{ status }}">
-      <header class="kanban-column-header">
-        <span class="kanban-column-title">{{ status }}</span>
-        <span class="kanban-column-count">{{ columns[status]|length }}</span>
-      </header>
-      <div
-        class="kanban-column-body sortable"
-        data-status="{{ status }}"
-        data-endpoint="{{ endpoint_root }}"
-      >
-        {% for t in columns[status] %}
-          {% include "partials/task_card.html" %}
-        {% endfor %}
+  <section class="kanban" id="kanban-board">
+    {% for status in statuses %}
+      <div class="kanban-column" data-status="{{ status }}">
+        <header class="kanban-column-header">
+          <span class="kanban-column-title">{{ status }}</span>
+          <span class="kanban-column-count">{{ columns[status]|length }}</span>
+        </header>
+        <div
+          class="kanban-column-body sortable"
+          data-status="{{ status }}"
+          data-endpoint="{{ endpoint_root }}"
+        >
+          {% for t in columns[status] %}
+            {% include "partials/task_card.html" %}
+          {% endfor %}
+        </div>
       </div>
-    </div>
-  {% endfor %}
-</section>
+    {% endfor %}
+  </section>
+</div>
 {% endblock %}
