@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Sign in · LuigiBot</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body class="login-page">
+  <main>
+    <form method="post" action="/login" class="login-form">
+      <h1>LuigiBot Web GUI</h1>
+      {% if error %}<p class="error">{{ error }}</p>{% endif %}
+      <label>
+        Token
+        <input type="password" name="token" autofocus required autocomplete="current-password">
+      </label>
+      <button type="submit" class="btn btn-primary">Sign in</button>
+    </form>
+  </main>
+</body>
+</html>

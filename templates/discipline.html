@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="board-header">
+  <h1>{{ page_title }}</h1>
+
+  <form method="get" action="/discipline" class="year-picker">
+    <label>Year
+      <select name="year" onchange="this.form.submit()">
+        {% for y in years %}
+          <option value="{{ y }}" {% if y == year %}selected{% endif %}>{{ y }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </form>
+
+  <button
+    class="btn btn-primary"
+    hx-get="/discipline/new"
+    hx-target="#modal-body"
+    onclick="openModal()"
+  >+ New Discipline</button>
+</section>
+
+<section class="discipline-list">
+  {% for d in disciplines %}
+    <article class="discipline{% if not d.active %} discipline-inactive{% endif %}">
+      <header class="discipline-header">
+        <div class="discipline-title">
+          <h2>{{ d.task }}</h2>
+          {% if d.catagory %}<span class="chip">{{ d.catagory }}</span>{% endif %}
+          <span class="chip chip-muted">{{ d.frequency_per_week }}/wk</span>
+          <span class="chip chip-streak">🔥 {{ d._streak }}</span>
+          {% if not d.active %}<span class="chip chip-muted">inactive</span>{% endif %}
+        </div>
+        <div class="discipline-actions">
+          <button
+            class="btn btn-tiny"
+            hx-get="/discipline/{{ d.uuid }}/edit"
+            hx-target="#modal-body"
+            onclick="openModal()"
+          >Edit</button>
+          {% if d.active %}
+            <button
+              class="btn btn-tiny btn-danger"
+              hx-post="/discipline/{{ d.uuid }}/deactivate"
+              hx-confirm="Deactivate this discipline?"
+            >Deactivate</button>
+          {% endif %}
+        </div>
+      </header>
+
+      <div class="heatmap" role="grid" aria-label="{{ d.task }} completions for {{ year }}">
+        {% for row in grid %}
+          <div class="heatmap-row" role="row">
+            {% for cell in row %}
+              {% if cell is none %}
+                <span class="heatmap-cell heatmap-empty" aria-hidden="true"></span>
+              {% else %}
+                {% with task=d.task, catagory=d.catagory, day=cell.isoformat(),
+                        marked=(cell.isoformat() in d._year_days),
+                        future=(cell.isoformat() > today_iso),
+                        today_iso=today_iso %}
+                  {% include "partials/discipline_cell.html" %}
+                {% endwith %}
+              {% endif %}
+            {% endfor %}
+          </div>
+        {% endfor %}
+      </div>
+    </article>
+  {% else %}
+    <p class="empty">No discipline items yet. Click <strong>+ New Discipline</strong> to add one.</p>
+  {% endfor %}
+</section>
+{% endblock %}

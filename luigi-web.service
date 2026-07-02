@@ -1,0 +1,43 @@
+[Unit]
+Description=LuigiBot Web GUI (FastAPI + Uvicorn)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=luigi-web
+Group=luigi-web
+WorkingDirectory=/opt/luigi-web
+# Secrets: LUIGI_WEB_PG_PASSWORD, LUIGI_WEB_UI_TOKEN. Mode 640, owner root:luigi-web.
+EnvironmentFile=/etc/luigi-web.env
+Environment=LUIGI_WEB_PG_HOST=10.0.0.202
+Environment=LUIGI_WEB_PG_PORT=5432
+Environment=LUIGI_WEB_PG_DB=luigi_todo
+Environment=LUIGI_WEB_PG_USER=luigi_web
+Environment=LUIGI_WEB_BIND=0.0.0.0
+Environment=LUIGI_WEB_PORT=8080
+
+ExecStart=/opt/luigi-web/.venv/bin/uvicorn app:app \
+  --host ${LUIGI_WEB_BIND} \
+  --port ${LUIGI_WEB_PORT} \
+  --workers 2 \
+  --no-access-log
+
+Restart=on-failure
+RestartSec=5s
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/luigi-web
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

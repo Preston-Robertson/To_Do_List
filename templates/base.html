@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{ page_title }} · LuigiBot</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+  <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js" defer></script>
+  <script src="/static/js/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">LuigiBot</div>
+    <nav class="tabs">
+      <a href="/tasks"       class="tab {% if active_nav == 'tasks' %}active{% endif %}">Tasks</a>
+      <a href="/recurring"   class="tab {% if active_nav == 'recurring' %}active{% endif %}">Recurring</a>
+      <a href="/discipline"  class="tab {% if active_nav == 'discipline' %}active{% endif %}">Discipline</a>
+      <a href="/follow-ups"  class="tab {% if active_nav == 'follow-ups' %}active{% endif %}">Follow-ups</a>
+    </nav>
+    <form method="post" action="/logout" class="logout">
+      <button type="submit" class="btn btn-ghost">Sign out</button>
+    </form>
+  </header>
+
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+
+  <!-- Modal target: HTMX loads edit/new forms into #modal-body -->
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-backdrop" data-close-modal></div>
+    <div class="modal-panel">
+      <button type="button" class="modal-close" data-close-modal aria-label="Close">&times;</button>
+      <div id="modal-body"></div>
+    </div>
+  </div>
+</body>
+</html>

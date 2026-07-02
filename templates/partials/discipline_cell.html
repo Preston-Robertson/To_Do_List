@@ -1,0 +1,25 @@
+{# One day-cell in the heatmap. Expects: task, catagory, day, marked, today_iso.
+   Optional: future (bool). Same partial is used both in the grid render and as
+   the HTMX response after toggling, so its DOM id is stable per (task, day). #}
+{% set future = future | default(day > today_iso) %}
+<button
+  type="button"
+  id="cell-{{ task | urlencode }}-{{ day }}"
+  class="heatmap-cell{% if marked %} is-marked{% endif %}{% if future %} is-future{% endif %}"
+  role="gridcell"
+  aria-label="{{ day }} — {{ 'done' if marked else 'not done' }}"
+  title="{{ day }}"
+  {% if not future %}
+    hx-post="/discipline/toggle"
+    hx-target="#cell-{{ task | urlencode }}-{{ day }}"
+    hx-swap="outerHTML"
+    hx-vals='{
+      "task": {{ task | tojson }},
+      "catagory": {{ (catagory or "") | tojson }},
+      "day": "{{ day }}",
+      "action": "{{ 'unmark' if marked else 'mark' }}"
+    }'
+  {% else %}
+    disabled
+  {% endif %}
+></button>

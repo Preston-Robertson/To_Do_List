@@ -1,0 +1,37 @@
+{# Create/edit form for a discipline_list row. `d` may be {} for new. #}
+<form
+  class="entity-form"
+  {% if is_new %}
+    hx-post="/discipline"
+  {% else %}
+    hx-post="/discipline/{{ d.uuid }}"
+  {% endif %}
+  hx-swap="none"
+>
+  <h2>{{ 'New discipline' if is_new else 'Edit discipline' }}</h2>
+
+  <label>
+    Task
+    <input type="text" name="task" required value="{{ d.task or '' }}">
+  </label>
+
+  <div class="form-row">
+    <label class="grow">
+      Category
+      <input type="text" name="catagory" value="{{ d.catagory or '' }}">
+    </label>
+    <label>
+      Freq / week
+      <input type="number" name="frequency_per_week" min="0" max="7" value="{{ d.frequency_per_week if d.frequency_per_week is not none else 7 }}">
+    </label>
+    <label class="checkbox">
+      <input type="checkbox" name="active" value="1" {% if is_new or d.active %}checked{% endif %}>
+      Active
+    </label>
+  </div>
+
+  <div class="form-actions">
+    <button type="button" class="btn btn-ghost" data-close-modal>Cancel</button>
+    <button type="submit" class="btn btn-primary">{{ 'Create' if is_new else 'Save' }}</button>
+  </div>
+</form>

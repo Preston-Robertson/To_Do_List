@@ -1,0 +1,47 @@
+{# Card for tasks + recurring_tasks (same shape). `t` is the row dict. #}
+<article
+  class="card{% if t.completed %} card-completed{% endif %}"
+  data-uuid="{{ t.uuid }}"
+  id="card-{{ t.uuid }}"
+>
+  <header class="card-header">
+    <span class="card-priority p{{ t.priority or 0 }}">P{{ t.priority or 0 }}</span>
+    <h3 class="card-title">{{ t.task }}</h3>
+  </header>
+
+  <div class="card-meta">
+    {% if t.due_date %}<span class="chip chip-due">{{ t.due_date }}</span>{% endif %}
+    {% if t.catagory %}<span class="chip">{{ t.catagory }}</span>{% endif %}
+    {% if t.task_group %}<span class="chip chip-muted">{{ t.task_group }}</span>{% endif %}
+    {% if t.sub_group %}<span class="chip chip-muted">{{ t.sub_group }}</span>{% endif %}
+    {% if t.estimated_time %}<span class="chip chip-muted">~{{ t.estimated_time }}h</span>{% endif %}
+  </div>
+
+  {% if t.relevant_link %}
+    <a class="card-link" href="{{ t.relevant_link }}" target="_blank" rel="noopener">Link ↗</a>
+  {% endif %}
+
+  <footer class="card-actions">
+    <button
+      class="btn btn-tiny"
+      hx-get="{{ endpoint_root }}/{{ t.uuid }}/edit"
+      hx-target="#modal-body"
+      onclick="openModal()"
+    >Edit</button>
+
+    <button
+      class="btn btn-tiny"
+      hx-post="{{ endpoint_root }}/{{ t.uuid }}/complete"
+      hx-target="#card-{{ t.uuid }}"
+      hx-swap="outerHTML"
+    >{% if t.completed %}Undo{% else %}Done{% endif %}</button>
+
+    <button
+      class="btn btn-tiny btn-danger"
+      hx-post="{{ endpoint_root }}/{{ t.uuid }}/delete"
+      hx-target="#card-{{ t.uuid }}"
+      hx-swap="outerHTML"
+      hx-confirm="Delete this task?"
+    >Delete</button>
+  </footer>
+</article>

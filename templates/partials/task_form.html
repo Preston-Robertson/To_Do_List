@@ -1,0 +1,70 @@
+{# Create/edit form for tasks + recurring_tasks. `t` may be {} for new. #}
+<form
+  class="entity-form"
+  {% if is_new %}
+    hx-post="{{ endpoint_root }}"
+    hx-target="#kanban-board"
+    hx-swap="none"
+  {% else %}
+    hx-post="{{ endpoint_root }}/{{ t.uuid }}"
+    hx-target="#card-{{ t.uuid }}"
+    hx-swap="outerHTML"
+  {% endif %}
+>
+  <h2>{{ 'New task' if is_new else 'Edit task' }}</h2>
+
+  <label>
+    Task
+    <input type="text" name="task" required value="{{ t.task or '' }}">
+  </label>
+
+  <div class="form-row">
+    <label>
+      Priority
+      <input type="number" name="priority" min="0" max="10" value="{{ t.priority if t.priority is not none else 0 }}">
+    </label>
+    <label>
+      Status
+      <select name="status">
+        {% for s in statuses %}
+          <option value="{{ s }}" {% if (t.status or 'Not Started') == s %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      Due date
+      <input type="date" name="due_date" value="{{ t.due_date or '' }}">
+    </label>
+  </div>
+
+  <div class="form-row">
+    <label>
+      Category
+      <input type="text" name="catagory" value="{{ t.catagory or '' }}">
+    </label>
+    <label>
+      Group
+      <input type="text" name="task_group" value="{{ t.task_group or '' }}">
+    </label>
+    <label>
+      Sub-group
+      <input type="text" name="sub_group" value="{{ t.sub_group or '' }}">
+    </label>
+  </div>
+
+  <div class="form-row">
+    <label class="grow">
+      Relevant link
+      <input type="url" name="relevant_link" value="{{ t.relevant_link or '' }}" placeholder="https://…">
+    </label>
+    <label>
+      Est. hours
+      <input type="number" step="0.25" min="0" name="estimated_time" value="{{ t.estimated_time or '' }}">
+    </label>
+  </div>
+
+  <div class="form-actions">
+    <button type="button" class="btn btn-ghost" data-close-modal>Cancel</button>
+    <button type="submit" class="btn btn-primary">{{ 'Create' if is_new else 'Save' }}</button>
+  </div>
+</form>

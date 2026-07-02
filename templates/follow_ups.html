@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="board-header">
+  <h1>{{ page_title }}</h1>
+  <button
+    class="btn btn-primary"
+    hx-get="/follow-ups/new"
+    hx-target="#modal-body"
+    onclick="openModal()"
+  >+ New</button>
+</section>
+
+<section class="table-wrap">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Trigger</th>
+        <th>Follow-up</th>
+        <th>Category</th>
+        <th>Group</th>
+        <th>Sub-group</th>
+        <th>Priority</th>
+        <th>Est.h</th>
+        <th>Offset d</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for f in rows %}
+        <tr id="row-{{ f.uuid }}">
+          <td>{{ f.trigger_task }}</td>
+          <td>{{ f.follow_up_task }}</td>
+          <td>{{ f.catagory or '' }}</td>
+          <td>{{ f.task_group or '' }}</td>
+          <td>{{ f.subgroup or '' }}</td>
+          <td>{{ f.priority or 0 }}</td>
+          <td>{{ f.estimated_time or '' }}</td>
+          <td>{{ f.due_offset_days if f.due_offset_days is not none else '' }}</td>
+          <td class="row-actions">
+            <button class="btn btn-tiny"
+              hx-get="/follow-ups/{{ f.uuid }}/edit"
+              hx-target="#modal-body"
+              onclick="openModal()"
+            >Edit</button>
+            <button class="btn btn-tiny btn-danger"
+              hx-post="/follow-ups/{{ f.uuid }}/delete"
+              hx-target="#row-{{ f.uuid }}"
+              hx-swap="outerHTML"
+              hx-confirm="Delete this follow-up?"
+            >Delete</button>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="9" class="empty">No follow-ups yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
