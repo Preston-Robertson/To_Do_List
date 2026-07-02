@@ -23,11 +23,17 @@
     <header class="widget-header"><h2>Self-update</h2></header>
     <div class="widget-body">
       <p class="muted-hint">
-        Runs <code>git fetch</code>, <code>git pull --ff-only</code>, and
-        <code>pip install -r requirements.txt</code> in <code>{{ repo_dir }}</code>.
-        After a successful update, click <strong>Restart</strong> to reload the
-        service with the new code. Requires the systemd unit to have
-        <code>Restart=always</code>.
+        <strong>Update</strong> runs <code>git fetch</code> and
+        <code>git pull --ff-only</code> in <code>{{ repo_dir }}</code>, then
+        installs Python dependencies from <code>requirements.txt</code> so any
+        problems surface here before you restart.
+      </p>
+      <p class="muted-hint">
+        <strong>Restart</strong> exits the process; systemd relaunches it via
+        <code>Restart=always</code>. Every start also runs
+        <code>pip install -r requirements.txt</code> automatically
+        (<code>ExecStartPre</code>), so the running service always has the
+        packages listed in the current requirements file.
       </p>
       <div class="form-actions" style="border-top:none;justify-content:flex-start;padding-top:0;">
         <button

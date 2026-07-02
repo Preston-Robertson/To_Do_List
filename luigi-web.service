@@ -16,6 +16,19 @@ Environment=LUIGI_WEB_PG_DB=luigi_todo
 Environment=LUIGI_WEB_PG_USER=luigi_web
 Environment=LUIGI_WEB_BIND=0.0.0.0
 Environment=LUIGI_WEB_PORT=8080
+# Skip pip cache — ProtectHome=true hides ~/.cache/pip anyway.
+Environment=PIP_NO_CACHE_DIR=1
+# Silence pip's version-check chatter in the journal.
+Environment=PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Refresh Python dependencies on every start. Fast when nothing changed
+# (pip just reports "already satisfied"). The leading `-` makes failure
+# non-fatal so an offline / PyPI-down box can still boot the last known
+# good code instead of leaving the service dead.
+ExecStartPre=-/opt/luigi-web/.venv/bin/python -m pip install \
+  --disable-pip-version-check \
+  --no-cache-dir \
+  -r /opt/luigi-web/requirements.txt
 
 ExecStart=/opt/luigi-web/.venv/bin/uvicorn app:app \
   --host ${LUIGI_WEB_BIND} \
@@ -25,6 +38,8 @@ ExecStart=/opt/luigi-web/.venv/bin/uvicorn app:app \
 
 Restart=always
 RestartSec=2s
+# Give ExecStartPre time to run pip install on slow networks.
+TimeoutStartSec=300
 
 # Hardening
 NoNewPrivileges=true

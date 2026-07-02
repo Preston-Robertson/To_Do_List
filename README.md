@@ -10,21 +10,46 @@ is the first. Both write concurrently — Postgres/MVCC keeps things safe.
 
 ---
 
-## UI approach — v1
+## UI approach
 
-**Kanban board by status** (Option C from the design discussion). Tasks and
-Recurring live on Kanban boards whose columns are the six fixed statuses:
+**Home dashboard** at `/home` — customizable widget grid summarizing what needs
+attention right now:
 
-    Not Started · In Progress · Pending · Blocked · Hiatus · Completed
+* **Open Tasks** — top items from `tasks` + `recurring_tasks` where status is
+  `Not Started` or `In Progress`, sorted by priority then due date.
+* **Discipline · Today** — active disciplines with no completion for today.
+  Each row has an inline "Done" button that POSTs to `/discipline/toggle`.
+* **Discipline · This week** — Mon–Sun bar chart of completions.
+* **Tasks completed · This week** — Mon–Sun bar chart of tasks
+  (`tasks` + `recurring_tasks`) whose `completed_time` falls in the current
+  ISO week.
 
-Drag a card between columns to change status. Click a card to edit all fields in
-a modal. HTMX handles inline updates; SortableJS handles drag-and-drop.
+Each widget can be shown/hidden via the "Customize widgets" dropdown; state is
+persisted in `localStorage` per browser (key `luigi.home.hiddenWidgets`).
+
+**Kanban board by status.** Tasks and Recurring live on 3×2 Kanban boards. The
+column layout is:
+
+    Row 1 :  Not Started  |  In Progress  |  Completed
+    Row 2 :  Blocked      |  Hiatus       |  Pending
+
+The board is height-capped to the viewport — each column is an independent
+scroll container, so a Completed column with hundreds of cards never blows up
+the page. Drag a card between columns to change status. Click a card to edit
+all fields in a modal. HTMX handles inline updates; SortableJS handles
+drag-and-drop.
+
+The DB-level status enum stays in its canonical order
+(`db.STATUS_VALUES`); the display order is a separate constant
+(`db.STATUS_DISPLAY_ORDER`) so reordering the board never changes what the
+backend accepts.
 
 Other views:
 
 * **Discipline** — one GitHub-style yearly heatmap per discipline item, with a
   year-picker dropdown. Click any day cell to mark/unmark.
 * **Follow-ups** — plain table with inline edit.
+* **Admin** — runtime info + self-update / restart controls (see below).
 
 ### Future UI directions (noted for later)
 
@@ -105,7 +130,9 @@ Unauthenticated:
 * `GET /login`, `POST /login`, `POST /logout`
 
 Authenticated (session cookie, or `?token=` / `Authorization: Bearer`):
-* `GET  /`                → redirects to `/tasks`
+* `GET  /`                → redirects to `/home`
+* `GET  /home`            → widget dashboard (open tasks, discipline today,
+  weekly discipline chart, weekly tasks-completed chart)
 * `GET  /tasks`           → Kanban board
 * `POST /tasks`           → create
 * `GET  /tasks/{uuid}/edit`   → modal edit form (HTMX partial)
@@ -118,10 +145,17 @@ Authenticated (session cookie, or `?token=` / `Authorization: Bearer`):
 * `POST /discipline`      → create
 * `GET  /discipline/{uuid}/edit`, `POST /discipline/{uuid}` → update
 * `POST /discipline/{uuid}/deactivate` → set `active=0`
-* `POST /discipline/toggle` → mark/unmark a day
+* `POST /discipline/toggle` → mark/unmark a day (also used by the Home
+  discipline widget's "Done" button)
 * `GET  /follow-ups`      → table
 * `POST /follow-ups`, `GET /follow-ups/{uuid}/edit`, `POST /follow-ups/{uuid}`,
   `POST /follow-ups/{uuid}/delete`
+* `GET  /admin`           → runtime info + update / restart controls
+* `POST /admin/update`    → `git fetch` + `git pull --ff-only` +
+  `pip install -r requirements.txt` in the repo directory. Returns per-step
+  stdout/stderr and exit codes. Does **not** restart the process.
+* `POST /admin/restart`   → exits the process; systemd relaunches it (see
+  *Self-update* below).
 
 ---
 
@@ -134,19 +168,56 @@ See `luigi-web.service`. Summary:
    `/opt/luigi-web` · build venv · `pip install -r requirements.txt`.
 3. `/etc/luigi-web.env` (mode `640 root:luigi-web`) holding
    `LUIGI_WEB_PG_PASSWORD` and `LUIGI_WEB_UI_TOKEN`.
-4. `cp luigi-web.service /etc/systemd/system/` · `systemctl enable --now luigi-web`.
+4. `cp luigi-web.service /etc/systemd/system/` · `systemctl daemon-reload` ·
+   `systemctl enable --now luigi-web`.
 5. UFW: `ufw allow from 10.0.0.0/24 to any port 8080 proto tcp`; default deny.
 6. Confirm: `psql -h 10.0.0.202 -U luigi_web -d luigi_todo -c "SELECT 1;"`.
 
 No NFS. This app runs standalone (its own LXC/systemd), independent of the Bot
 Manager.
 
+The systemd unit runs an `ExecStartPre` that reinstalls dependencies on every
+start (see next section) — no separate deploy pipeline needed.
+
 ---
 
-## Non-goals (v1)
+## Self-update
+
+The `/admin` page exposes two buttons backed by the routes above:
+
+* **Update** — runs `git fetch`, `git pull --ff-only`, then
+  `pip install --no-cache-dir -r requirements.txt` in `/opt/luigi-web`. Streams
+  each step's stdout/stderr and exit code back into the page so a failed pull
+  (non-fast-forward, dirty tree, network error) is immediately visible.
+* **Restart** — sleeps 0.6 s, then calls `os._exit(0)`. `systemd` relaunches
+  the service because the unit has `Restart=always`.
+
+Two properties of the unit make this safe and self-healing:
+
+* `Restart=always` — any exit brings the process back.
+* `ExecStartPre=-…/pip install --no-cache-dir -r requirements.txt` — every
+  start also refreshes Python dependencies. The leading `-` makes the step
+  non-fatal, so an offline / PyPI-down box still boots the last known good
+  code instead of leaving the service dead. This means a restart alone is
+  enough to pick up new packages listed in `requirements.txt`.
+
+Constraints:
+
+* Fast-forward-only pulls. If the working tree has local commits or dirty
+  files the update fails loudly — resolve on the LXC with `git status`.
+* `pip install` runs as the `luigi-web` user against the in-repo `.venv`.
+  Because `ProtectHome=true` hides `~/.cache/pip`, the unit sets
+  `PIP_NO_CACHE_DIR=1` and passes `HOME` explicitly.
+* No sudo required — the app never asks systemd for anything; it just exits.
+* Rotate the shared token by editing `/etc/luigi-web.env` and restarting.
+
+---
+
+## Non-goals
 
 * No DDL from the GUI.
 * No optimistic concurrency — last-write-wins scoped by `uuid` (future work).
 * No user accounts — single shared token. Rotation = change env + restart.
-* No charts/analytics parity with the bot.
+* No charts/analytics parity with the bot beyond the two weekly bar charts on
+  the Home dashboard.
 * No changes to LuigiBot.

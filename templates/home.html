@@ -1,11 +1,13 @@
 {% extends "base.html" %}
 {% block content %}
 <section class="board-header">
-  <h1>Home</h1>
-  <span class="muted-hint">Week of {{ week_of }}</span>
+  <div class="home-title">
+    <h1>Home</h1>
+    <span class="muted-hint">Week of {{ week_of }}</span>
+  </div>
 
   <details class="widget-customizer">
-    <summary class="btn btn-ghost">Customize widgets</summary>
+    <summary class="btn btn-ghost">Customize widgets ▾</summary>
     <div class="widget-toggle-list">
       <label><input type="checkbox" class="widget-toggle" data-widget="open-tasks" checked> Open tasks</label>
       <label><input type="checkbox" class="widget-toggle" data-widget="disc-pending" checked> Discipline (today)</label>
@@ -28,12 +30,12 @@
           {% for t in open_tasks %}
             <li class="widget-row">
               <span class="card-priority p{{ t.priority or 0 }}">P{{ t.priority or 0 }}</span>
-              <span class="widget-row-title">{{ t.task }}</span>
+              <span class="widget-row-title" title="{{ t.task }}">{{ t.task }}</span>
               <span class="widget-row-meta">
                 {% if t.due_date %}<span class="chip chip-due">{{ t.due_date[:10] }}</span>{% endif %}
                 {% if t.catagory %}<span class="chip">{{ t.catagory }}</span>{% endif %}
                 <span class="chip chip-muted">{{ t.status }}</span>
-                {% if t.source == 'recurring' %}<span class="chip chip-muted">recurring</span>{% endif %}
+                {% if t.source == 'recurring' %}<span class="chip chip-muted">↻</span>{% endif %}
               </span>
             </li>
           {% endfor %}
@@ -47,7 +49,7 @@
   <!-- Widget: Discipline pending today -->
   <article class="widget" data-widget="disc-pending">
     <header class="widget-header">
-      <h2>Discipline — Today</h2>
+      <h2>Discipline &middot; Today</h2>
       <span class="widget-count">{{ disciplines_pending|length }}</span>
     </header>
     <div class="widget-body scroll-y">
@@ -55,7 +57,7 @@
         <ul class="widget-list">
           {% for d in disciplines_pending %}
             <li class="widget-row">
-              <span class="widget-row-title">{{ d.task }}</span>
+              <span class="widget-row-title" title="{{ d.task }}">{{ d.task }}</span>
               <span class="widget-row-meta">
                 {% if d.catagory %}<span class="chip">{{ d.catagory }}</span>{% endif %}
                 <span class="chip chip-muted">{{ d.frequency_per_week }}/wk</span>
@@ -77,7 +79,7 @@
           {% endfor %}
         </ul>
       {% else %}
-        <p class="empty">All disciplines done for today.</p>
+        <p class="empty">All disciplines done for today. 🎉</p>
       {% endif %}
     </div>
   </article>
@@ -85,7 +87,7 @@
   <!-- Widget: Discipline weekly bar chart -->
   <article class="widget" data-widget="disc-week">
     <header class="widget-header">
-      <h2>Discipline · Mon–Sun</h2>
+      <h2>Discipline &middot; This week</h2>
       <span class="widget-count">{{ disc_week|sum(attribute='count') }}</span>
     </header>
     <div class="widget-body">
@@ -98,11 +100,11 @@
   <!-- Widget: Tasks completed weekly bar chart -->
   <article class="widget" data-widget="task-week">
     <header class="widget-header">
-      <h2>Tasks completed · Mon–Sun</h2>
+      <h2>Tasks completed &middot; This week</h2>
       <span class="widget-count">{{ task_week|sum(attribute='count') }}</span>
     </header>
     <div class="widget-body">
-      {% with week=task_week, accent='var(--accent)' %}
+      {% with week=task_week, accent='#b06bff' %}
         {% include "partials/week_chart.html" %}
       {% endwith %}
     </div>

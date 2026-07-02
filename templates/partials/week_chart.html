@@ -1,25 +1,43 @@
-{# Simple SVG bar chart for a 7-day week. Requires ``week`` (list of dicts
-   with keys ``dow`` and ``count``) and optional ``accent`` (CSS color). #}
+{# Weekly bar chart. Requires ``week`` (list of {date, dow, count}) and
+   optional ``accent`` (CSS color). Highlights today's bar/label if today
+   falls in the week (via ``today_iso``). #}
 {% set max_count = week|map(attribute='count')|max %}
 {% set max_count = max_count if max_count and max_count > 0 else 1 %}
 {% set accent = accent | default('var(--accent)') %}
-<svg viewBox="0 0 280 140" class="week-chart" role="img" aria-label="Weekly counts">
-  <line x1="20" y1="115" x2="270" y2="115" class="chart-axis"/>
+{# Geometry: 320x180 viewBox, plot area x=[40,310] y=[20,150]. #}
+<svg viewBox="0 0 320 180" class="week-chart" role="img"
+     aria-label="Weekly counts, Monday through Sunday"
+     preserveAspectRatio="xMidYMid meet">
+  {# 5 horizontal gridlines + numeric labels on the y-axis. #}
+  {% for i in range(5) %}
+    {% set y = 20 + i * 32.5 %}
+    {% set v = ((max_count * (4 - i) / 4) + 0.5) | int %}
+    <line x1="40" y1="{{ y }}" x2="310" y2="{{ y }}" class="chart-grid"/>
+    <text x="34" y="{{ y + 3 }}" class="chart-gridval">{{ v }}</text>
+  {% endfor %}
+  <line x1="40" y1="150" x2="310" y2="150" class="chart-axis"/>
+
   {% for d in week %}
-    {% set x = 24 + loop.index0 * 35 %}
-    {% set h = (d.count / max_count * 90) | round(1) %}
+    {# 7 bars evenly spaced across the 270px plot width; bar width 26. #}
+    {% set slot = 270 / 7 %}
+    {% set x = 40 + (loop.index0 * slot) + (slot - 26) / 2 %}
+    {% set h = (d.count / max_count * 125) | round(1) %}
+    {% set bar_y = (150 - h) | round(1) %}
+    {% set is_today = (today_iso is defined and d.date == today_iso) %}
     <rect
-      x="{{ x }}" y="{{ (115 - h)|round(1) }}"
-      width="24" height="{{ h }}"
-      rx="2" ry="2"
+      x="{{ x }}" y="{{ bar_y }}"
+      width="26" height="{{ h }}"
+      rx="3" ry="3"
       fill="{{ accent }}"
       class="chart-bar"
+      opacity="{{ '1' if d.count > 0 else '0.25' }}"
     >
       <title>{{ d.dow }} — {{ d.count }}</title>
     </rect>
     {% if d.count %}
-      <text x="{{ x + 12 }}" y="{{ (110 - h)|round(1) }}" class="chart-value">{{ d.count }}</text>
+      <text x="{{ x + 13 }}" y="{{ bar_y - 4 }}" class="chart-value">{{ d.count }}</text>
     {% endif %}
-    <text x="{{ x + 12 }}" y="132" class="chart-label">{{ d.dow }}</text>
+    <text x="{{ x + 13 }}" y="167"
+          class="chart-label{% if is_today %} is-today{% endif %}">{{ d.dow }}</text>
   {% endfor %}
 </svg>
