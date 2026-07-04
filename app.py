@@ -283,6 +283,29 @@ def tasks_delete(row_uuid: str):
     return Response(status_code=200, content="", headers={"HX-Trigger": "closeModal"})
 
 
+@app.post(
+    "/tasks/{row_uuid}/snooze",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def tasks_snooze(request: Request, row_uuid: str):
+    _require_v2()
+    form = dict(await request.form())
+    try:
+        days = int(form.get("days", "1"))
+    except ValueError:
+        raise HTTPException(400, "days must be an integer")
+    if not db.snooze_task(row_uuid, days):
+        raise HTTPException(404)
+    row = db.get_task(row_uuid)
+    if not row:
+        raise HTTPException(404)
+    return templates.TemplateResponse(
+        "partials/task_card.html",
+        {"request": request, "t": row, "endpoint_root": "/tasks"},
+    )
+
+
 # --------------------------------------------------------------------------- #
 # RECURRING TASKS (Kanban, same shape as tasks)
 # --------------------------------------------------------------------------- #
@@ -411,6 +434,29 @@ def recurring_delete(row_uuid: str):
     _require_v2()
     db.delete_recurring(row_uuid)
     return Response(status_code=200, content="", headers={"HX-Trigger": "closeModal"})
+
+
+@app.post(
+    "/recurring/{row_uuid}/snooze",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def recurring_snooze(request: Request, row_uuid: str):
+    _require_v2()
+    form = dict(await request.form())
+    try:
+        days = int(form.get("days", "1"))
+    except ValueError:
+        raise HTTPException(400, "days must be an integer")
+    if not db.snooze_recurring(row_uuid, days):
+        raise HTTPException(404)
+    row = db.get_recurring(row_uuid)
+    if not row:
+        raise HTTPException(404)
+    return templates.TemplateResponse(
+        "partials/task_card.html",
+        {"request": request, "t": row, "endpoint_root": "/recurring"},
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -683,6 +729,7 @@ def home_page(request: Request):
     recent_completions = db.list_recent_completions(limit=8)
     discipline_streaks = db.list_discipline_streaks(limit=8)
     follow_ups = db.list_follow_ups_preview(limit=8)
+    recent_activity = db.list_recent_activity(limit=15, days=14)
     return templates.TemplateResponse(
         "home.html",
         {
@@ -698,6 +745,7 @@ def home_page(request: Request):
             "recent_completions": recent_completions,
             "discipline_streaks": discipline_streaks,
             "follow_ups": follow_ups,
+            "recent_activity": recent_activity,
             "week_of": monday.isoformat(),
             "today_iso": today.isoformat(),
             "chat_enabled": not isinstance(_LLM_PROVIDER, llm_mod.DisabledProvider),
@@ -1033,6 +1081,27 @@ def admin_restart(request: Request):
     return templates.TemplateResponse(
         "partials/admin_update_result.html",
         {"request": request, "steps": [], "ok": True, "restarted": True},
+    )
+
+
+@app.get("/admin/backup", dependencies=[Depends(require_auth)])
+def admin_backup():
+    """Full read-only JSON dump of the luigi_todo tables the GUI touches.
+
+    Streams as a file attachment named ``luigi-backup-YYYYMMDD-HHMMSS.json``.
+    Respects the "no whole-table rewrites, no DDL" contract — this is read
+    traffic only and never writes back.
+    """
+    _require_v2()
+    payload = db.export_backup()
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    filename = f"luigi-backup-{stamp}.json"
+    return JSONResponse(
+        content=payload,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
     )
 
 

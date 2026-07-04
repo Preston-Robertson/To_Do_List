@@ -20,6 +20,7 @@
       <label><input type="checkbox" class="widget-toggle" data-widget="recent-done" checked> Recent completions</label>
       <label><input type="checkbox" class="widget-toggle" data-widget="disc-week" checked> Discipline this week</label>
       <label><input type="checkbox" class="widget-toggle" data-widget="task-week" checked> Tasks completed this week</label>
+      <label><input type="checkbox" class="widget-toggle" data-widget="activity" checked> Recent activity</label>
     </div>
   </details>
 </section>
@@ -283,6 +284,44 @@
       {% with week=task_week, accent='#b06bff' %}
         {% include "partials/week_chart.html" %}
       {% endwith %}
+    </div>
+  </article>
+
+  <!-- Widget: Recent activity (audit log)
+       Union feed of writes across tasks/recurring/discipline/follow_ups —
+       captures both LuigiBot's and luigi-web's writes because it's built
+       from existing timestamp columns (no DDL, per the README contract). -->
+  <article class="widget" data-widget="activity">
+    <header class="widget-header">
+      <h2>Recent activity</h2>
+      <span class="widget-count">{{ recent_activity|length }}</span>
+    </header>
+    <div class="widget-body scroll-y">
+      {% if recent_activity %}
+        <ul class="widget-list activity-list">
+          {% for a in recent_activity %}
+            <li class="widget-row activity-row activity-{{ a.kind }}">
+              <span class="activity-icon activity-icon-{{ a.kind }}" aria-hidden="true">
+                {% if a.kind == 'completed' %}✓
+                {% elif a.kind == 'discipline' %}●
+                {% else %}+{% endif %}
+              </span>
+              <span class="widget-row-title" title="{{ a.what }}">
+                {{ a.what }}
+                <small class="muted-hint">
+                  {{ a.kind }} &middot; {{ a.source }}
+                  {% if a.catagory %} &middot; {{ a.catagory }}{% endif %}
+                </small>
+              </span>
+              <span class="widget-row-meta">
+                <span class="chip chip-muted">{{ a.when_ts[:16]|replace('T', ' ') }}</span>
+              </span>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="empty">No activity in the last two weeks.</p>
+      {% endif %}
     </div>
   </article>
 </section>

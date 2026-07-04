@@ -1,8 +1,22 @@
-{# Card for tasks + recurring_tasks (same shape). `t` is the row dict. #}
+{# Card for tasks + recurring_tasks (same shape). `t` is the row dict.
+
+   The many `data-*` attrs on the article aren't decorative — the client-side
+   filter bar reads them (see initTasksFilter in app.js) so filtering works
+   with zero server round-trips. Keep them lowercase; the JS lowercases the
+   user's search query for comparison. #}
 <article
   class="card{% if t.completed %} card-completed{% endif %}"
   data-uuid="{{ t.uuid }}"
   id="card-{{ t.uuid }}"
+  data-title="{{ (t.task or '')|lower }}"
+  data-priority="{{ t.priority or 0 }}"
+  data-status="{{ t.status or 'Not Started' }}"
+  data-catagory="{{ (t.catagory or '')|lower }}"
+  data-task-group="{{ (t.task_group or '')|lower }}"
+  data-sub-group="{{ (t.sub_group or '')|lower }}"
+  data-due-date="{{ t.due_date or '' }}"
+  data-completed="{{ t.completed or 0 }}"
+  data-completed-time="{{ t.completed_time or '' }}"
 >
   <header class="card-header">
     <span class="card-priority p{{ t.priority or 0 }}">P{{ t.priority or 0 }}</span>
@@ -36,6 +50,42 @@
       hx-swap="outerHTML"
     >{% if t.completed %}Undo{% else %}Done{% endif %}</button>
 
+    {% if not t.completed %}
+    <details class="snooze-menu" data-snooze-menu>
+      <summary class="btn btn-tiny" title="Snooze / defer due date">Snooze ▾</summary>
+      <div class="snooze-menu-body">
+        <button
+          class="btn btn-tiny btn-ghost"
+          hx-post="{{ endpoint_root }}/{{ t.uuid }}/snooze"
+          hx-vals='{"days": "1"}'
+          hx-target="#card-{{ t.uuid }}"
+          hx-swap="outerHTML"
+        >+1 day</button>
+        <button
+          class="btn btn-tiny btn-ghost"
+          hx-post="{{ endpoint_root }}/{{ t.uuid }}/snooze"
+          hx-vals='{"days": "3"}'
+          hx-target="#card-{{ t.uuid }}"
+          hx-swap="outerHTML"
+        >+3 days</button>
+        <button
+          class="btn btn-tiny btn-ghost"
+          hx-post="{{ endpoint_root }}/{{ t.uuid }}/snooze"
+          hx-vals='{"days": "7"}'
+          hx-target="#card-{{ t.uuid }}"
+          hx-swap="outerHTML"
+        >+1 week</button>
+        <button
+          class="btn btn-tiny btn-ghost"
+          hx-post="{{ endpoint_root }}/{{ t.uuid }}/snooze"
+          hx-vals='{"days": "14"}'
+          hx-target="#card-{{ t.uuid }}"
+          hx-swap="outerHTML"
+        >+2 weeks</button>
+      </div>
+    </details>
+    {% endif %}
+
     <button
       class="btn btn-tiny btn-danger"
       hx-post="{{ endpoint_root }}/{{ t.uuid }}/delete"
@@ -45,3 +95,4 @@
     >Delete</button>
   </footer>
 </article>
+

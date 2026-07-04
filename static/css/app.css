@@ -1052,3 +1052,154 @@ main { padding: 20px; }
   align-items: center;
 }
 .env-secret .btn-tiny { padding: 4px 8px; font-size: 14px; line-height: 1; }
+
+/* --------------------------------------------------------------------------
+   Tasks filter bar (client-side; see initTasksFilter in app.js)
+   -------------------------------------------------------------------------- */
+.board-header-tasks { flex-wrap: wrap; row-gap: 10px; }
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.filter-bar .filter-input,
+.filter-bar .filter-select {
+  padding: 5px 8px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: 12px;
+}
+.filter-bar .filter-input { min-width: 200px; flex: 1 1 200px; }
+.filter-bar .filter-input:focus,
+.filter-bar .filter-select:focus { outline: none; border-color: var(--accent); }
+.filter-summary {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-left: 4px;
+  min-width: 60px;
+}
+
+/* Cards hidden by the client filter — animation-free so scrolling stays snappy. */
+.card.card-filtered-out { display: none; }
+
+/* Saved-filters popover, structured like widget-customizer. */
+.saved-filters { position: relative; }
+.saved-filters > summary {
+  list-style: none;
+  cursor: pointer;
+}
+.saved-filters summary::-webkit-details-marker { display: none; }
+.saved-filters[open] .saved-filters-body {
+  position: absolute;
+  top: 32px;
+  right: 0;
+  z-index: 15;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  box-shadow: var(--shadow);
+  min-width: 240px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.saved-filters-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.saved-filters-empty {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-style: italic;
+  padding: 4px 0;
+}
+.saved-filter {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  justify-content: space-between;
+}
+.saved-filter-name {
+  flex: 1;
+  text-align: left;
+  padding: 4px 8px;
+}
+.saved-filters-form {
+  display: flex;
+  gap: 4px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+.saved-filters-form input {
+  flex: 1;
+  padding: 5px 8px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: 12px;
+}
+.saved-filters-form input:focus { outline: none; border-color: var(--accent); }
+
+/* --------------------------------------------------------------------------
+   Snooze menu on task cards (native <details>)
+   -------------------------------------------------------------------------- */
+.snooze-menu { position: relative; display: inline-block; }
+.snooze-menu > summary {
+  list-style: none;
+  cursor: pointer;
+}
+.snooze-menu summary::-webkit-details-marker { display: none; }
+.snooze-menu[open] .snooze-menu-body {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 10;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 120px;
+}
+.snooze-menu-body .btn {
+  text-align: left;
+  justify-content: flex-start;
+}
+
+/* --------------------------------------------------------------------------
+   Recent activity widget (home)
+   -------------------------------------------------------------------------- */
+.widget[data-widget="activity"] { --accent-c: #64748b; }
+.activity-list .activity-row { grid-template-columns: 22px 1fr auto; }
+.activity-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+  background: var(--bg-hover);
+}
+.activity-icon-completed  { background: var(--success); color: #06210f; }
+.activity-icon-created    { background: var(--accent-dim); color: var(--text); }
+.activity-icon-discipline { background: var(--warn); color: #1a1000; }

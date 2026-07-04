@@ -1,8 +1,74 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="kanban-page">
-  <section class="board-header">
+<div class="kanban-page" data-tasks-scope="{{ endpoint_root }}">
+  <section class="board-header board-header-tasks">
     <h1>{{ page_title }}</h1>
+
+    {# --- Filter bar ---------------------------------------------------------
+       Fully client-side. Filters are applied by initTasksFilter() in app.js
+       by toggling `.card-filtered-out` on cards whose data-* attrs miss the
+       criteria. Column counts are updated live. Saved filters persist to
+       localStorage under `luigi.tasks.savedFilters` and the last-active smart
+       list under `luigi.tasks.activeFilter.<endpoint>`. ---------------------- #}
+    <div class="filter-bar" data-filter-bar>
+      <input
+        type="search"
+        class="filter-input"
+        data-filter-search
+        placeholder="Search title, group, category…"
+        aria-label="Filter cards by text"
+      >
+
+      <select class="filter-select" data-filter-smartlist aria-label="Smart list">
+        <option value="">All open + completed</option>
+        <option value="open">Open only (hide completed)</option>
+        <option value="overdue">Overdue</option>
+        <option value="due-week">Due this week</option>
+        <option value="no-due">No due date</option>
+        <option value="high-priority">High priority (≥5)</option>
+        <option value="completed-week">Completed this week</option>
+      </select>
+
+      <select class="filter-select" data-filter-priority aria-label="Minimum priority">
+        <option value="0">Any priority</option>
+        <option value="1">P≥1</option>
+        <option value="3">P≥3</option>
+        <option value="5">P≥5</option>
+        <option value="7">P≥7</option>
+      </select>
+
+      <select class="filter-select" data-filter-catagory aria-label="Category">
+        <option value="">All categories</option>
+      </select>
+
+      <details class="saved-filters" data-saved-filters>
+        <summary class="btn btn-tiny" title="Saved filters">Saved ▾</summary>
+        <div class="saved-filters-body">
+          <ul class="saved-filters-list" data-saved-filters-list>
+            <li class="saved-filters-empty">No saved filters yet.</li>
+          </ul>
+          <div class="saved-filters-form">
+            <input
+              type="text"
+              data-saved-filter-name
+              placeholder="Name this filter…"
+              maxlength="40"
+            >
+            <button type="button" class="btn btn-tiny btn-primary" data-saved-filter-save>Save</button>
+          </div>
+        </div>
+      </details>
+
+      <button
+        type="button"
+        class="btn btn-tiny btn-ghost"
+        data-filter-clear
+        title="Clear all filters"
+      >Clear</button>
+
+      <span class="filter-summary" data-filter-summary aria-live="polite"></span>
+    </div>
+
     <button
       class="btn btn-primary"
       hx-get="{{ endpoint_root }}/new"
@@ -17,7 +83,7 @@
       <div class="kanban-column" data-status="{{ status }}">
         <header class="kanban-column-header">
           <span class="kanban-column-title">{{ status }}</span>
-          <span class="kanban-column-count">{{ columns[status]|length }}</span>
+          <span class="kanban-column-count" data-column-count>{{ columns[status]|length }}</span>
         </header>
         <div
           class="kanban-column-body sortable"

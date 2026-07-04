@@ -58,6 +58,29 @@
     </div>
   </article>
 
+  <article class="widget">
+    <header class="widget-header"><h2>Backup</h2></header>
+    <div class="widget-body">
+      <p class="muted-hint">
+        Download a full JSON snapshot of the tables the GUI touches:
+        <code>tasks</code>, <code>recurring_tasks</code>,
+        <code>discipline_list</code>, <code>discipline_completions</code>,
+        <code>follow_up_tasks</code>. Read-only — no DB writes and no schema
+        changes. Save the file somewhere offline for safekeeping.
+      </p>
+      <div class="form-actions" style="border-top:none;justify-content:flex-start;padding-top:0;">
+        {# Plain <a> so the browser handles the file download natively;
+           HTMX would swap the JSON blob into the page instead. #}
+        <a class="btn btn-primary" href="/admin/backup" download>
+          Download backup (JSON)
+        </a>
+        <span class="muted-hint">
+          Filename: <code>luigi-backup-YYYYMMDD-HHMMSS.json</code>
+        </span>
+      </div>
+    </div>
+  </article>
+
   <article class="widget widget-full">
     <header class="widget-header">
       <h2>Environment file</h2>

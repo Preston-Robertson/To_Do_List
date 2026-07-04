@@ -240,6 +240,37 @@ def _delete_task_like(table: str, row_uuid: str) -> None:
         conn.execute(q, {"u": row_uuid})
 
 
+def _snooze_task_like(table: str, row_uuid: str, days: int) -> str | None:
+    """Push ``due_date`` forward by ``days``.
+
+    Base is the later of today or the current due_date, so snoozing an item
+    that's already past its due date defers from today (not from the stale
+    date). Returns the new ISO date, or ``None`` if the row is gone.
+    """
+    with get_engine().begin() as conn:
+        cur = conn.execute(
+            text(f"SELECT due_date FROM {table} WHERE uuid = :u"),
+            {"u": row_uuid},
+        ).first()
+        if cur is None:
+            return None
+        today = date.today()
+        base = today
+        if cur.due_date:
+            try:
+                existing = date.fromisoformat(cur.due_date[:10])
+                if existing > today:
+                    base = existing
+            except ValueError:
+                pass
+        new_due = (base + timedelta(days=int(days))).isoformat()
+        conn.execute(
+            text(f"UPDATE {table} SET due_date = :d WHERE uuid = :u"),
+            {"d": new_due, "u": row_uuid},
+        )
+    return new_due
+
+
 # public: tasks
 def list_tasks() -> list[dict[str, Any]]:
     return _list_task_like("tasks")
@@ -269,6 +300,10 @@ def delete_task(row_uuid: str) -> None:
     _delete_task_like("tasks", row_uuid)
 
 
+def snooze_task(row_uuid: str, days: int) -> str | None:
+    return _snooze_task_like("tasks", row_uuid, days)
+
+
 # public: recurring_tasks
 def list_recurring() -> list[dict[str, Any]]:
     return _list_task_like("recurring_tasks")
@@ -296,6 +331,10 @@ def toggle_recurring_completed(row_uuid: str) -> int:
 
 def delete_recurring(row_uuid: str) -> None:
     _delete_task_like("recurring_tasks", row_uuid)
+
+
+def snooze_recurring(row_uuid: str, days: int) -> str | None:
+    return _snooze_task_like("recurring_tasks", row_uuid, days)
 
 
 # --------------------------------------------------------------------------- #
@@ -716,6 +755,90 @@ def list_follow_ups_preview(limit: int = 8) -> list[dict[str, Any]]:
     """)
     with get_engine().connect() as conn:
         return _rows(conn.execute(q))
+
+
+def list_recent_activity(limit: int = 15, days: int = 14) -> list[dict[str, Any]]:
+    """Reverse-chronological feed of writes across all luigi_todo tables.
+
+    Captures writes from BOTH LuigiBot and luigi-web because it reads the
+    existing timestamp columns (``task_creation``, ``completed_time``,
+    ``logged_at``, ``created``) rather than a bespoke audit table — no DDL
+    from the GUI (see README).
+
+    ``task_creation`` is stored as ``YYYY-MM-DD`` while the others are full
+    ISO timestamps; we pad date-only values with ``T00:00:00`` so lexical
+    sort is chronologically correct.
+    """
+    cutoff_ts = (datetime.now() - timedelta(days=int(days))).isoformat(timespec="seconds")
+    cutoff_day = (date.today() - timedelta(days=int(days))).isoformat()
+    q = text(f"""
+        SELECT * FROM (
+            SELECT
+                CASE WHEN LENGTH(task_creation) = 10 THEN task_creation || 'T00:00:00'
+                     ELSE task_creation END AS when_ts,
+                'created'::text AS kind,
+                task            AS what,
+                'task'::text    AS source,
+                uuid, catagory
+            FROM tasks
+            WHERE task_creation IS NOT NULL AND task_creation >= :day
+            UNION ALL
+            SELECT
+                CASE WHEN LENGTH(task_creation) = 10 THEN task_creation || 'T00:00:00'
+                     ELSE task_creation END,
+                'created', task, 'recurring', uuid, catagory
+            FROM recurring_tasks
+            WHERE task_creation IS NOT NULL AND task_creation >= :day
+            UNION ALL
+            SELECT completed_time, 'completed', task, 'task', uuid, catagory
+            FROM tasks
+            WHERE completed = 1 AND completed_time IS NOT NULL
+              AND completed_time >= :ts
+            UNION ALL
+            SELECT completed_time, 'completed', task, 'recurring', uuid, catagory
+            FROM recurring_tasks
+            WHERE completed = 1 AND completed_time IS NOT NULL
+              AND completed_time >= :ts
+            UNION ALL
+            SELECT logged_at, 'discipline', task, 'discipline',
+                   NULL::text AS uuid, catagory
+            FROM discipline_completions
+            WHERE logged_at IS NOT NULL AND logged_at >= :ts
+            UNION ALL
+            SELECT created, 'created', follow_up_task, 'follow_up', uuid, catagory
+            FROM follow_up_tasks
+            WHERE created IS NOT NULL AND created >= :ts
+        ) x
+        ORDER BY when_ts DESC
+        LIMIT {int(limit)}
+    """)
+    with get_engine().connect() as conn:
+        return _rows(conn.execute(q, {"ts": cutoff_ts, "day": cutoff_day}))
+
+
+def export_backup() -> dict[str, Any]:
+    """Return a JSON-serializable snapshot of every luigi_todo table the GUI
+    reads. Read-only; used by ``/admin/backup`` to produce a downloadable
+    file. All rows are returned — this is a full dump, not a delta.
+    """
+    tables = (
+        "tasks",
+        "recurring_tasks",
+        "discipline_list",
+        "discipline_completions",
+        "follow_up_tasks",
+    )
+    out: dict[str, Any] = {
+        "generated_at": now_iso(),
+        "schema_version": check_schema_version(),
+        "tables": {},
+    }
+    with get_engine().connect() as conn:
+        for t in tables:
+            rows = _rows(conn.execute(text(f"SELECT * FROM {t}")))
+            out["tables"][t] = rows
+    out["counts"] = {t: len(rows) for t, rows in out["tables"].items()}
+    return out
 
 
 # --------------------------------------------------------------------------- #
