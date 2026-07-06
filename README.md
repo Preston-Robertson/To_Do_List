@@ -27,6 +27,7 @@ internally, so an item with hundreds of rows never pushes the page taller.
 | **Recently completed** | last 8 completed items across `tasks` + `recurring_tasks` | green |
 | **Discipline · This week** | Mon–Sun bar chart of `discipline_completions` | green |
 | **Tasks completed · This week** | Mon–Sun bar chart of items whose `completed_time` falls in the current ISO week | violet |
+| **Recent activity** | last N events across `tasks` + `recurring_tasks` + `discipline_completions` + `follow_up_tasks`, derived from existing timestamp columns (no audit table) | slate |
 
 Each widget can be shown/hidden via the "Customize widgets" dropdown; state
 is persisted in `localStorage` per browser (key `luigi.home.hiddenWidgets`).
@@ -34,7 +35,8 @@ All widget queries are read-only, bounded with `LIMIT`, and live in `db.py`
 (`list_open_tasks`, `list_overdue_tasks`, `list_upcoming_tasks`,
 `list_recent_completions`, `list_discipline_streaks`,
 `list_disciplines_pending_today`, `list_follow_ups_preview`,
-`weekly_discipline_counts`, `weekly_task_completion_counts`).
+`weekly_discipline_counts`, `weekly_task_completion_counts`,
+`list_recent_activity`).
 
 **Kanban board by status.** Tasks and Recurring live on 3×2 Kanban boards. The
 column layout is:
@@ -48,6 +50,20 @@ the page. Drag a card between columns to change status. Click a card to edit
 all fields in a modal. HTMX handles inline updates; SortableJS handles
 drag-and-drop.
 
+Each card has a **Snooze ▾** menu (+1d / +3d / +1w / +2w) that POSTs to
+`/tasks/{uuid}/snooze` (or `/recurring/{uuid}/snooze`) and swaps the card in
+place. Snooze math uses `max(today, current_due) + days`, so overdue items
+always defer from today rather than from a stale due date.
+
+Above each board is a **filter bar** with free-text search, a status /
+priority / category dropdown, and a **smart-list** picker with built-ins:
+*Overdue*, *Due this week*, *No due date*, *High priority (≥ 5)*, and
+*Completed this week*. Filtering is 100% client-side — the templates emit
+`data-*` attributes on each card and `static/js/app.js` toggles visibility
+in the DOM. Named filters can be saved ("☆ Save current") and reapplied per
+endpoint; state lives in `localStorage` under
+`luigi.tasks.savedFilters` and `luigi.tasks.activeFilter.<endpoint>`.
+
 The DB-level status enum stays in its canonical order
 (`db.STATUS_VALUES`); the display order is a separate constant
 (`db.STATUS_DISPLAY_ORDER`) so reordering the board never changes what the
@@ -55,10 +71,20 @@ backend accepts.
 
 Other views:
 
+* **Projects** — category-scoped Gantt chart at `/projects`. Pick one or more
+  `catagory` values (and optionally include recurring tasks); the page
+  renders a two-pane view: a fixed names column on the left and a scrolling
+  SVG timeline on the right. Bars derive their span from `start_time` (or
+  `task_creation` as a fallback) through `due_date`; items without a
+  `due_date` drop into an "Unscheduled" section below the chart. The
+  header draws month gridlines/labels and a dashed "today" marker; bars are
+  colored by status. Clicking a task name opens the same edit modal used
+  on the Kanban.
 * **Discipline** — one GitHub-style yearly heatmap per discipline item, with a
   year-picker dropdown. Click any day cell to mark/unmark.
 * **Follow-ups** — plain table with inline edit.
-* **Admin** — runtime info + self-update / restart controls (see below).
+* **Admin** — runtime info + self-update / restart controls + JSON backup
+  export (see below).
 
 ### Future UI directions (noted for later)
 
@@ -156,8 +182,11 @@ Authenticated (session cookie, or `?token=` / `Authorization: Bearer`):
 * `POST /tasks/{uuid}`    → update
 * `POST /tasks/{uuid}/status` → drag-drop status change
 * `POST /tasks/{uuid}/complete` → toggle `completed` + `completed_time`
+* `POST /tasks/{uuid}/snooze` → defer `due_date` by `days` (form field);
+  returns the re-rendered card partial for an HTMX swap
 * `POST /tasks/{uuid}/delete` → delete
-* `GET  /recurring` … (same shape as `/tasks`)
+* `GET  /recurring` … (same shape as `/tasks`, including `/snooze`)
+* `GET  /projects?catagory=X&catagory=Y&include_recurring=1` → Gantt chart
 * `GET  /discipline?year=YYYY` → yearly heatmaps
 * `POST /discipline`      → create
 * `GET  /discipline/{uuid}/edit`, `POST /discipline/{uuid}` → update
@@ -167,7 +196,13 @@ Authenticated (session cookie, or `?token=` / `Authorization: Bearer`):
 * `GET  /follow-ups`      → table
 * `POST /follow-ups`, `GET /follow-ups/{uuid}/edit`, `POST /follow-ups/{uuid}`,
   `POST /follow-ups/{uuid}/delete`
-* `GET  /admin`           → runtime info + update / restart controls
+* `GET  /admin`           → runtime info + update / restart controls +
+  backup export
+* `GET  /admin/backup`    → read-only JSON dump of `tasks`,
+  `recurring_tasks`, `follow_up_tasks`, `disciplines`, and
+  `discipline_completions`. Served with
+  `Content-Disposition: attachment; filename="luigi-backup-{stamp}.json"`
+  — the Admin page exposes it as a plain download link.
 * `POST /admin/update`    → `git fetch` + `git pull --ff-only` +
   `pip install -r requirements.txt` in the repo directory. Returns per-step
   stdout/stderr and exit codes. Does **not** restart the process.
@@ -256,7 +291,7 @@ Constraints:
 * No optimistic concurrency — last-write-wins scoped by `uuid` (future work).
 * No user accounts — single shared token. Rotation = change env + restart.
 * No charts/analytics parity with the bot beyond the two weekly bar charts on
-  the Home dashboard.
+  the Home dashboard and the category-scoped Gantt on `/projects`.
 * No changes to LuigiBot.
 
 ---

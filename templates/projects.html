@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+{% block content %}
+{# --- Header: catagory multi-select + "include recurring" toggle -----------
+   Plain GET form; `onchange="this.requestSubmit()"` gives instant filtering
+   without HTMX. Selected catagories become repeated ?catagory=... params so
+   they survive bookmarks and browser back/forward. ------------------------- #}
+<section class="board-header projects-header">
+  <h1>Projects</h1>
+  <form method="get" action="/projects" class="projects-form"
+        onchange="this.requestSubmit()">
+    {# Keep include_recurring in the query even when unchecked so the
+       explicit "off" state round-trips. We do this by mapping unchecked
+       state via a hidden 0 which the checked=1 overrides when checked. #}
+    <input type="hidden" name="include_recurring" value="0">
+    <label class="proj-toggle" title="Include recurring tasks">
+      <input type="checkbox" name="include_recurring" value="1"
+        {% if include_recurring %}checked{% endif %}> recurring
+    </label>
+
+    {% if all_categories %}
+      <div class="proj-cat-chips" role="group" aria-label="Categories">
+        {% for c in all_categories %}
+          <label class="proj-cat-chip {% if c.catagory in selected_categories %}is-active{% endif %}">
+            <input type="checkbox" name="catagory" value="{{ c.catagory }}"
+              {% if c.catagory in selected_categories %}checked{% endif %}>
+            <span class="proj-cat-name">{{ c.catagory }}</span>
+            <span class="proj-cat-count">{{ c.n }}</span>
+          </label>
+        {% endfor %}
+      </div>
+    {% else %}
+      <span class="muted-hint">No categories with open tasks.</span>
+    {% endif %}
+
+    {% if selected_categories %}
+      <a href="/projects{% if not include_recurring %}?include_recurring=0{% endif %}"
+         class="btn btn-tiny btn-ghost">Clear</a>
+    {% endif %}
+  </form>
+</section>
+
+{% if not selected_categories %}
+  <section class="empty-hero">
+    <p><strong>Pick one or more categories above</strong> to see a Gantt
+      timeline of their open tasks. Bars are drawn from each task's start
+      date (or creation date if no explicit start) through its due date.</p>
+  </section>
+{% elif not chart %}
+  <section class="empty-hero">
+    <p>No open items found in the selected categories.</p>
+  </section>
+{% else %}
+
+  {# --- Gantt chart -------------------------------------------------------
+     Two panes: fixed-width names on the left, scrollable SVG timeline on
+     the right. Both panes share the same total height and the same row
+     heights (_GANTT_HEADER_H / _GANTT_ROW_H / _GANTT_CAT_H in app.py) so
+     rows align pixel-for-pixel. --------------------------------------- #}
+  <div class="gantt-wrap" style="--gantt-header-h: {{ chart.header_h }}px;
+                                  --gantt-row-h: {{ chart.row_h }}px;
+                                  --gantt-cat-h: {{ chart.cat_h }}px;
+                                  --gantt-total-h: {{ chart.total_height }}px;">
+    <div class="gantt-names">
+      <div class="gantt-names-header">Task &middot; Category</div>
+      {% for lane in chart.swimlanes %}
+        <div class="gantt-cat-row">
+          <span class="gantt-cat-name">{{ lane.catagory }}</span>
+          <span class="gantt-cat-count">{{ lane.count }}</span>
+        </div>
+        {% for t in lane.tasks %}
+          <div class="gantt-task-row" title="{{ t.task }} — {{ t.status }}">
+            <button type="button" class="gantt-task-btn"
+              hx-get="{{ '/recurring' if t.source == 'recurring' else '/tasks' }}/{{ t.uuid }}/edit"
+              hx-target="#modal-body"
+              onclick="openModal()">
+              <span class="card-priority p{{ t.priority }}">P{{ t.priority }}</span>
+              <span class="gantt-task-title">{{ t.task }}</span>
+              {% if t.source == 'recurring' %}<span class="chip chip-muted">↻</span>{% endif %}
+            </button>
+          </div>
+        {% endfor %}
+      {% endfor %}
+    </div>
+
+    <div class="gantt-timeline">
+      <svg class="gantt-svg"
+           width="{{ chart.total_width }}"
+           height="{{ chart.total_height }}"
+           viewBox="0 0 {{ chart.total_width }} {{ chart.total_height }}"
+           xmlns="http://www.w3.org/2000/svg">
+        {# Header band background #}
+        <rect x="0" y="0" width="{{ chart.total_width }}" height="{{ chart.header_h }}"
+              class="gantt-header-bg" />
+
+        {# Month gridlines + labels #}
+        {% for m in chart.months %}
+          <line x1="{{ m.x }}" y1="0" x2="{{ m.x }}" y2="{{ chart.total_height }}"
+                class="gantt-gridline" />
+          <text x="{{ m.x + 4 }}" y="{{ chart.header_h - 14 }}" class="gantt-month-label">
+            {{ m.label }}
+          </text>
+        {% endfor %}
+
+        {# Swimlane band backgrounds + category label row #}
+        {% for lane in chart.swimlanes %}
+          <rect x="0" y="{{ lane.y_start }}"
+                width="{{ chart.total_width }}"
+                height="{{ lane.y_end - lane.y_start }}"
+                class="gantt-lane-bg"
+                data-lane-index="{{ loop.index0 }}" />
+          <rect x="0" y="{{ lane.cat_y }}"
+                width="{{ chart.total_width }}"
+                height="{{ chart.cat_h }}"
+                class="gantt-lane-header" />
+        {% endfor %}
+
+        {# Today marker — a subtle vertical line + a top badge #}
+        {% if chart.today_x is not none %}
+          <line x1="{{ chart.today_x }}" y1="0"
+                x2="{{ chart.today_x }}" y2="{{ chart.total_height }}"
+                class="gantt-today" />
+          <rect x="{{ chart.today_x - 22 }}" y="{{ chart.header_h - 18 }}"
+                width="44" height="14" rx="3"
+                class="gantt-today-chip-bg" />
+          <text x="{{ chart.today_x }}" y="{{ chart.header_h - 8 }}"
+                class="gantt-today-chip-text">today</text>
+        {% endif %}
+
+        {# Bars #}
+        {% for lane in chart.swimlanes %}
+          {% for t in lane.tasks %}
+            <g class="gantt-bar-group">
+              <rect x="{{ t.bar_x }}" y="{{ t.bar_y }}"
+                    width="{{ t.bar_w }}" height="{{ chart.bar_h }}"
+                    rx="3" ry="3"
+                    class="gantt-bar gantt-bar-{{ t.status_class }}">
+                <title>{{ t.task }}
+Status: {{ t.status }}
+{{ t.start_iso }} → {{ t.end_iso }}
+Category: {{ t.catagory or '—' }}</title>
+              </rect>
+            </g>
+          {% endfor %}
+        {% endfor %}
+      </svg>
+    </div>
+  </div>
+
+  {% if chart.unscheduled %}
+    <section class="gantt-unscheduled">
+      <h2>Unscheduled <span class="proj-cat-count">{{ chart.unscheduled|length }}</span></h2>
+      <p class="muted-hint">These items have no <code>due_date</code>, so they
+        can't be placed on the timeline. Add a due date to see them in the
+        chart above.</p>
+      <ul class="widget-list">
+        {% for t in chart.unscheduled %}
+          <li class="widget-row">
+            <span class="card-priority p{{ t.priority or 0 }}">P{{ t.priority or 0 }}</span>
+            <button type="button" class="widget-row-title gantt-task-btn"
+              hx-get="{{ '/recurring' if t.source == 'recurring' else '/tasks' }}/{{ t.uuid }}/edit"
+              hx-target="#modal-body"
+              onclick="openModal()"
+              title="{{ t.task }}">{{ t.task }}</button>
+            <span class="widget-row-meta">
+              {% if t.catagory %}<span class="chip">{{ t.catagory }}</span>{% endif %}
+              <span class="chip chip-muted">{{ t.status }}</span>
+              {% if t.source == 'recurring' %}<span class="chip chip-muted">↻</span>{% endif %}
+            </span>
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% endif %}
+{% endif %}
+{% endblock %}

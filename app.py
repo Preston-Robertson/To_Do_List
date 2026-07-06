@@ -712,6 +712,202 @@ def follow_ups_delete(row_uuid: str):
 
 
 # --------------------------------------------------------------------------- #
+# PROJECTS — Gantt chart, grouped by catagory
+# --------------------------------------------------------------------------- #
+# All layout math (px/day scale, swimlane y-coords, month gridlines) lives
+# here in the route so the template only iterates over pre-shaped data. Keeps
+# Jinja readable and makes the numbers unit-testable if we ever want to.
+
+def _parse_iso_date(s: Any) -> date | None:
+    if not s:
+        return None
+    try:
+        return date.fromisoformat(str(s)[:10])
+    except ValueError:
+        return None
+
+
+def _status_slug(s: str | None) -> str:
+    return (s or "not-started").lower().replace(" ", "-")
+
+
+# Row/header/bar heights are used by both the SVG and the paired HTML name
+# column, so the two panes stay row-aligned. Change here → change nowhere else.
+_GANTT_HEADER_H = 42
+_GANTT_ROW_H = 28
+_GANTT_CAT_H = 32
+_GANTT_BAR_H = 16
+_GANTT_MIN_WIDTH = 900
+
+
+def _build_gantt(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Shape a row set into everything projects.html needs to draw one SVG.
+
+    Task placement rules:
+      * ``end`` = ``due_date``. Tasks without one land in "unscheduled".
+      * ``start`` = ``start_time`` if set, else ``task_creation``. If neither
+        is usable (or start > end), we fall back to min(today, end) so the
+        bar has a sensible width instead of collapsing to zero.
+    """
+    if not rows:
+        return None
+
+    from collections import defaultdict
+
+    scheduled: list[dict[str, Any]] = []
+    unscheduled: list[dict[str, Any]] = []
+    today = date.today()
+
+    for r in rows:
+        end = _parse_iso_date(r.get("due_date"))
+        if not end:
+            unscheduled.append(r)
+            continue
+        start = _parse_iso_date(r.get("start_time")) or _parse_iso_date(r.get("task_creation"))
+        if not start or start > end:
+            start = min(today, end)
+        entry = dict(r)
+        entry["_start"] = start
+        entry["_end"] = end
+        scheduled.append(entry)
+
+    if not scheduled and not unscheduled:
+        return None
+
+    if scheduled:
+        chart_start = min(r["_start"] for r in scheduled)
+        chart_end = max(r["_end"] for r in scheduled)
+        chart_start = min(chart_start, today)
+        chart_end = max(chart_end, today)
+        # Padding so bars don't touch the panel edges.
+        chart_start -= timedelta(days=3)
+        chart_end += timedelta(days=3)
+    else:
+        # Only unscheduled — still produce a nominal axis so the template
+        # doesn't have to handle a missing chart.
+        chart_start = today - timedelta(days=30)
+        chart_end = today + timedelta(days=30)
+
+    span_days = max(1, (chart_end - chart_start).days)
+
+    # Choose a base px/day per span, then stretch to at least _GANTT_MIN_WIDTH
+    # so short-span charts don't render as a stubby column.
+    if span_days <= 90:
+        px_per_day: float = 12.0
+    elif span_days <= 365:
+        px_per_day = 5.0
+    else:
+        px_per_day = 2.0
+    total_width = max(_GANTT_MIN_WIDTH, span_days * px_per_day)
+    if span_days * px_per_day < _GANTT_MIN_WIDTH:
+        px_per_day = _GANTT_MIN_WIDTH / span_days
+
+    def x_for(d: date) -> float:
+        return (d - chart_start).days * px_per_day
+
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for r in scheduled:
+        groups[r.get("catagory") or "(none)"].append(r)
+
+    swimlanes: list[dict[str, Any]] = []
+    y = _GANTT_HEADER_H
+    for cat_name in sorted(groups.keys()):
+        tasks_in = groups[cat_name]
+        cat_y = y
+        y += _GANTT_CAT_H
+        lane_tasks = []
+        for t in tasks_in:
+            x1 = x_for(t["_start"])
+            x2 = x_for(t["_end"])
+            lane_tasks.append({
+                "task": t["task"],
+                "status": t["status"] or "Not Started",
+                "status_class": _status_slug(t["status"]),
+                "priority": t.get("priority") or 0,
+                "uuid": t["uuid"],
+                "source": t.get("source", "task"),
+                "catagory": t.get("catagory") or "",
+                "start_iso": t["_start"].isoformat(),
+                "end_iso": t["_end"].isoformat(),
+                "bar_x": x1,
+                "bar_y": y + (_GANTT_ROW_H - _GANTT_BAR_H) / 2,
+                "bar_w": max(2.0, x2 - x1),
+                "row_y": y,
+            })
+            y += _GANTT_ROW_H
+        swimlanes.append({
+            "catagory": cat_name,
+            "count": len(tasks_in),
+            "cat_y": cat_y,
+            "y_start": cat_y,
+            "y_end": y,
+            "tasks": lane_tasks,
+        })
+
+    total_height = max(_GANTT_HEADER_H + 60, y + 8)
+
+    # Month ticks — a vertical gridline + label on the first of each month.
+    months: list[dict[str, Any]] = []
+    d = date(chart_start.year, chart_start.month, 1)
+    while d <= chart_end:
+        if d >= chart_start:
+            months.append({"x": x_for(d), "label": d.strftime("%b %Y")})
+        d = date(d.year + 1, 1, 1) if d.month == 12 else date(d.year, d.month + 1, 1)
+
+    today_x = x_for(today) if chart_start <= today <= chart_end else None
+
+    return {
+        "total_width": total_width,
+        "total_height": total_height,
+        "px_per_day": px_per_day,
+        "header_h": _GANTT_HEADER_H,
+        "row_h": _GANTT_ROW_H,
+        "cat_h": _GANTT_CAT_H,
+        "bar_h": _GANTT_BAR_H,
+        "swimlanes": swimlanes,
+        "months": months,
+        "today_x": today_x,
+        "chart_start_iso": chart_start.isoformat(),
+        "chart_end_iso": chart_end.isoformat(),
+        "unscheduled": unscheduled,
+        "scheduled_count": len(scheduled),
+    }
+
+
+@app.get("/projects", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def projects_page(request: Request):
+    """Gantt-style view of open items grouped by ``catagory``.
+
+    Category selection comes from the query string (repeated ``catagory``
+    params). The page renders an empty state until at least one is picked,
+    so first-time load stays snappy on large DBs.
+    """
+    _require_v2()
+    selected = [c for c in request.query_params.getlist("catagory") if c]
+    include_recurring = request.query_params.get("include_recurring", "1") == "1"
+
+    all_categories = db.list_categories_with_open_tasks(
+        include_recurring=include_recurring
+    )
+    rows = db.list_project_rows(selected, include_recurring=include_recurring)
+    chart = _build_gantt(rows)
+
+    return templates.TemplateResponse(
+        "projects.html",
+        {
+            "request": request,
+            "active_nav": "projects",
+            "page_title": "Projects",
+            "all_categories": all_categories,
+            "selected_categories": set(selected),
+            "include_recurring": include_recurring,
+            "chart": chart,
+            "today_iso": date.today().isoformat(),
+        },
+    )
+
+
+# --------------------------------------------------------------------------- #
 # HOME (customizable widget dashboard)
 # --------------------------------------------------------------------------- #
 

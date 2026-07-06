@@ -1203,3 +1203,250 @@ main { padding: 20px; }
 .activity-icon-completed  { background: var(--success); color: #06210f; }
 .activity-icon-created    { background: var(--accent-dim); color: var(--text); }
 .activity-icon-discipline { background: var(--warn); color: #1a1000; }
+
+/* --------------------------------------------------------------------------
+   Projects page — category picker + Gantt chart
+   Two panes side by side: fixed name column (HTML) + scrollable timeline
+   (SVG). Row heights are set from CSS custom props that mirror the
+   _GANTT_*_H constants in app.py; keep the two in sync.
+   -------------------------------------------------------------------------- */
+.projects-header { flex-wrap: wrap; row-gap: 10px; align-items: center; }
+.projects-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+}
+.proj-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.proj-toggle input { margin: 0; accent-color: var(--accent); }
+
+.proj-cat-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.proj-cat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+  transition: background 100ms, border-color 100ms, color 100ms;
+}
+.proj-cat-chip:hover { background: var(--bg-hover); color: var(--text); }
+.proj-cat-chip input { display: none; }
+.proj-cat-chip.is-active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--text);
+}
+.proj-cat-name { font-weight: 500; }
+.proj-cat-count {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--text-dim);
+  min-width: 22px;
+  text-align: center;
+}
+.proj-cat-chip.is-active .proj-cat-count { background: var(--bg-elev); color: var(--text); }
+
+.empty-hero {
+  margin: 24px auto;
+  max-width: 640px;
+  padding: 20px 24px;
+  background: var(--bg-elev);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  color: var(--text-dim);
+  text-align: center;
+}
+
+/* --------- Gantt: two-pane layout ---------- */
+.gantt-wrap {
+  display: flex;
+  align-items: stretch;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  height: var(--gantt-total-h);
+  max-height: calc(100vh - 200px);
+}
+
+/* Left: fixed-width name column. Scrolls vertically only; its own overflow
+   is hidden horizontally so it stays a clean frozen sidebar. */
+.gantt-names {
+  width: 280px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border-strong);
+  background: var(--bg-elev);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.gantt-names-header {
+  height: var(--gantt-header-h);
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev-2);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.gantt-cat-row {
+  height: var(--gantt-cat-h);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 12px;
+  background: var(--bg-elev-2);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.gantt-cat-name { text-transform: uppercase; letter-spacing: .5px; }
+.gantt-cat-count {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--text-dim);
+  font-weight: 600;
+}
+.gantt-task-row {
+  height: var(--gantt-row-h);
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.gantt-task-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 12px;
+  background: none;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gantt-task-btn:hover { color: var(--accent); }
+.gantt-task-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+
+/* Right: SVG timeline. Owns horizontal scroll and (via the wrap) shares
+   vertical scroll behaviour with the names column. */
+.gantt-timeline {
+  flex: 1 1 auto;
+  overflow: auto;
+  min-width: 0;
+}
+.gantt-svg {
+  display: block;
+  min-width: 100%;
+}
+
+/* Header + gridlines + swimlane backgrounds */
+.gantt-header-bg   { fill: var(--bg-elev-2); }
+.gantt-gridline    { stroke: var(--border); stroke-width: 1; }
+.gantt-month-label { fill: var(--text-dim); font-size: 10px; font-family: var(--font); }
+.gantt-lane-bg:nth-child(even)         { fill: rgba(255,255,255,.012); }
+.gantt-lane-bg[data-lane-index="0"],
+.gantt-lane-bg[data-lane-index="2"],
+.gantt-lane-bg[data-lane-index="4"],
+.gantt-lane-bg[data-lane-index="6"],
+.gantt-lane-bg[data-lane-index="8"] { fill: rgba(255,255,255,.015); }
+.gantt-lane-bg                         { fill: transparent; }
+.gantt-lane-header { fill: var(--bg-elev-2); opacity: .5; }
+
+.gantt-today {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+  opacity: .85;
+}
+.gantt-today-chip-bg { fill: var(--accent); }
+.gantt-today-chip-text {
+  fill: white; font-size: 10px; font-weight: 600;
+  font-family: var(--font); text-anchor: middle;
+}
+
+/* Bars — color by status. Completed items shouldn't appear (we filter
+   completed = 0), but the class is here for symmetry. */
+.gantt-bar {
+  cursor: default;
+  transition: filter 120ms, stroke-width 120ms;
+  stroke: rgba(0,0,0,.35);
+  stroke-width: 0.5;
+}
+.gantt-bar:hover { filter: brightness(1.2); stroke-width: 1.5; }
+.gantt-bar-not-started  { fill: #6b7280; }
+.gantt-bar-in-progress  { fill: var(--accent); }
+.gantt-bar-pending      { fill: #a78bfa; }
+.gantt-bar-blocked      { fill: var(--danger); }
+.gantt-bar-hiatus       { fill: #78716c; opacity: .7; }
+.gantt-bar-completed    { fill: var(--success); opacity: .6; }
+
+.gantt-unscheduled {
+  margin-top: 20px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 18px;
+}
+.gantt-unscheduled h2 {
+  margin: 0 0 4px;
+  font-size: 15px;
+  display: flex; align-items: center; gap: 8px;
+}
+.gantt-unscheduled .widget-row-title.gantt-task-btn {
+  background: none; border: none; color: var(--text);
+  text-align: left; cursor: pointer;
+  padding: 0;
+}
+.gantt-unscheduled .widget-row-title.gantt-task-btn:hover { color: var(--accent); }

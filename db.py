@@ -842,6 +842,84 @@ def export_backup() -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# Projects / Gantt
+# --------------------------------------------------------------------------- #
+
+def list_categories_with_open_tasks(include_recurring: bool = True) -> list[dict[str, Any]]:
+    """Distinct ``catagory`` values that own at least one open task.
+
+    Powers the multi-select on ``/projects`` — the page only offers
+    categories that would actually have something to plot. ``include_recurring``
+    mirrors the page toggle so a category populated only by recurring items
+    doesn't appear when recurring is excluded.
+    """
+    sources = ["""
+        SELECT catagory, COUNT(*) AS n FROM tasks
+        WHERE completed = 0 AND (status IS NULL OR status != 'Completed')
+          AND catagory IS NOT NULL AND catagory != ''
+        GROUP BY catagory
+    """]
+    if include_recurring:
+        sources.append("""
+            SELECT catagory, COUNT(*) AS n FROM recurring_tasks
+            WHERE completed = 0 AND (status IS NULL OR status != 'Completed')
+              AND catagory IS NOT NULL AND catagory != ''
+            GROUP BY catagory
+        """)
+    q = text(f"""
+        SELECT catagory, SUM(n)::int AS n
+        FROM ({' UNION ALL '.join(sources)}) x
+        GROUP BY catagory
+        ORDER BY catagory ASC
+    """)
+    with get_engine().connect() as conn:
+        return _rows(conn.execute(q))
+
+
+def list_project_rows(
+    categories: list[str] | None,
+    include_recurring: bool = True,
+) -> list[dict[str, Any]]:
+    """Open items (tasks + optionally recurring) restricted to ``categories``.
+
+    Returns [] when ``categories`` is falsy so the /projects page renders
+    an empty state instead of dumping every open item. All bar/timeline
+    math happens in ``app._build_gantt`` — this stays a pure SQL fetch.
+    """
+    if not categories:
+        return []
+    cats = [c for c in categories if c]
+    if not cats:
+        return []
+    fields = """
+        uuid, task, priority, status, catagory, task_group, sub_group,
+        task_creation, start_time, due_date, estimated_time
+    """
+    if include_recurring:
+        sql = f"""
+            SELECT {fields}, 'task' AS source FROM tasks
+            WHERE completed = 0 AND (status IS NULL OR status != 'Completed')
+              AND catagory IN :cats
+            UNION ALL
+            SELECT {fields}, 'recurring' AS source FROM recurring_tasks
+            WHERE completed = 0 AND (status IS NULL OR status != 'Completed')
+              AND catagory IN :cats
+            ORDER BY catagory ASC, due_date ASC NULLS LAST, priority DESC
+        """
+    else:
+        sql = f"""
+            SELECT {fields}, 'task' AS source FROM tasks
+            WHERE completed = 0 AND (status IS NULL OR status != 'Completed')
+              AND catagory IN :cats
+            ORDER BY catagory ASC, due_date ASC NULLS LAST, priority DESC
+        """
+    from sqlalchemy import bindparam
+    q = text(sql).bindparams(bindparam("cats", expanding=True))
+    with get_engine().connect() as conn:
+        return _rows(conn.execute(q, {"cats": cats}))
+
+
+# --------------------------------------------------------------------------- #
 # Chat / LLM helpers
 # --------------------------------------------------------------------------- #
 
