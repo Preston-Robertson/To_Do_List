@@ -2,6 +2,40 @@
 {% block content %}
 {% include "partials/chat_panel.html" %}
 
+{% if disciplines_at_risk %}
+  {# Streak-breaker warning. Dismissable for the day via localStorage
+     (see initAtRiskBanner in app.js). Renders only when non-empty. #}
+  <section class="at-risk-banner"
+           data-at-risk
+           data-at-risk-signature="{{ today_iso }}:{{ disciplines_at_risk|length }}">
+    <span class="at-risk-icon" aria-hidden="true">⚠</span>
+    <div class="at-risk-body">
+      <strong>Streaks at risk today ({{ disciplines_at_risk|length }})</strong>
+      <ul class="at-risk-list">
+        {% for d in disciplines_at_risk[:5] %}
+          <li>
+            <span class="at-risk-name">{{ d.task }}</span>
+            <span class="at-risk-meta">
+              streak {{ d.current_streak }} &middot;
+              last {{ d.days_since }}d ago
+              {% if d.catagory %} &middot; {{ d.catagory }}{% endif %}
+            </span>
+            <button type="button" class="btn btn-tiny"
+                    data-at-risk-done
+                    data-task="{{ d.task }}"
+                    data-catagory="{{ d.catagory or '' }}"
+                    data-day="{{ today_iso }}">Done</button>
+          </li>
+        {% endfor %}
+        {% if disciplines_at_risk|length > 5 %}
+          <li class="muted-hint">…{{ disciplines_at_risk|length - 5 }} more</li>
+        {% endif %}
+      </ul>
+    </div>
+    <button type="button" class="at-risk-dismiss" data-at-risk-dismiss aria-label="Dismiss for today">&times;</button>
+  </section>
+{% endif %}
+
 <section class="board-header">
   <div class="home-title">
     <h1>Home</h1>
@@ -21,6 +55,7 @@
       <label><input type="checkbox" class="widget-toggle" data-widget="disc-week" checked> Discipline this week</label>
       <label><input type="checkbox" class="widget-toggle" data-widget="task-week" checked> Tasks completed this week</label>
       <label><input type="checkbox" class="widget-toggle" data-widget="activity" checked> Recent activity</label>
+      <label><input type="checkbox" class="widget-toggle" data-widget="weekly-review" checked> Weekly review</label>
     </div>
   </details>
 </section>
@@ -257,6 +292,59 @@
         </ul>
       {% else %}
         <p class="empty">Nothing completed yet.</p>
+      {% endif %}
+    </div>
+  </article>
+
+  <!-- Widget: Weekly review — rollup of the last 7 completed days.
+       Uses db.weekly_review() which reports on the window ending yesterday
+       so a Monday-morning refresh stays stable. -->
+  <article class="widget" data-widget="weekly-review">
+    <header class="widget-header">
+      <h2>Weekly review</h2>
+      <span class="widget-count">{{ weekly_review.completed_total }}</span>
+    </header>
+    <div class="widget-body scroll-y">
+      <p class="muted-hint">
+        {{ weekly_review.start_iso }} &rarr; {{ weekly_review.end_iso }}
+      </p>
+      <div class="wr-stats">
+        <div class="wr-stat">
+          <span class="wr-stat-num">{{ weekly_review.completed_total }}</span>
+          <span class="wr-stat-label">tasks completed</span>
+        </div>
+        <div class="wr-stat">
+          <span class="wr-stat-num">{{ weekly_review.discipline_total }}</span>
+          <span class="wr-stat-label">
+            discipline hits<br>
+            <small class="muted-hint">{{ weekly_review.discipline_days }} / 7 days</small>
+          </span>
+        </div>
+        <div class="wr-stat">
+          <span class="wr-stat-num">{{ weekly_review.carried_over }}</span>
+          <span class="wr-stat-label">carried over</span>
+        </div>
+        <div class="wr-stat">
+          <span class="wr-stat-num">{{ weekly_review.upcoming_next_week }}</span>
+          <span class="wr-stat-label">due next 7 days</span>
+        </div>
+      </div>
+      {% if weekly_review.top_categories %}
+        <h3 class="wr-subhead">Top categories</h3>
+        <ul class="wr-cat-list">
+          {% for c in weekly_review.top_categories %}
+            <li class="wr-cat-row">
+              <span class="wr-cat-name">{{ c.name }}</span>
+              <span class="wr-cat-bar">
+                <span class="wr-cat-bar-fill"
+                      style="--w: {{ (c.count / weekly_review.top_categories[0].count * 100)|round(0, 'floor') }}%"></span>
+              </span>
+              <span class="wr-cat-count">{{ c.count }}</span>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="empty">Nothing completed last week.</p>
       {% endif %}
     </div>
   </article>

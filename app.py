@@ -89,6 +89,67 @@ def _require_v2() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Undo queue — in-memory only. Restart clears it, which is fine: undo is a
+# "did I just fat-finger" affordance, not durable history. The queue is small
+# and keyed by an opaque op_id so a browser reload after a delete can still
+# find its snapshot as long as the process is still running.
+# --------------------------------------------------------------------------- #
+import json as _json
+import secrets as _secrets
+from datetime import datetime as _dt
+
+_UNDO_TTL_SECONDS = 12
+_UNDO_MAX_ENTRIES = 64
+_UNDO_LOCK = threading.Lock()
+_UNDO_QUEUE: dict[str, dict[str, Any]] = {}
+
+
+def _sweep_undo(now_ts: float | None = None) -> None:
+    """Drop expired snapshots. Also caps the queue size so a burst can't grow
+    unbounded. Caller holds ``_UNDO_LOCK``."""
+    ts = now_ts if now_ts is not None else time.monotonic()
+    expired = [k for k, v in _UNDO_QUEUE.items() if v["expires_at"] <= ts]
+    for k in expired:
+        _UNDO_QUEUE.pop(k, None)
+    if len(_UNDO_QUEUE) > _UNDO_MAX_ENTRIES:
+        # Drop oldest first (dict is insertion-ordered).
+        for k in list(_UNDO_QUEUE.keys())[: len(_UNDO_QUEUE) - _UNDO_MAX_ENTRIES]:
+            _UNDO_QUEUE.pop(k, None)
+
+
+def _stash_undo(table: str, snapshot: dict[str, Any], label: str) -> str:
+    """Record a 'before' snapshot for a task-like mutation. Returns an
+    opaque ``op_id`` the client uses to POST ``/undo/{op_id}`` within the
+    TTL window."""
+    op_id = _secrets.token_urlsafe(8)
+    now = time.monotonic()
+    with _UNDO_LOCK:
+        _sweep_undo(now)
+        _UNDO_QUEUE[op_id] = {
+            "table": table,
+            "snapshot": snapshot,
+            "label": label,
+            "expires_at": now + _UNDO_TTL_SECONDS,
+        }
+    return op_id
+
+
+def _pop_undo(op_id: str) -> dict[str, Any] | None:
+    with _UNDO_LOCK:
+        _sweep_undo()
+        return _UNDO_QUEUE.pop(op_id, None)
+
+
+def _hx_trigger(**events: Any) -> str:
+    """Encode an ``HX-Trigger`` header value. Pass keyword args where each
+    value is either ``None`` (event with no detail) or a JSON-serializable
+    dict / value used as the event ``detail``. Insertion order is preserved,
+    which matters because HTMX fires events in that order — the ``showUndo``
+    handler must run before any ``reloadBoard`` that would nav away."""
+    return _json.dumps(events, default=str)
+
+
+# --------------------------------------------------------------------------- #
 # Public routes
 # --------------------------------------------------------------------------- #
 
@@ -182,7 +243,7 @@ async def tasks_create(request: Request):
     return templates.TemplateResponse(
         "partials/task_card.html",
         {"request": request, "t": row, "endpoint_root": "/tasks"},
-        headers={"HX-Trigger": "closeModal"},
+        headers={"HX-Trigger": "closeModal,reloadBoard"},
     )
 
 
@@ -264,23 +325,42 @@ async def tasks_set_status(request: Request, row_uuid: str):
 )
 def tasks_toggle_complete(request: Request, row_uuid: str):
     _require_v2()
+    before = db.get_task(row_uuid)
+    if not before:
+        raise HTTPException(404)
     db.toggle_task_completed(row_uuid)
     row = db.get_task(row_uuid)
     if not row:
         raise HTTPException(404)
+    verb = "Completed" if int(row.get("completed") or 0) == 1 else "Reopened"
+    op_id = _stash_undo("tasks", before, f"{verb} ‘{before.get('task','')}’")
+    trigger = _hx_trigger(
+        showUndo={"op_id": op_id, "label": f"{verb} ‘{before.get('task','')}’",
+                  "ttl_ms": _UNDO_TTL_SECONDS * 1000},
+        reloadBoard=None,
+    )
     return templates.TemplateResponse(
         "partials/task_card.html",
         {"request": request, "t": row, "endpoint_root": "/tasks"},
-        headers={"HX-Trigger": "reloadBoard"},
+        headers={"HX-Trigger": trigger},
     )
 
 
 @app.post("/tasks/{row_uuid}/delete", dependencies=[Depends(require_auth)])
 def tasks_delete(row_uuid: str):
     _require_v2()
+    before = db.get_task(row_uuid)
+    if not before:
+        raise HTTPException(404)
     db.delete_task(row_uuid)
+    op_id = _stash_undo("tasks", before, f"Deleted ‘{before.get('task','')}’")
+    trigger = _hx_trigger(
+        showUndo={"op_id": op_id, "label": f"Deleted ‘{before.get('task','')}’",
+                  "ttl_ms": _UNDO_TTL_SECONDS * 1000},
+        closeModal=None,
+    )
     # HTMX swaps the card with an empty response, removing it from the DOM.
-    return Response(status_code=200, content="", headers={"HX-Trigger": "closeModal"})
+    return Response(status_code=200, content="", headers={"HX-Trigger": trigger})
 
 
 @app.post(
@@ -290,6 +370,9 @@ def tasks_delete(row_uuid: str):
 )
 async def tasks_snooze(request: Request, row_uuid: str):
     _require_v2()
+    before = db.get_task(row_uuid)
+    if not before:
+        raise HTTPException(404)
     form = dict(await request.form())
     try:
         days = int(form.get("days", "1"))
@@ -300,9 +383,16 @@ async def tasks_snooze(request: Request, row_uuid: str):
     row = db.get_task(row_uuid)
     if not row:
         raise HTTPException(404)
+    op_id = _stash_undo("tasks", before, f"Snoozed ‘{before.get('task','')}’ {days}d")
+    trigger = _hx_trigger(
+        showUndo={"op_id": op_id,
+                  "label": f"Snoozed ‘{before.get('task','')}’ by {days}d",
+                  "ttl_ms": _UNDO_TTL_SECONDS * 1000},
+    )
     return templates.TemplateResponse(
         "partials/task_card.html",
         {"request": request, "t": row, "endpoint_root": "/tasks"},
+        headers={"HX-Trigger": trigger},
     )
 
 
@@ -336,7 +426,7 @@ async def recurring_create(request: Request):
     return templates.TemplateResponse(
         "partials/task_card.html",
         {"request": request, "t": row, "endpoint_root": "/recurring"},
-        headers={"HX-Trigger": "closeModal"},
+        headers={"HX-Trigger": "closeModal,reloadBoard"},
     )
 
 
@@ -418,22 +508,43 @@ async def recurring_set_status(request: Request, row_uuid: str):
 )
 def recurring_toggle_complete(request: Request, row_uuid: str):
     _require_v2()
+    before = db.get_recurring(row_uuid)
+    if not before:
+        raise HTTPException(404)
     db.toggle_recurring_completed(row_uuid)
     row = db.get_recurring(row_uuid)
     if not row:
         raise HTTPException(404)
+    verb = "Completed" if int(row.get("completed") or 0) == 1 else "Reopened"
+    op_id = _stash_undo("recurring_tasks", before,
+                        f"{verb} ‘{before.get('task','')}’")
+    trigger = _hx_trigger(
+        showUndo={"op_id": op_id, "label": f"{verb} ‘{before.get('task','')}’",
+                  "ttl_ms": _UNDO_TTL_SECONDS * 1000},
+        reloadBoard=None,
+    )
     return templates.TemplateResponse(
         "partials/task_card.html",
         {"request": request, "t": row, "endpoint_root": "/recurring"},
-        headers={"HX-Trigger": "reloadBoard"},
+        headers={"HX-Trigger": trigger},
     )
 
 
 @app.post("/recurring/{row_uuid}/delete", dependencies=[Depends(require_auth)])
 def recurring_delete(row_uuid: str):
     _require_v2()
+    before = db.get_recurring(row_uuid)
+    if not before:
+        raise HTTPException(404)
     db.delete_recurring(row_uuid)
-    return Response(status_code=200, content="", headers={"HX-Trigger": "closeModal"})
+    op_id = _stash_undo("recurring_tasks", before,
+                        f"Deleted ‘{before.get('task','')}’")
+    trigger = _hx_trigger(
+        showUndo={"op_id": op_id, "label": f"Deleted ‘{before.get('task','')}’",
+                  "ttl_ms": _UNDO_TTL_SECONDS * 1000},
+        closeModal=None,
+    )
+    return Response(status_code=200, content="", headers={"HX-Trigger": trigger})
 
 
 @app.post(
@@ -443,6 +554,9 @@ def recurring_delete(row_uuid: str):
 )
 async def recurring_snooze(request: Request, row_uuid: str):
     _require_v2()
+    before = db.get_recurring(row_uuid)
+    if not before:
+        raise HTTPException(404)
     form = dict(await request.form())
     try:
         days = int(form.get("days", "1"))
@@ -453,9 +567,40 @@ async def recurring_snooze(request: Request, row_uuid: str):
     row = db.get_recurring(row_uuid)
     if not row:
         raise HTTPException(404)
+    op_id = _stash_undo("recurring_tasks", before,
+                        f"Snoozed ‘{before.get('task','')}’ {days}d")
+    trigger = _hx_trigger(
+        showUndo={"op_id": op_id,
+                  "label": f"Snoozed ‘{before.get('task','')}’ by {days}d",
+                  "ttl_ms": _UNDO_TTL_SECONDS * 1000},
+    )
     return templates.TemplateResponse(
         "partials/task_card.html",
         {"request": request, "t": row, "endpoint_root": "/recurring"},
+        headers={"HX-Trigger": trigger},
+    )
+
+
+# --------------------------------------------------------------------------- #
+# UNDO — restore the most recent task-like snapshot for op_id
+# --------------------------------------------------------------------------- #
+
+@app.post("/undo/{op_id}", dependencies=[Depends(require_auth)])
+def undo(op_id: str):
+    _require_v2()
+    entry = _pop_undo(op_id)
+    if entry is None:
+        # Either expired or never existed. 410 makes the client clear its
+        # local toast state without treating it as a hard failure.
+        raise HTTPException(410, "undo window has expired")
+    try:
+        db.restore_task_row(entry["table"], entry["snapshot"])
+    except Exception as exc:
+        raise HTTPException(500, f"undo failed: {exc}")
+    return Response(
+        status_code=200,
+        content="",
+        headers={"HX-Trigger": _hx_trigger(reloadBoard=None, undoCleared=None)},
     )
 
 
@@ -926,6 +1071,8 @@ def home_page(request: Request):
     discipline_streaks = db.list_discipline_streaks(limit=8)
     follow_ups = db.list_follow_ups_preview(limit=8)
     recent_activity = db.list_recent_activity(limit=15, days=14)
+    weekly_review = db.weekly_review()
+    disciplines_at_risk = db.list_disciplines_at_risk()
     return templates.TemplateResponse(
         "home.html",
         {
@@ -942,6 +1089,8 @@ def home_page(request: Request):
             "discipline_streaks": discipline_streaks,
             "follow_ups": follow_ups,
             "recent_activity": recent_activity,
+            "weekly_review": weekly_review,
+            "disciplines_at_risk": disciplines_at_risk,
             "week_of": monday.isoformat(),
             "today_iso": today.isoformat(),
             "chat_enabled": not isinstance(_LLM_PROVIDER, llm_mod.DisabledProvider),

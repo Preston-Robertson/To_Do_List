@@ -17,6 +17,22 @@
       {% endif %}
     </div>
     <div class="chat-actions">
+      <details class="chat-voice-menu-wrap" data-tts-menu>
+        <summary class="btn btn-ghost btn-tiny" title="Voice output settings" aria-label="Voice output settings">🔊</summary>
+        <div class="chat-voice-menu">
+          <label class="chat-voice-toggle">
+            <input type="checkbox" data-tts-enabled>
+            <span>Read replies aloud</span>
+          </label>
+          <label class="chat-voice-voice">
+            <span>Voice</span>
+            <select data-tts-voice>
+              <option value="">(browser default)</option>
+            </select>
+          </label>
+          <button type="button" class="btn btn-ghost btn-tiny" data-tts-test>Test voice</button>
+        </div>
+      </details>
       <button type="button" class="btn btn-ghost btn-tiny"
               hx-post="/chat/reset" hx-target="#chat-log" hx-swap="innerHTML"
               title="Clear chat history (server-side)">Clear</button>

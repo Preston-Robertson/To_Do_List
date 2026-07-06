@@ -1450,3 +1450,334 @@ main { padding: 20px; }
   padding: 0;
 }
 .gantt-unscheduled .widget-row-title.gantt-task-btn:hover { color: var(--accent); }
+
+/* --------------------------------------------------------------------------
+   Date picker widget (task form "Due date")
+   Native <input type="date"> keeps the OS calendar UI, but keyboard typing is
+   blocked at the input level so users can't fat-finger a bad string. Preset
+   chips underneath cover the 90% of picks that need one click.
+   -------------------------------------------------------------------------- */
+.date-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.date-picker > input[type="date"] {
+  cursor: pointer;
+  caret-color: transparent;      /* visually reinforces "not a typing field" */
+}
+.date-picker > input[type="date"]:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+/* Chrome/Edge: enlarge the calendar indicator so the whole input feels like
+   one big clickable target. Firefox exposes no picker icon; the input still
+   opens on click, which is fine. */
+.date-picker > input[type="date"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  padding: 4px;
+  filter: invert(0.75);
+}
+.date-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.date-chip {
+  font: 500 11px var(--font);
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--bg-elev-2);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: background 120ms, color 120ms, border-color 120ms;
+}
+.date-chip:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.date-chip.is-active {
+  background: var(--accent-dim);
+  color: var(--text);
+  border-color: var(--accent);
+}
+.date-chip-ghost {
+  background: transparent;
+  color: var(--text-dim);
+}
+.date-chip-ghost:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+/* --------------------------------------------------------------------------
+   Undo toast (bottom-center). Fires from HX-Trigger: showUndo. Progress
+   bar decays over the TTL window; button POSTs to /undo/{op_id}.
+   -------------------------------------------------------------------------- */
+.undo-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 200;
+  min-width: 280px;
+  max-width: min(520px, calc(100vw - 32px));
+  padding: 10px 12px 14px;
+  background: var(--bg-elev-2);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.55);
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  font: 500 13px var(--font);
+  animation: undo-slide-in 180ms ease-out;
+}
+.undo-toast.hidden { display: none; }
+
+.undo-toast-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.undo-toast-btn {
+  background: var(--accent);
+  color: #0b1e0c;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 5px 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.undo-toast-btn:hover { filter: brightness(1.1); }
+.undo-toast-close {
+  background: transparent;
+  border: 0;
+  color: var(--text-dim);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.undo-toast-close:hover { color: var(--text); }
+.undo-toast-progress {
+  grid-column: 1 / -1;
+  height: 3px;
+  background: var(--accent-dim);
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  transform-origin: left;
+  width: 100%;
+  align-self: end;
+  margin-top: 4px;
+}
+
+@keyframes undo-slide-in {
+  from { transform: translate(-50%, 16px); opacity: 0; }
+  to   { transform: translate(-50%, 0);    opacity: 1; }
+}
+@keyframes undo-progress {
+  from { width: 100%; }
+  to   { width: 0%; }
+}
+
+/* --------------------------------------------------------------------------
+   Weekly review widget (home)
+   -------------------------------------------------------------------------- */
+.widget[data-widget="weekly-review"] { --accent-c: #38bdf8; }
+.wr-stats {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+.wr-stat {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.wr-stat-num {
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--text);
+}
+.wr-stat-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.3;
+}
+.wr-subhead {
+  margin: 8px 0 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+}
+.wr-cat-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.wr-cat-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 3fr auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.wr-cat-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+}
+.wr-cat-bar {
+  display: block;
+  height: 8px;
+  background: var(--bg-elev-2);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.wr-cat-bar-fill {
+  display: block;
+  height: 100%;
+  width: var(--w, 0%);
+  background: #38bdf8;
+  border-radius: 999px;
+}
+.wr-cat-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* ---------- At-risk streak banner ---------- */
+.at-risk-banner {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 12px;
+  align-items: start;
+  margin: 12px 0 16px;
+  padding: 12px 16px;
+  background: linear-gradient(180deg, rgba(245, 158, 11, 0.15), rgba(245, 158, 11, 0.08));
+  border: 1px solid rgba(245, 158, 11, 0.55);
+  border-radius: 8px;
+  color: #fef3c7;
+  animation: at-risk-in 200ms ease-out;
+}
+@keyframes at-risk-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.at-risk-icon {
+  font-size: 20px;
+  line-height: 1.2;
+  color: #fbbf24;
+}
+.at-risk-body strong {
+  display: block;
+  margin-bottom: 6px;
+  color: #fde68a;
+}
+.at-risk-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.at-risk-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+}
+.at-risk-name {
+  font-weight: 600;
+  color: #fef3c7;
+}
+.at-risk-meta {
+  color: rgba(254, 243, 199, 0.7);
+  font-size: 12px;
+}
+.at-risk-dismiss {
+  background: transparent;
+  border: none;
+  color: rgba(254, 243, 199, 0.65);
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+  padding: 0 4px;
+}
+.at-risk-dismiss:hover { color: #fef3c7; }
+.btn.btn-tiny {
+  font-size: 11px;
+  padding: 2px 8px;
+  min-height: 0;
+}
+
+/* ---------- Chat voice-output settings menu ---------- */
+.chat-voice-menu-wrap {
+  position: relative;
+  display: inline-block;
+}
+.chat-voice-menu-wrap > summary {
+  list-style: none;
+  cursor: pointer;
+}
+.chat-voice-menu-wrap > summary::-webkit-details-marker { display: none; }
+.chat-voice-menu-wrap[open] > summary {
+  background: rgba(255, 255, 255, 0.08);
+}
+.chat-voice-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  min-width: 220px;
+  background: #1e293b;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+  color: #e2e8f0;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+.chat-voice-menu label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.chat-voice-voice {
+  flex-direction: column !important;
+  align-items: stretch !important;
+  gap: 4px !important;
+}
+.chat-voice-voice select {
+  width: 100%;
+  padding: 4px 6px;
+  font-size: 12px;
+  background: #0f172a;
+  color: #e2e8f0;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 4px;
+}
+.chat-voice-menu .btn[data-tts-test] {
+  align-self: flex-start;
+}

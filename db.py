@@ -240,6 +240,40 @@ def _delete_task_like(table: str, row_uuid: str) -> None:
         conn.execute(q, {"u": row_uuid})
 
 
+def restore_task_row(table: str, snapshot: dict[str, Any]) -> None:
+    """Idempotent 'put back' for a task-like row snapshot.
+
+    Used by the in-memory undo queue in ``app.py`` to reverse a delete /
+    complete / snooze without the caller needing to know which of those
+    operations produced the snapshot. If the uuid still exists we UPDATE
+    every column back to what it was; if the row is gone we re-INSERT with
+    the original uuid. Table is validated against the two known task-like
+    tables so ``{table}`` interpolation is safe.
+    """
+    if table not in {"tasks", "recurring_tasks"}:
+        raise ValueError(f"restore_task_row: table {table!r} not allowed")
+    row_uuid = snapshot.get("uuid")
+    if not row_uuid:
+        raise ValueError("restore_task_row: snapshot is missing uuid")
+    payload = {c: snapshot.get(c) for c in _TASK_COLUMNS}
+    with get_engine().begin() as conn:
+        exists = conn.execute(
+            text(f"SELECT 1 FROM {table} WHERE uuid = :u"), {"u": row_uuid}
+        ).first()
+        if exists:
+            set_clause = ", ".join(f"{c} = :{c}" for c in _TASK_COLUMNS if c != "uuid")
+            payload["u"] = row_uuid
+            conn.execute(
+                text(f"UPDATE {table} SET {set_clause} WHERE uuid = :u"), payload
+            )
+        else:
+            col_list = ", ".join(_TASK_COLUMNS)
+            bind_list = ", ".join(f":{c}" for c in _TASK_COLUMNS)
+            conn.execute(
+                text(f"INSERT INTO {table} ({col_list}) VALUES ({bind_list})"), payload
+            )
+
+
 def _snooze_task_like(table: str, row_uuid: str, days: int) -> str | None:
     """Push ``due_date`` forward by ``days``.
 
@@ -597,6 +631,55 @@ def list_disciplines_pending_today() -> list[dict[str, Any]]:
         return _rows(conn.execute(q, {"today": today}))
 
 
+def list_disciplines_at_risk() -> list[dict[str, Any]]:
+    """Active disciplines whose current streak is about to break.
+
+    Definition: ``current_streak > 0`` (something to lose), not yet marked
+    done today, and the last completion is at least ``ceil(7 / freq)`` days
+    ago — the "expected gap" between hits for the discipline's frequency.
+    A daily discipline (freq=7) becomes at-risk 1 full day after the last
+    hit; a 3x/week (freq=3) after ~3 days. Tightest breakers first.
+    """
+    today = date.today()
+    q = text("""
+        SELECT dl.uuid, dl.task, dl.catagory, dl.current_streak,
+               dl.frequency_per_week,
+               MAX(dc.completed_date) AS last_completed
+        FROM discipline_list dl
+        LEFT JOIN discipline_completions dc ON dc.task = dl.task
+        WHERE dl.active = 1 AND dl.current_streak > 0
+        GROUP BY dl.uuid, dl.task, dl.catagory, dl.current_streak,
+                 dl.frequency_per_week
+        HAVING MAX(dc.completed_date) IS NULL OR MAX(dc.completed_date) < :today
+    """)
+    with get_engine().connect() as conn:
+        rows = _rows(conn.execute(q, {"today": today.isoformat()}))
+
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        freq = int(r.get("frequency_per_week") or 0)
+        if freq <= 0:
+            continue
+        expected_gap = max(1, -(-7 // freq))  # ceil(7 / freq)
+        last = r.get("last_completed")
+        if last:
+            try:
+                days_since = (today - date.fromisoformat(str(last)[:10])) .days
+            except ValueError:
+                continue
+        else:
+            days_since = 999
+        if days_since >= expected_gap:
+            out.append({**r, "days_since": days_since, "expected_gap": expected_gap})
+    out.sort(
+        key=lambda r: (
+            -(r["days_since"] / max(1, r["expected_gap"])),
+            -int(r.get("current_streak") or 0),
+        )
+    )
+    return out
+
+
 def _week_bounds(anchor: date | None = None) -> tuple[date, list[date]]:
     """Return (monday_date, [mon..sun]) for the week containing ``anchor``."""
     if anchor is None:
@@ -658,6 +741,89 @@ def weekly_task_completion_counts(anchor: date | None = None) -> list[dict[str, 
         {"date": d.isoformat(), "dow": labels[i], "count": counts.get(d.isoformat(), 0)}
         for i, d in enumerate(days)
     ]
+
+
+def weekly_review(anchor: date | None = None) -> dict[str, Any]:
+    """One-shot rollup for the Home "Weekly review" widget.
+
+    Reports on the most recent *complete* week (the 7 days ending yesterday)
+    so the widget stays stable across a Monday-morning refresh. Returns:
+
+    * ``start_iso`` / ``end_iso``     bounds of the reviewed window
+    * ``completed_total``             total tasks + recurring completed in-window
+    * ``top_categories``              [{name, count}] top 5 by completions
+    * ``discipline_days``             number of days with >=1 discipline completion
+    * ``discipline_total``            total discipline completions in-window
+    * ``carried_over``                open tasks whose due_date is < today (still overdue)
+    * ``upcoming_next_week``          open tasks due within the next 7 days
+    """
+    end = (anchor or date.today()) - timedelta(days=1)
+    start = end - timedelta(days=6)
+    start_iso, end_iso = start.isoformat(), end.isoformat()
+
+    with get_engine().connect() as conn:
+        completed = conn.execute(text("""
+            SELECT COALESCE(NULLIF(TRIM(catagory), ''), 'Uncategorized') AS cat,
+                   COUNT(*) AS n
+            FROM (
+                SELECT catagory, completed_time FROM tasks
+                WHERE completed = 1 AND completed_time IS NOT NULL
+                  AND SUBSTR(completed_time, 1, 10) BETWEEN :s AND :e
+                UNION ALL
+                SELECT catagory, completed_time FROM recurring_tasks
+                WHERE completed = 1 AND completed_time IS NOT NULL
+                  AND SUBSTR(completed_time, 1, 10) BETWEEN :s AND :e
+            ) x
+            GROUP BY COALESCE(NULLIF(TRIM(catagory), ''), 'Uncategorized')
+            ORDER BY n DESC
+        """), {"s": start_iso, "e": end_iso}).fetchall()
+
+        disc = conn.execute(text("""
+            SELECT COUNT(*) AS total,
+                   COUNT(DISTINCT completed_date) AS days
+            FROM discipline_completions
+            WHERE completed_date BETWEEN :s AND :e
+        """), {"s": start_iso, "e": end_iso}).first()
+
+        today = today_iso()
+        carried = conn.execute(text("""
+            SELECT COUNT(*) AS n FROM (
+                SELECT uuid FROM tasks
+                WHERE completed = 0 AND (status IS NULL OR status != 'Completed')
+                  AND due_date IS NOT NULL AND SUBSTR(due_date, 1, 10) < :today
+                UNION ALL
+                SELECT uuid FROM recurring_tasks
+                WHERE completed = 0 AND (status IS NULL OR status != 'Completed')
+                  AND due_date IS NOT NULL AND SUBSTR(due_date, 1, 10) < :today
+            ) x
+        """), {"today": today}).scalar_one()
+
+        soon = (date.today() + timedelta(days=7)).isoformat()
+        upcoming = conn.execute(text("""
+            SELECT COUNT(*) AS n FROM (
+                SELECT uuid FROM tasks
+                WHERE completed = 0 AND (status IS NULL OR status != 'Completed')
+                  AND due_date IS NOT NULL
+                  AND SUBSTR(due_date, 1, 10) BETWEEN :today AND :soon
+                UNION ALL
+                SELECT uuid FROM recurring_tasks
+                WHERE completed = 0 AND (status IS NULL OR status != 'Completed')
+                  AND due_date IS NOT NULL
+                  AND SUBSTR(due_date, 1, 10) BETWEEN :today AND :soon
+            ) x
+        """), {"today": today, "soon": soon}).scalar_one()
+
+    rows = [{"name": r.cat, "count": int(r.n)} for r in completed]
+    return {
+        "start_iso": start_iso,
+        "end_iso": end_iso,
+        "completed_total": sum(r["count"] for r in rows),
+        "top_categories": rows[:5],
+        "discipline_total": int(disc.total) if disc else 0,
+        "discipline_days": int(disc.days) if disc else 0,
+        "carried_over": int(carried or 0),
+        "upcoming_next_week": int(upcoming or 0),
+    }
 
 
 def list_overdue_tasks(limit: int | None = 10) -> list[dict[str, Any]]:
@@ -980,8 +1146,10 @@ def suggest_task_defaults(name: str, limit: int = 25) -> dict[str, Any]:
 
     Strategy: case-insensitive substring match against both ``tasks`` and
     ``recurring_tasks`` (including completed rows — history is the point).
-    For each optional field, take the most common non-null value across the
-    matches. ``estimated_time`` uses the median of non-null values.
+    Rows are ordered ``task_creation DESC`` so the most recent matches come
+    first. Suggestions are drawn from a *bounded, most-recent window* per
+    field so an ancient outlier can't outvote what the user picked last
+    time.
 
     Returns a dict with ``matches`` (int, how many past rows were considered)
     plus each suggestion under its column name. Fields with no signal are
@@ -993,14 +1161,19 @@ def suggest_task_defaults(name: str, limit: int = 25) -> dict[str, Any]:
     pattern = f"%{name.strip().lower()}%"
     q = text("""
         SELECT priority, catagory, task_group, sub_group,
-               relevant_link, estimated_time
-        FROM tasks
-        WHERE LOWER(task) LIKE :p
-        UNION ALL
-        SELECT priority, catagory, task_group, sub_group,
-               relevant_link, estimated_time
-        FROM recurring_tasks
-        WHERE LOWER(task) LIKE :p
+               relevant_link, estimated_time, task_creation
+        FROM (
+            SELECT priority, catagory, task_group, sub_group,
+                   relevant_link, estimated_time, task_creation
+            FROM tasks
+            WHERE LOWER(task) LIKE :p
+            UNION ALL
+            SELECT priority, catagory, task_group, sub_group,
+                   relevant_link, estimated_time, task_creation
+            FROM recurring_tasks
+            WHERE LOWER(task) LIKE :p
+        ) s
+        ORDER BY task_creation DESC NULLS LAST
         LIMIT :lim
     """)
     with get_engine().connect() as conn:
@@ -1010,29 +1183,79 @@ def suggest_task_defaults(name: str, limit: int = 25) -> dict[str, Any]:
     if not rows:
         return out
 
-    # Mode for categorical / text fields; skip blanks and null-ish values.
-    for field in ("catagory", "task_group", "sub_group", "relevant_link"):
-        values = [r[field] for r in rows if r.get(field)]
+    # Window sizes chosen so recent behavior dominates: category-style fields
+    # look back ~10 matches (people don't reshuffle those often), priority
+    # looks at just the last ~5 (it drifts more), estimated_time uses ~8.
+    def _recent_mode(field: str, window: int) -> Any | None:
+        values = [r[field] for r in rows[:window] if r.get(field)]
         if not values:
-            continue
+            return None
         top_val, top_count = Counter(values).most_common(1)[0]
         # Require the mode to appear at least twice OR in the sole row —
-        # avoids proposing a one-off outlier from a bag of 20.
-        if top_count >= 2 or len(rows) == 1:
-            out[field] = top_val
+        # keeps one-off outliers from polluting suggestions.
+        if top_count >= 2 or len(values) == 1:
+            return top_val
+        return None
 
-    # Mode for priority (small integer domain).
-    priorities = [int(r["priority"]) for r in rows if r.get("priority") is not None]
-    if priorities:
-        top_p, top_pc = Counter(priorities).most_common(1)[0]
-        if top_pc >= 2 or len(priorities) == 1:
+    for field in ("catagory", "task_group", "sub_group", "relevant_link"):
+        v = _recent_mode(field, window=10)
+        if v is not None:
+            out[field] = v
+
+    recent_priorities = [
+        int(r["priority"]) for r in rows[:5] if r.get("priority") is not None
+    ]
+    if recent_priorities:
+        top_p, top_pc = Counter(recent_priorities).most_common(1)[0]
+        if top_pc >= 2 or len(recent_priorities) == 1:
             out["priority"] = top_p
 
-    # Median for estimated_time (continuous).
-    est = [float(r["estimated_time"]) for r in rows if r.get("estimated_time") is not None]
-    if est:
-        out["estimated_time"] = round(float(median(est)), 2)
+    # Median of the newest ~8 non-null estimates. Median (not mean) resists
+    # the occasional 40-hour outlier; capping at 8 keeps ancient one-offs
+    # from anchoring today's suggestion.
+    recent_est = [
+        float(r["estimated_time"])
+        for r in rows[:8]
+        if r.get("estimated_time") is not None
+    ]
+    if recent_est:
+        out["estimated_time"] = round(float(median(recent_est)), 2)
 
     return out
+
+
+_CATEGORICAL_FIELDS: frozenset[str] = frozenset({"catagory", "task_group", "sub_group"})
+
+
+def find_existing_categorical(field: str, value: str) -> str | None:
+    """Return the DB's canonical spelling of ``value`` for the given
+    categorical column, or ``None`` if no case-insensitive match exists.
+
+    Used by the chat agent so that saying "add task, category boat" reuses
+    an existing ``Boat`` category rather than creating a case-duplicate
+    ``boat``. Only whitelisted fields are accepted — the field name is
+    interpolated into the SQL, so the allow-list is the security boundary.
+    Preference goes to the most-recently-used spelling when multiple
+    case-variants exist in history.
+    """
+    if field not in _CATEGORICAL_FIELDS or not value or not value.strip():
+        return None
+    q = text(f"""
+        SELECT {field} AS v
+        FROM (
+            SELECT {field}, task_creation FROM tasks
+              WHERE {field} IS NOT NULL AND {field} != ''
+            UNION ALL
+            SELECT {field}, task_creation FROM recurring_tasks
+              WHERE {field} IS NOT NULL AND {field} != ''
+        ) s
+        WHERE LOWER({field}) = LOWER(:v)
+        GROUP BY {field}
+        ORDER BY MAX(task_creation) DESC NULLS LAST
+        LIMIT 1
+    """)
+    with get_engine().connect() as conn:
+        row = conn.execute(q, {"v": value.strip()}).first()
+        return row[0] if row else None
 
 

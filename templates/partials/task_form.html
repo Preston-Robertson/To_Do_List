@@ -31,9 +31,26 @@
         {% endfor %}
       </select>
     </label>
-    <label>
+    <label class="date-field">
       Due date
-      <input type="date" name="due_date" value="{{ t.due_date or '' }}">
+      <div class="date-picker" data-datepicker>
+        <input
+          type="date"
+          name="due_date"
+          value="{{ t.due_date or '' }}"
+          data-datepicker-input
+          autocomplete="off"
+          onkeydown="return (event.key === 'Tab' || event.key === 'Escape' || event.key === 'Enter')"
+          onpaste="return false"
+        >
+        <div class="date-presets" role="group" aria-label="Quick date presets">
+          <button type="button" class="date-chip" data-date-preset="0">Today</button>
+          <button type="button" class="date-chip" data-date-preset="1">Tomorrow</button>
+          <button type="button" class="date-chip" data-date-preset="7">+1w</button>
+          <button type="button" class="date-chip" data-date-preset="14">+2w</button>
+          <button type="button" class="date-chip date-chip-ghost" data-date-preset="clear">Clear</button>
+        </div>
+      </div>
     </label>
   </div>
 

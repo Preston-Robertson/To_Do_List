@@ -28,15 +28,25 @@ internally, so an item with hundreds of rows never pushes the page taller.
 | **Discipline · This week** | Mon–Sun bar chart of `discipline_completions` | green |
 | **Tasks completed · This week** | Mon–Sun bar chart of items whose `completed_time` falls in the current ISO week | violet |
 | **Recent activity** | last N events across `tasks` + `recurring_tasks` + `discipline_completions` + `follow_up_tasks`, derived from existing timestamp columns (no audit table) | slate |
+| **Weekly review** | last 7 days ending yesterday: completions total, discipline days N/7, carried-over overdue, next-week upcoming, plus a top-categories bar list | sky |
+
+Above the widget grid there's an ambient **"Streaks at risk today" banner**
+(amber) that surfaces active disciplines whose `current_streak > 0` and whose
+last completion is at least `ceil(7 / frequency_per_week)` days ago — i.e.
+the streak breaks at midnight if today's hit doesn't happen. Each row has an
+inline **Done** button (POSTs to `/discipline/toggle`) and the whole banner
+has a dismiss-for-today control keyed on a `YYYY-MM-DD:<count>` signature
+(`localStorage.luigi.atRiskDismiss`) so a new day or a changed count re-shows
+it. The banner never renders when the list is empty.
 
 Each widget can be shown/hidden via the "Customize widgets" dropdown; state
 is persisted in `localStorage` per browser (key `luigi.home.hiddenWidgets`).
 All widget queries are read-only, bounded with `LIMIT`, and live in `db.py`
 (`list_open_tasks`, `list_overdue_tasks`, `list_upcoming_tasks`,
 `list_recent_completions`, `list_discipline_streaks`,
-`list_disciplines_pending_today`, `list_follow_ups_preview`,
-`weekly_discipline_counts`, `weekly_task_completion_counts`,
-`list_recent_activity`).
+`list_disciplines_pending_today`, `list_disciplines_at_risk`,
+`list_follow_ups_preview`, `weekly_discipline_counts`,
+`weekly_task_completion_counts`, `list_recent_activity`, `weekly_review`).
 
 **Kanban board by status.** Tasks and Recurring live on 3×2 Kanban boards. The
 column layout is:
@@ -54,6 +64,30 @@ Each card has a **Snooze ▾** menu (+1d / +3d / +1w / +2w) that POSTs to
 `/tasks/{uuid}/snooze` (or `/recurring/{uuid}/snooze`) and swaps the card in
 place. Snooze math uses `max(today, current_due) + days`, so overdue items
 always defer from today rather than from a stale due date.
+
+**Undo toast.** Every complete / delete / snooze (on both `tasks` and
+`recurring_tasks`) snapshots the pre-mutation row into a server-side in-memory
+queue (`_UNDO_QUEUE` in `app.py`, capped at 64 entries with a 12 s TTL, guarded
+by a `threading.Lock`) and emits an `HX-Trigger: showUndo` event carrying
+`{op_id, label, ttl_ms}`. The client writes the pending entry to
+`localStorage.luigi.pendingUndo` **synchronously in the same tick as the
+`reloadBoard` trigger** so the toast survives the ensuing full-page reload;
+`restoreUndoToast()` re-renders it on `DOMContentLoaded`. Clicking **Undo**
+fires `POST /undo/{op_id}`, which pops the entry and calls
+`db.restore_task_row(table, snapshot)` — one idempotent UPDATE-or-INSERT that
+reverses complete, delete, and snooze uniformly (the row's original `uuid` is
+reused, so any references remain valid). Expired ops return `410 Gone`.
+
+**New-task auto-refresh.** After the New Task modal POSTs successfully, the
+response carries an `HX-Trigger: reloadBoard` so the newly-created card shows
+up in its column immediately without the user having to reload manually.
+
+**Native date picker with presets.** The `Due date` field in the task modal
+uses `<input type="date">` (so you get the OS-native calendar GUI — no
+typing) plus quick chips: **Today · Tomorrow · +1w · +2w · Clear**. The
+active preset stays highlighted. Wired in `initDatePickers()` in
+`static/js/app.js`; re-initialized after every HTMX swap so modals opened
+later still get the chips.
 
 Above each board is a **filter bar** with free-text search, a status /
 priority / category dropdown, and a **smart-list** picker with built-ins:
@@ -80,6 +114,16 @@ Other views:
   header draws month gridlines/labels and a dashed "today" marker; bars are
   colored by status. Clicking a task name opens the same edit modal used
   on the Kanban.
+  * *Planned:* a **task-flow / dependency web** view on the same tab —
+    Azure ML Designer-style drag-and-drop nodes, but flowing **left → right**
+    along a date axis instead of top-to-bottom. Each node is a task card
+    (title, status chip, due date); edges are prerequisite links. Any task
+    with an incomplete upstream node is auto-styled as **Blocked** (the
+    Kanban status stays canonical; the flow view just visualises it).
+    Timeline zoom + snap-to-day, click-drag to draw a dependency edge,
+    click a node to open the existing edit modal. Requires one small
+    schema addition (a `task_dependencies(uuid, blocks_uuid)` table) —
+    LuigiBot's DDL side, not the GUI's.
 * **Discipline** — one GitHub-style yearly heatmap per discipline item, with a
   year-picker dropdown. Click any day cell to mark/unmark.
 * **Follow-ups** — plain table with inline edit.
@@ -92,9 +136,34 @@ Other views:
   drawer. Better once the task list grows and filtering matters more.
 * **Option B — Todoist-style two-pane** with a "Today" landing page mixing
   tasks-due-today + disciplines-due-today.
+* **Option C — Projects "task-flow" web (planned next).** Rework the
+  `/projects` tab into a free-flowing dependency graph, inspired by the
+  Azure Machine Learning Designer canvas but time-aware:
+  * **X-axis = timeline (dates)**, not "depth". Nodes snap to their
+    `due_date` (or `start_time`..`due_date` span), so the whole graph
+    reads left → right in chronological order.
+  * **Nodes = task cards** with title, status chip, priority, and duration
+    bar. Drag a node to reschedule (updates `start_time` / `due_date` via
+    the existing task-update route).
+  * **Edges = prerequisites.** Click-drag from one node's right-hand port
+    to another's left-hand port to declare *"A must finish before B"*.
+  * **Blocked visualisation.** Any node with at least one incomplete
+    upstream prerequisite is auto-rendered as **Blocked** — greyed bar,
+    lock icon, edge tinted red. The task's canonical `status` is not
+    silently rewritten; the block state is derived on render, so
+    completing the upstream task instantly un-blocks the downstream one
+    on the next refresh.
+  * **Zoom + pan** on the timeline; sidebar lists the currently-selected
+    category set (same picker as today's Gantt).
+  * **Schema impact.** Needs one new table on LuigiBot's side:
+    `task_dependencies(uuid PRIMARY KEY, task_uuid, blocks_uuid,
+    created_at)` with `UNIQUE(task_uuid, blocks_uuid)` and both FKs
+    pointing at `tasks.uuid` / `recurring_tasks.uuid`. GUI stays
+    DDL-free — LuigiBot ships the migration; this app just reads/writes
+    the table.
 
 These are additive — the DB layer and route shape don't need to change to add
-them; only new templates + route variants.
+them; only new templates + route variants (and, for Option C, one new table).
 
 ---
 
@@ -223,6 +292,11 @@ Authenticated (session cookie, or `?token=` / `Authorization: Bearer`):
   tool-call audit entries. Requires `LUIGI_WEB_LLM_API_KEY`.
 * `POST /chat/reset`      → clear the in-memory chat history for the caller's
   session.
+* `POST /undo/{op_id}`    → pop the queued snapshot for `op_id` and restore
+  the row via `db.restore_task_row`. Returns `204` on success (with
+  `HX-Trigger: {reloadBoard, undoCleared}`) or `410 Gone` if the op has
+  expired or already been consumed. Covers complete / delete / snooze on
+  both `tasks` and `recurring_tasks`.
 
 ---
 
@@ -335,19 +409,59 @@ disabled unless the browser exposes `SpeechRecognition` *and* the chat panel
 is enabled. Chrome/Edge on desktop work; Firefox does not (yet). Dictation
 is auto-submitted when it ends.
 
-**Available tools (v1):** `list_open_tasks`, `list_overdue_tasks`,
+**Voice output (TTS confirmations).** A 🔊 dropdown in the chat header exposes
+three controls, all client-only:
+
+* **Read replies aloud** — toggle (`localStorage.luigi.tts.enabled`).
+* **Voice** — dropdown populated from `window.speechSynthesis.getVoices()`,
+  re-populated on the `voiceschanged` event because Chrome returns an empty
+  list on first call. Selection persists as `voiceURI` under
+  `localStorage.luigi.tts.voice`.
+* **Test voice** — force-speaks "This is Luigi speaking." with the current
+  voice even if the enabled toggle is off, so you can preview before
+  committing.
+
+On every HTMX swap into `#chat-log`, the newest `.chat-msg-assistant .chat-bubble`
+is cloned, the tool-call `<details>` block is stripped, and the remaining text
+is passed to `speechSynthesis.speak(...)`. `speechSynthesis.cancel()` runs
+first so rapid replies don't queue up. TTS is disabled by default and the
+menu greys itself out when the browser doesn't support `speechSynthesis`.
+The system prompt asks the model to keep confirmations to a single short
+sentence (TTS-friendly) with any extra detail on a second line.
+
+**Available tools (v2):** `list_open_tasks`, `list_overdue_tasks`,
 `list_upcoming_tasks`, `search_tasks`, `suggest_task_fields`, `create_task`,
 `complete_task`, `update_task_status`, `delete_task`,
-`list_disciplines_pending`, `mark_discipline_done`, `add_discipline`,
-`create_follow_up`. Adding a new tool = one Python function + one
-`Tool(...)` entry in `chat_tools.build_registry()`.
+`list_disciplines_pending`, `plan_my_day`, `mark_discipline_done`,
+`add_discipline`, `create_follow_up`. Adding a new tool = one Python
+function + one `Tool(...)` entry in `chat_tools.build_registry()`.
+
+**`plan_my_day`.** One-shot "what should I do today?" call. Merges four
+queries into a single ranked focus list: at-risk streaks first (streaks are
+perishable), then overdue tasks ordered by `priority DESC, due_date ASC`,
+then tasks due today ordered by `priority DESC`, then remaining pending
+disciplines. Each entry carries a `type` (`discipline_at_risk` / `overdue` /
+`due_today` / `discipline_pending`) and a human-readable `reason`. The
+system prompt routes phrases like *"plan my day"*, *"what should I do
+today"*, *"what's on today"* to this tool and forbids re-querying the four
+sources separately.
 
 **Auto-fill on create.** The system prompt requires the agent to call
 `suggest_task_fields` before `create_task`. That tool runs a case-insensitive
 substring search over past tasks (open + completed, both `tasks` and
-`recurring_tasks`) and returns the mode of `catagory` / `task_group` /
-`sub_group` / `relevant_link` / `priority` and the median of
-`estimated_time`. The agent merges those as defaults, then overrides with
-anything the user explicitly said. `due_date` is **never** auto-filled from
-history — the user must supply it. Say *"make a Do Laundry task"* and it
-will pre-fill category / group / hours from your last few laundry tasks.
+`recurring_tasks`), **ordered by `task_creation DESC`**, and returns the
+most-frequent value in a **recency-weighted window per field** (category ← top
+10, priority ← top 5, estimated_time ← top 8, group / sub_group /
+relevant_link ← top 10). Recent picks therefore win over stale historical
+noise. The agent merges those as defaults, then overrides with anything the
+user explicitly said. `due_date` is **never** auto-filled from history — the
+user must supply it. Say *"make a Do Laundry task"* and it will pre-fill
+category / group / hours from your last few laundry tasks.
+
+**Book-title casing.** Task, category, group, and sub-group names are stored
+in book-title capitalization (`Fix Kitchen Sink`, not `fix kitchen sink`).
+`chat_tools._title_case` normalizes new values on the way in, and
+`_canonical_categorical` looks up any existing spelling for a categorical
+field (via `db.find_existing_categorical` against the frozen
+`_CATEGORICAL_FIELDS` set) so the agent reuses your existing category /
+group names instead of coining a new casing variant.

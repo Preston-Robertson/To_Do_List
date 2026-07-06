@@ -112,6 +112,71 @@ def _resolve_task_uuid(args: dict[str, Any]) -> tuple[str, str]:
 
 
 # --------------------------------------------------------------------------- #
+# Normalization: title-case new names, reuse existing category spellings
+# --------------------------------------------------------------------------- #
+
+# Chicago-style small words that stay lowercase mid-title. First and last
+# word are always capitalized regardless.
+_TITLE_LOWERCASE: frozenset[str] = frozenset({
+    "a", "an", "and", "as", "at", "but", "by", "en", "for", "from",
+    "if", "in", "into", "nor", "of", "on", "onto", "or", "over",
+    "per", "so", "the", "to", "up", "upon", "via", "vs", "with", "yet",
+})
+
+
+def _title_case(s: str | None) -> str | None:
+    """Book-title capitalization for user-facing names.
+
+    * All-caps runs of 2+ letters are preserved (acronyms like ``TPS``).
+    * Small function words (``the``, ``of``, ``and`` …) stay lowercase
+      unless they're the first or last word.
+    * Hyphenated compounds get each segment capitalized.
+    """
+    if not s:
+        return s
+    s = s.strip()
+    if not s:
+        return s
+    words = s.split()
+    n = len(words)
+    out: list[str] = []
+    for i, word in enumerate(words):
+        parts = word.split("-")
+        m = len(parts)
+        titled: list[str] = []
+        for j, part in enumerate(parts):
+            if not part:
+                titled.append(part)
+                continue
+            # Preserve intentional acronyms like "AWS", "PR", "TPS".
+            if len(part) >= 2 and part.isupper():
+                titled.append(part)
+                continue
+            lower = part.lower()
+            # Capitalize the very first and very last atom of the whole
+            # title (word 0 segment 0, and last word's last segment).
+            # Everything else follows the small-word rule.
+            at_title_start = (i == 0 and j == 0)
+            at_title_end = (i == n - 1 and j == m - 1)
+            if lower in _TITLE_LOWERCASE and not at_title_start and not at_title_end:
+                titled.append(lower)
+            else:
+                titled.append(lower[:1].upper() + lower[1:])
+        out.append("-".join(titled))
+    return " ".join(out)
+
+
+def _canonical_categorical(field: str, value: str | None) -> str | None:
+    """Prefer the DB's existing spelling for a category / group / sub_group;
+    fall back to title-casing a fresh value so newly-invented labels look
+    consistent with the rest of the tracker."""
+    if not value:
+        return value
+    existing = db.find_existing_categorical(field, value)
+    return existing if existing else _title_case(value)
+
+
+# --------------------------------------------------------------------------- #
 # Tool handlers
 # --------------------------------------------------------------------------- #
 
@@ -149,13 +214,13 @@ def handle_suggest_task_fields(args: dict[str, Any]) -> dict[str, Any]:
 
 def handle_create_task(args: dict[str, Any]) -> dict[str, Any]:
     payload = {
-        "task": _str(args, "task", required=True),
+        "task": _title_case(_str(args, "task", required=True)),
         "priority": _int(args, "priority", 0) or 0,
         "status": _str(args, "status", default="Not Started"),
         "due_date": _iso_date(args, "due_date"),
-        "catagory": _str(args, "catagory"),
-        "task_group": _str(args, "task_group"),
-        "sub_group": _str(args, "sub_group"),
+        "catagory": _canonical_categorical("catagory", _str(args, "catagory")),
+        "task_group": _canonical_categorical("task_group", _str(args, "task_group")),
+        "sub_group": _canonical_categorical("sub_group", _str(args, "sub_group")),
         "relevant_link": _str(args, "relevant_link"),
         "estimated_time": args.get("estimated_time"),
     }
@@ -204,6 +269,86 @@ def handle_list_disciplines_pending(args: dict[str, Any]) -> dict[str, Any]:
     ]}
 
 
+def handle_plan_my_day(args: dict[str, Any]) -> dict[str, Any]:
+    """One-shot 'what should I do today?' snapshot.
+
+    Aggregates overdue + due-today tasks, disciplines pending today, and any
+    at-risk streaks, then produces a single ranked focus list. Ordering:
+    at-risk disciplines first (streaks are perishable), then overdue tasks
+    by priority DESC + days_overdue DESC, then due-today tasks by priority
+    DESC, then remaining pending disciplines.
+    """
+    limit = _int(args, "limit", 10) or 10
+    limit = min(max(limit, 1), 25)
+    today = date.today().isoformat()
+
+    overdue = db.list_overdue_tasks(limit=50)
+    upcoming = db.list_upcoming_tasks(days=1, limit=50)  # includes today
+    due_today = [r for r in upcoming if (r.get("due_date") or "")[:10] == today]
+    pending = db.list_disciplines_pending_today()
+    at_risk = db.list_disciplines_at_risk()
+    at_risk_names = {r["task"] for r in at_risk}
+
+    focus: list[dict[str, Any]] = []
+    for r in at_risk:
+        focus.append({
+            "type": "discipline_at_risk",
+            "task": r["task"],
+            "catagory": r.get("catagory"),
+            "current_streak": r.get("current_streak"),
+            "days_since": r.get("days_since"),
+            "reason": f"Streak of {r.get('current_streak')} at risk — last done {r.get('days_since')}d ago",
+        })
+    for r in sorted(
+        overdue,
+        key=lambda x: (-(int(x.get("priority") or 0)),
+                       (x.get("due_date") or "9999-12-31")),
+    ):
+        focus.append({
+            "type": "overdue",
+            "uuid": r["uuid"],
+            "task": r["task"],
+            "priority": r.get("priority"),
+            "due_date": r.get("due_date"),
+            "catagory": r.get("catagory"),
+            "source": r.get("source"),
+            "reason": f"Overdue since {r.get('due_date')}",
+        })
+    for r in sorted(due_today, key=lambda x: -(int(x.get("priority") or 0))):
+        focus.append({
+            "type": "due_today",
+            "uuid": r["uuid"],
+            "task": r["task"],
+            "priority": r.get("priority"),
+            "due_date": r.get("due_date"),
+            "catagory": r.get("catagory"),
+            "source": r.get("source"),
+            "reason": "Due today",
+        })
+    for r in pending:
+        if r["task"] in at_risk_names:
+            continue  # already surfaced above
+        focus.append({
+            "type": "discipline_pending",
+            "task": r["task"],
+            "catagory": r.get("catagory"),
+            "frequency_per_week": r.get("frequency_per_week"),
+            "reason": "Discipline not yet marked today",
+        })
+
+    return {
+        "today": today,
+        "counts": {
+            "at_risk": len(at_risk),
+            "overdue": len(overdue),
+            "due_today": len(due_today),
+            "disciplines_pending": len(pending),
+        },
+        "focus": focus[:limit],
+        "focus_truncated": len(focus) > limit,
+    }
+
+
 def handle_mark_discipline_done(args: dict[str, Any]) -> dict[str, Any]:
     name = _str(args, "task", required=True)
     day = _iso_date(args, "day", default=date.today().isoformat())
@@ -219,8 +364,8 @@ def handle_mark_discipline_done(args: dict[str, Any]) -> dict[str, Any]:
 
 def handle_add_discipline(args: dict[str, Any]) -> dict[str, Any]:
     payload = {
-        "task": _str(args, "task", required=True),
-        "catagory": _str(args, "catagory"),
+        "task": _title_case(_str(args, "task", required=True)),
+        "catagory": _canonical_categorical("catagory", _str(args, "catagory")),
         "frequency_per_week": _int(args, "frequency_per_week", 0) or 0,
         "active": 1,
     }
@@ -230,11 +375,11 @@ def handle_add_discipline(args: dict[str, Any]) -> dict[str, Any]:
 
 def handle_create_follow_up(args: dict[str, Any]) -> dict[str, Any]:
     payload = {
-        "trigger_task": _str(args, "trigger_task", required=True),
-        "follow_up_task": _str(args, "follow_up_task", required=True),
-        "catagory": _str(args, "catagory"),
-        "task_group": _str(args, "task_group"),
-        "subgroup": _str(args, "subgroup"),
+        "trigger_task": _title_case(_str(args, "trigger_task", required=True)),
+        "follow_up_task": _title_case(_str(args, "follow_up_task", required=True)),
+        "catagory": _canonical_categorical("catagory", _str(args, "catagory")),
+        "task_group": _canonical_categorical("task_group", _str(args, "task_group")),
+        "subgroup": _title_case(_str(args, "subgroup")),
         "relevant_link": _str(args, "relevant_link"),
         "priority": _int(args, "priority", 0) or 0,
         "estimated_time": args.get("estimated_time"),
@@ -420,6 +565,26 @@ def build_registry() -> dict[str, Tool]:
             handler=handle_list_disciplines_pending,
         ),
         Tool(
+            name="plan_my_day",
+            description=(
+                "Build the user's focus list for today: at-risk streaks, "
+                "overdue tasks, tasks due today, and remaining pending "
+                "disciplines — merged and ranked so the top of the list is "
+                "the single best next thing. Call this whenever the user "
+                "asks 'what should I do', 'plan my day', 'what's on today', "
+                "or similar."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 25,
+                              "description": "Max focus rows (default 10)."},
+                },
+                "additionalProperties": False,
+            },
+            handler=handle_plan_my_day,
+        ),
+        Tool(
             name="mark_discipline_done",
             description="Mark a discipline complete for a given day (default "
                         "today). Matches by exact or unique substring name.",
@@ -484,20 +649,34 @@ SYSTEM_PROMPT = (
     "  - Prefer calling a tool over guessing. If you need a uuid, call "
     "search_tasks first.\n"
     "  - When creating a task: ALWAYS call suggest_task_fields FIRST with "
-    "the task name. Merge the returned suggestions into your create_task "
-    "arguments, then override with anything the user explicitly said. "
-    "Never overwrite an explicit user value with a suggestion. The user "
-    "expects you to auto-fill category / group / sub_group / priority / "
-    "estimated_time / relevant_link from past similar tasks so they don't "
-    "have to re-enter them.\n"
+    "the task name. The tool returns values weighted by recency, so "
+    "recently-picked priority / category / group / estimated_time from "
+    "similar tasks are what you should reuse. Merge the returned "
+    "suggestions into your create_task arguments, then override with "
+    "anything the user explicitly said. Never overwrite an explicit user "
+    "value with a suggestion. The user expects auto-fill of category / "
+    "group / sub_group / priority / estimated_time / relevant_link from "
+    "past similar tasks so they don't have to re-enter them.\n"
+    "  - Task, category, group, and sub-group names are stored in book-"
+    "title capitalization (\"Fix Kitchen Sink\", not \"fix kitchen sink\"). "
+    "The server normalizes casing on save and reuses existing category "
+    "spellings, so pass names naturally and don't fight the formatter.\n"
     "  - NEVER guess a due_date. Only set due_date when the user explicitly "
     "gave one — do not use dates from suggest_task_fields output.\n"
     "  - Dates must be YYYY-MM-DD, 'today', or 'tomorrow'.\n"
     "  - After a mutating call succeeds, reply briefly with what changed, "
     "including which fields you auto-filled from history (so the user can "
     "correct them). Do not restate the whole task list.\n"
+    "  - Your replies may be read aloud via text-to-speech. Prefer a single "
+    "short sentence for confirmations (e.g. \"Created 'Fix Kitchen Sink', "
+    "priority 3, due tomorrow.\"). Put optional extra detail on a second "
+    "line the user can skim visually.\n"
     "  - If a tool returns an error, read it and either retry with fixed "
     "arguments or ask the user for the missing info.\n"
     "  - Never invent uuids. Never claim to change something you did not "
-    "actually call a tool for."
+    "actually call a tool for.\n"
+    "  - When the user asks 'plan my day', 'what should I do today', "
+    "'what's on today', or similar, call plan_my_day once and summarize "
+    "the top items in a short numbered list. Do not re-query overdue / "
+    "upcoming / disciplines separately — plan_my_day already merged them."
 )

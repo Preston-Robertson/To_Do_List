@@ -1,3 +1,12 @@
+# luigi-web runtime dependencies. Pinned.
+#
+# All recent feature work (undo toast, weekly review, at-risk banner,
+# plan_my_day tool, TTS confirmations, native date picker) uses stdlib on
+# the Python side (secrets, threading, datetime, json) and browser APIs on
+# the client side (SpeechSynthesis / SpeechRecognition, <input type=date>),
+# so no new packages are required. HTMX 1.9.12 and SortableJS 1.15.2 are
+# loaded from CDN in templates/base.html.
+
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 jinja2==3.1.4

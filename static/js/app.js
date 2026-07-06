@@ -49,6 +49,163 @@
     }
   });
 
+  // ------------------- Undo toast -------------------
+  // Server emits `showUndo` with { op_id, label, ttl_ms }. We persist to
+  // localStorage FIRST so any following `reloadBoard` (which navigates the
+  // page) can still restore the toast after the fresh load. The Undo button
+  // POSTs to /undo/{op_id}; server reply fires `reloadBoard` + `undoCleared`
+  // which pulls the entry from storage.
+  const UNDO_KEY = "luigi.pendingUndo";
+  const UNDO_FALLBACK_TTL_MS = 12000;
+
+  function loadPendingUndo() {
+    try {
+      const raw = localStorage.getItem(UNDO_KEY);
+      if (!raw) return null;
+      const entry = JSON.parse(raw);
+      if (!entry || !entry.op_id || !entry.expires_at) return null;
+      if (Date.now() >= entry.expires_at) {
+        localStorage.removeItem(UNDO_KEY);
+        return null;
+      }
+      return entry;
+    } catch { return null; }
+  }
+  function clearPendingUndo() {
+    try { localStorage.removeItem(UNDO_KEY); } catch {}
+    hideUndoToast();
+  }
+
+  let undoTimer = null;
+  function hideUndoToast() {
+    const toast = document.getElementById("undo-toast");
+    if (!toast) return;
+    toast.classList.add("hidden");
+    if (undoTimer) { clearTimeout(undoTimer); undoTimer = null; }
+  }
+  function renderUndoToast(entry) {
+    const toast = document.getElementById("undo-toast");
+    if (!toast) return;
+    const label = toast.querySelector(".undo-toast-label");
+    const progress = toast.querySelector(".undo-toast-progress");
+    if (label) label.textContent = entry.label || "Action complete";
+    toast.dataset.opId = entry.op_id;
+    toast.classList.remove("hidden");
+    // Restart CSS progress animation with the exact remaining time.
+    const remaining = Math.max(200, entry.expires_at - Date.now());
+    if (progress) {
+      progress.style.animation = "none";
+      // Force reflow so the animation can restart cleanly.
+      // eslint-disable-next-line no-unused-expressions
+      progress.offsetWidth;
+      progress.style.animation = `undo-progress ${remaining}ms linear forwards`;
+    }
+    if (undoTimer) clearTimeout(undoTimer);
+    undoTimer = setTimeout(clearPendingUndo, remaining);
+  }
+
+  document.body.addEventListener("showUndo", (e) => {
+    const d = e.detail || {};
+    if (!d.op_id) return;
+    const ttl = Number(d.ttl_ms) || UNDO_FALLBACK_TTL_MS;
+    const entry = {
+      op_id: d.op_id,
+      label: d.label || "Action complete",
+      expires_at: Date.now() + ttl,
+    };
+    // Persist BEFORE reloadBoard (fired in the same HX-Trigger batch after
+    // this handler) navigates away. Storage survives the reload; the DOM
+    // toast doesn't.
+    try { localStorage.setItem(UNDO_KEY, JSON.stringify(entry)); } catch {}
+    renderUndoToast(entry);
+  });
+
+  document.body.addEventListener("undoCleared", clearPendingUndo);
+
+  document.addEventListener("click", (e) => {
+    if (e.target.closest("[data-undo-dismiss]")) {
+      clearPendingUndo();
+      return;
+    }
+    const btn = e.target.closest("[data-undo-btn]");
+    if (!btn) return;
+    const toast = document.getElementById("undo-toast");
+    const opId = toast ? toast.dataset.opId : null;
+    if (!opId) return;
+    // Use htmx.ajax when available so the response's HX-Trigger fires
+    // through the normal event pipeline (giving us reloadBoard).
+    if (window.htmx && typeof window.htmx.ajax === "function") {
+      window.htmx.ajax("POST", `/undo/${encodeURIComponent(opId)}`, { target: "body", swap: "none" });
+    } else {
+      fetch(`/undo/${encodeURIComponent(opId)}`, { method: "POST", credentials: "same-origin" })
+        .then(() => window.location.reload());
+    }
+    clearPendingUndo();
+  });
+
+  // Re-render the toast on every page load if a fresh entry is still in
+  // storage — this is how the toast survives the reloadBoard that follows
+  // the mutation.
+  function restoreUndoToast() {
+    const entry = loadPendingUndo();
+    if (entry) renderUndoToast(entry);
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", restoreUndoToast);
+  } else {
+    restoreUndoToast();
+  }
+
+  // ------------------- At-risk discipline banner -------------------
+  // Dismiss for the day: signature = "YYYY-MM-DD:<count>" so a new day OR a
+  // changed count re-shows the banner even if the user dismissed yesterday's.
+  const AT_RISK_DISMISS_KEY = "luigi.atRiskDismiss";
+
+  function initAtRiskBanner() {
+    const banner = document.querySelector("[data-at-risk]");
+    if (!banner) return;
+    const sig = banner.dataset.atRiskSignature || "";
+    if (sig && localStorage.getItem(AT_RISK_DISMISS_KEY) === sig) {
+      banner.remove();
+      return;
+    }
+    banner.hidden = false;
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initAtRiskBanner);
+  } else {
+    initAtRiskBanner();
+  }
+
+  document.addEventListener("click", (e) => {
+    const dismiss = e.target.closest("[data-at-risk-dismiss]");
+    if (dismiss) {
+      const banner = dismiss.closest("[data-at-risk]");
+      if (banner) {
+        const sig = banner.dataset.atRiskSignature || "";
+        if (sig) localStorage.setItem(AT_RISK_DISMISS_KEY, sig);
+        banner.remove();
+      }
+      return;
+    }
+    const done = e.target.closest("[data-at-risk-done]");
+    if (done) {
+      e.preventDefault();
+      const fd = new FormData();
+      fd.set("task", done.dataset.task || "");
+      fd.set("day", done.dataset.day || "");
+      if (done.dataset.catagory) fd.set("catagory", done.dataset.catagory);
+      fd.set("action", "mark");
+      done.disabled = true;
+      done.textContent = "…";
+      fetch("/discipline/toggle", {
+        method: "POST",
+        body: fd,
+        credentials: "same-origin",
+      }).then(() => window.location.reload());
+    }
+  });
+
   // ------------------- Kanban drag-and-drop -------------------
   function initKanban() {
     if (typeof Sortable === "undefined") return;
@@ -140,6 +297,111 @@
   // ------------------- Chat mic (Web Speech API, feature-detected) -------------------
   // Kept behind a runtime check so browsers without SpeechRecognition just see
   // a greyed-out button. When available AND the chat panel is enabled, one
+  // ------------------- Chat: text-to-speech confirmations -------------------
+  // Client-only. Uses window.speechSynthesis. Prefs persist in localStorage.
+  //   luigi.tts.enabled  -> "1" | "0"
+  //   luigi.tts.voice    -> voiceURI string
+  const TTS_ENABLED_KEY = "luigi.tts.enabled";
+  const TTS_VOICE_KEY = "luigi.tts.voice";
+
+  function ttsSupported() {
+    return typeof window !== "undefined" && "speechSynthesis" in window;
+  }
+  function ttsEnabled() {
+    return localStorage.getItem(TTS_ENABLED_KEY) === "1";
+  }
+  function ttsGetVoice() {
+    if (!ttsSupported()) return null;
+    const uri = localStorage.getItem(TTS_VOICE_KEY);
+    if (!uri) return null;
+    return window.speechSynthesis.getVoices().find((v) => v.voiceURI === uri) || null;
+  }
+  function ttsSpeak(text) {
+    if (!ttsSupported() || !ttsEnabled()) return;
+    const clean = (text || "").trim();
+    if (!clean) return;
+    // Cancel any in-flight utterance so rapid replies don't queue up.
+    window.speechSynthesis.cancel();
+    const utter = new SpeechSynthesisUtterance(clean);
+    const voice = ttsGetVoice();
+    if (voice) { utter.voice = voice; utter.lang = voice.lang; }
+    window.speechSynthesis.speak(utter);
+  }
+
+  function populateVoiceOptions(select) {
+    if (!ttsSupported()) return;
+    const voices = window.speechSynthesis.getVoices();
+    const current = localStorage.getItem(TTS_VOICE_KEY) || "";
+    // Preserve the default option, then rebuild the rest.
+    select.querySelectorAll("option:not([value=''])").forEach((o) => o.remove());
+    voices
+      .slice()
+      .sort((a, b) => (a.lang + a.name).localeCompare(b.lang + b.name))
+      .forEach((v) => {
+        const opt = document.createElement("option");
+        opt.value = v.voiceURI;
+        opt.textContent = `${v.name} (${v.lang})${v.default ? " — default" : ""}`;
+        if (v.voiceURI === current) opt.selected = true;
+        select.appendChild(opt);
+      });
+  }
+
+  function initTtsSettings() {
+    const wrap = document.querySelector("[data-tts-menu]");
+    if (!wrap) return;
+    const enabledEl = wrap.querySelector("[data-tts-enabled]");
+    const voiceEl = wrap.querySelector("[data-tts-voice]");
+    const testEl = wrap.querySelector("[data-tts-test]");
+
+    if (!ttsSupported()) {
+      enabledEl.disabled = true;
+      voiceEl.disabled = true;
+      testEl.disabled = true;
+      wrap.title = "Text-to-speech is not supported in this browser";
+      return;
+    }
+
+    enabledEl.checked = ttsEnabled();
+    populateVoiceOptions(voiceEl);
+    // Voices load async on Chrome — repopulate when the list changes.
+    window.speechSynthesis.addEventListener?.("voiceschanged", () => populateVoiceOptions(voiceEl));
+
+    enabledEl.addEventListener("change", () => {
+      localStorage.setItem(TTS_ENABLED_KEY, enabledEl.checked ? "1" : "0");
+      if (!enabledEl.checked) window.speechSynthesis.cancel();
+    });
+    voiceEl.addEventListener("change", () => {
+      localStorage.setItem(TTS_VOICE_KEY, voiceEl.value || "");
+    });
+    testEl.addEventListener("click", () => {
+      // Force-speak for the test even if the enabled toggle is off, so the
+      // user can preview a voice before committing.
+      window.speechSynthesis.cancel();
+      const utter = new SpeechSynthesisUtterance("This is Luigi speaking.");
+      const voice = ttsGetVoice();
+      if (voice) { utter.voice = voice; utter.lang = voice.lang; }
+      window.speechSynthesis.speak(utter);
+    });
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initTtsSettings);
+  } else {
+    initTtsSettings();
+  }
+
+  // Speak each new assistant reply after HTMX appends it to #chat-log.
+  document.body.addEventListener("htmx:afterSwap", (e) => {
+    if (!e.target || e.target.id !== "chat-log") return;
+    // Grab only the just-appended assistant bubble text (skip tool-call log).
+    const bubbles = e.target.querySelectorAll(".chat-msg-assistant .chat-bubble");
+    const last = bubbles[bubbles.length - 1];
+    if (!last) return;
+    const clone = last.cloneNode(true);
+    clone.querySelectorAll(".chat-tool-log").forEach((el) => el.remove());
+    ttsSpeak(clone.textContent);
+  });
+
+  // ------------------- Chat voice-input mic (Web Speech Recognition) -------------------
   // click starts dictation; the recognized text is inserted into the textarea
   // and the form is submitted. No permissions are requested until the user
   // clicks the button.
@@ -219,6 +481,68 @@
   document.body.addEventListener("htmx:afterSwap", () => {
     document.querySelectorAll("details[data-snooze-menu][open]")
       .forEach((d) => d.removeAttribute("open"));
+  });
+
+  // ------------------- Date picker (task form "Due date") -------------------
+  // Native <input type="date"> keeps the OS calendar; keyboard typing is
+  // already blocked by onkeydown on the element. Here we just wire the
+  // quick-preset chips (Today / Tomorrow / +1w / +2w / Clear) and keep the
+  // active chip highlighted so the user always sees what got picked.
+  function initDatePickers(root) {
+    const scope = root && root.querySelectorAll ? root : document;
+    scope.querySelectorAll("[data-datepicker]").forEach((dp) => {
+      if (dp.dataset.dpInit === "1") return;
+      dp.dataset.dpInit = "1";
+      const input = dp.querySelector("[data-datepicker-input]");
+      if (!input) return;
+
+      const paint = () => {
+        const v = input.value || "";
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        dp.querySelectorAll("[data-date-preset]").forEach((btn) => {
+          const p = btn.getAttribute("data-date-preset");
+          let match = false;
+          if (p === "clear") {
+            match = v === "";
+          } else {
+            const days = parseInt(p, 10);
+            if (!Number.isNaN(days)) {
+              const d = new Date(today);
+              d.setDate(d.getDate() + days);
+              match = v === d.toISOString().slice(0, 10);
+            }
+          }
+          btn.classList.toggle("is-active", match);
+        });
+      };
+
+      dp.querySelectorAll("[data-date-preset]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const p = btn.getAttribute("data-date-preset");
+          if (p === "clear") {
+            input.value = "";
+          } else {
+            const days = parseInt(p, 10) || 0;
+            const d = new Date();
+            d.setHours(0, 0, 0, 0);
+            d.setDate(d.getDate() + days);
+            input.value = d.toISOString().slice(0, 10);
+          }
+          paint();
+        });
+      });
+      input.addEventListener("change", paint);
+      paint();
+    });
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => initDatePickers());
+  } else {
+    initDatePickers();
+  }
+  document.body.addEventListener("htmx:afterSwap", (e) => {
+    initDatePickers(e.target);
   });
 
   // ------------------- Tasks filter bar + saved filters -------------------

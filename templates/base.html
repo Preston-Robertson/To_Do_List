@@ -38,5 +38,13 @@
       <div id="modal-body"></div>
     </div>
   </div>
+
+  <!-- Undo toast: JS shows/hides this in response to showUndo events. -->
+  <div id="undo-toast" class="undo-toast hidden" role="status" aria-live="polite">
+    <span class="undo-toast-label"></span>
+    <button type="button" class="undo-toast-btn" data-undo-btn>Undo</button>
+    <button type="button" class="undo-toast-close" data-undo-dismiss aria-label="Dismiss">&times;</button>
+    <div class="undo-toast-progress"></div>
+  </div>
 </body>
 </html>
