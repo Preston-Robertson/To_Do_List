@@ -46,6 +46,12 @@
               hx-confirm="Deactivate this discipline?"
             >Deactivate</button>
           {% endif %}
+          <button
+            class="btn btn-tiny btn-danger"
+            hx-post="/discipline/{{ d.uuid }}/delete"
+            hx-swap="none"
+            hx-confirm="Delete this discipline and all its completions? You'll have 12 seconds to undo."
+          >Delete</button>
         </div>
       </header>
 

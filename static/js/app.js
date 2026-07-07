@@ -234,6 +234,9 @@
             console.error("status update failed", resp.status);
             window.location.reload();
           }
+          // Drag may have emptied the source column or filled the target;
+          // reorder so empty columns fall to the end.
+          if (typeof reorderEmptyLast === "function") reorderEmptyLast();
         },
       });
     });
@@ -293,6 +296,44 @@
   } else {
     initHomeWidgets();
   }
+
+  // ------------------- Push-empty-to-end (home widgets + kanban columns) ---
+  // Server-rendered widgets and kanban columns keep their natural
+  // (semantic) order in the HTML. On the client we shove any container that
+  // renders as "empty" to the end of its grid so the most important stuff
+  // stays near the top of the viewport. This is DOM re-append, so CSS Grid
+  // just reflows — no `order:` needed. Applied on load and after any HTMX
+  // swap or drag-drop.
+  function pushEmptyChildrenToEnd(container, isEmpty) {
+    if (!container) return;
+    Array.from(container.children)
+      .filter((c) => isEmpty(c))
+      .forEach((el) => {
+        el.setAttribute("data-empty", "1");
+        container.appendChild(el);
+      });
+    // Reset the flag on children that came back to being non-empty.
+    Array.from(container.children)
+      .filter((c) => !isEmpty(c))
+      .forEach((el) => el.removeAttribute("data-empty"));
+  }
+  function widgetIsEmpty(widgetEl) {
+    return !!widgetEl.querySelector(":scope > .widget-body > .empty");
+  }
+  function kanbanColumnIsEmpty(colEl) {
+    const body = colEl.querySelector(".kanban-column-body");
+    return !body || body.querySelectorAll(".card").length === 0;
+  }
+  function reorderEmptyLast() {
+    pushEmptyChildrenToEnd(document.querySelector(".home-grid"), widgetIsEmpty);
+    pushEmptyChildrenToEnd(document.getElementById("kanban-board"), kanbanColumnIsEmpty);
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", reorderEmptyLast);
+  } else {
+    reorderEmptyLast();
+  }
+  document.body.addEventListener("htmx:afterSwap", reorderEmptyLast);
 
   // ------------------- Chat mic (Web Speech API, feature-detected) -------------------
   // Kept behind a runtime check so browsers without SpeechRecognition just see

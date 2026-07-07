@@ -448,6 +448,92 @@ def deactivate_discipline(row_uuid: str) -> None:
         )
 
 
+def delete_discipline(row_uuid: str) -> dict[str, Any] | None:
+    """Hard-delete a discipline and all its completions. Returns a snapshot
+    dict ``{"discipline": {...}, "completions": [{...}, ...]}`` suitable for
+    ``restore_discipline_row``, or ``None`` if the row didn't exist.
+
+    Completions are deleted by task-name (the FK the schema actually has),
+    then the ``discipline_list`` row is removed. Both happen in one
+    transaction so a partial failure leaves the DB consistent.
+    """
+    with get_engine().begin() as conn:
+        row = conn.execute(
+            text(f"SELECT {', '.join(_DISCIPLINE_COLUMNS)} FROM discipline_list WHERE uuid = :u"),
+            {"u": row_uuid},
+        ).first()
+        if row is None:
+            return None
+        disc = dict(row._mapping)
+        comps = conn.execute(
+            text("""
+                SELECT task, catagory, completed_date, logged_at
+                FROM discipline_completions
+                WHERE task = :t
+            """),
+            {"t": disc["task"]},
+        ).all()
+        snapshot = {
+            "discipline": disc,
+            "completions": [dict(c._mapping) for c in comps],
+        }
+        conn.execute(
+            text("DELETE FROM discipline_completions WHERE task = :t"),
+            {"t": disc["task"]},
+        )
+        conn.execute(
+            text("DELETE FROM discipline_list WHERE uuid = :u"),
+            {"u": row_uuid},
+        )
+    return snapshot
+
+
+def restore_discipline_row(snapshot: dict[str, Any]) -> None:
+    """Reverse ``delete_discipline`` from its snapshot.
+
+    Idempotent: uses UPDATE-or-INSERT on ``discipline_list`` and
+    ``ON CONFLICT DO NOTHING`` on ``discipline_completions``, so calling this
+    twice (or after a partial recovery) leaves the same end state.
+    """
+    disc = snapshot.get("discipline") or {}
+    row_uuid = disc.get("uuid")
+    if not row_uuid:
+        raise ValueError("restore_discipline_row: snapshot is missing discipline.uuid")
+    payload = {c: disc.get(c) for c in _DISCIPLINE_COLUMNS}
+    with get_engine().begin() as conn:
+        exists = conn.execute(
+            text("SELECT 1 FROM discipline_list WHERE uuid = :u"), {"u": row_uuid}
+        ).first()
+        if exists:
+            set_clause = ", ".join(f"{c} = :{c}" for c in _DISCIPLINE_COLUMNS if c != "uuid")
+            payload["u"] = row_uuid
+            conn.execute(
+                text(f"UPDATE discipline_list SET {set_clause} WHERE uuid = :u"),
+                payload,
+            )
+        else:
+            col_list = ", ".join(_DISCIPLINE_COLUMNS)
+            bind_list = ", ".join(f":{c}" for c in _DISCIPLINE_COLUMNS)
+            conn.execute(
+                text(f"INSERT INTO discipline_list ({col_list}) VALUES ({bind_list})"),
+                payload,
+            )
+        for comp in snapshot.get("completions") or []:
+            conn.execute(
+                text("""
+                    INSERT INTO discipline_completions (task, catagory, completed_date, logged_at)
+                    VALUES (:t, :c, :d, :ts)
+                    ON CONFLICT (task, completed_date) DO NOTHING
+                """),
+                {
+                    "t": comp.get("task"),
+                    "c": comp.get("catagory"),
+                    "d": comp.get("completed_date"),
+                    "ts": comp.get("logged_at") or now_iso(),
+                },
+            )
+
+
 def list_completions_for_year(year: int) -> dict[str, set[str]]:
     """Return ``{task_name: {"YYYY-MM-DD", ...}}`` for the given year."""
     q = text("""

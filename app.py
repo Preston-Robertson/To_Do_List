@@ -594,7 +594,11 @@ def undo(op_id: str):
         # local toast state without treating it as a hard failure.
         raise HTTPException(410, "undo window has expired")
     try:
-        db.restore_task_row(entry["table"], entry["snapshot"])
+        table = entry["table"]
+        if table == "discipline_list":
+            db.restore_discipline_row(entry["snapshot"])
+        else:
+            db.restore_task_row(table, entry["snapshot"])
     except Exception as exc:
         raise HTTPException(500, f"undo failed: {exc}")
     return Response(
@@ -740,6 +744,32 @@ def discipline_deactivate(row_uuid: str):
     _require_v2()
     db.deactivate_discipline(row_uuid)
     return Response(status_code=204, headers={"HX-Refresh": "true"})
+
+
+@app.post("/discipline/{row_uuid}/delete", dependencies=[Depends(require_auth)])
+def discipline_delete(row_uuid: str):
+    """Hard-delete a discipline (and its completions), with a 12s undo.
+
+    The snapshot returned by ``db.delete_discipline`` bundles the
+    discipline_list row + all its completions rows so ``restore_discipline_row``
+    can put both back.
+    """
+    _require_v2()
+    snapshot = db.delete_discipline(row_uuid)
+    if snapshot is None:
+        raise HTTPException(404, "discipline not found")
+    task_name = (snapshot.get("discipline") or {}).get("task") or "discipline"
+    op_id = _stash_undo("discipline_list", snapshot, f"Deleted ‘{task_name}’")
+    return Response(
+        status_code=204,
+        headers={
+            "HX-Trigger": _hx_trigger(
+                showUndo={"op_id": op_id, "label": f"Deleted ‘{task_name}’",
+                          "ttl_ms": _UNDO_TTL_SECONDS * 1000},
+                reloadBoard=None,
+            ),
+        },
+    )
 
 
 @app.post("/discipline/toggle", dependencies=[Depends(require_auth)])

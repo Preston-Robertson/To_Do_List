@@ -66,17 +66,22 @@ place. Snooze math uses `max(today, current_due) + days`, so overdue items
 always defer from today rather than from a stale due date.
 
 **Undo toast.** Every complete / delete / snooze (on both `tasks` and
-`recurring_tasks`) snapshots the pre-mutation row into a server-side in-memory
-queue (`_UNDO_QUEUE` in `app.py`, capped at 64 entries with a 12 s TTL, guarded
-by a `threading.Lock`) and emits an `HX-Trigger: showUndo` event carrying
-`{op_id, label, ttl_ms}`. The client writes the pending entry to
-`localStorage.luigi.pendingUndo` **synchronously in the same tick as the
-`reloadBoard` trigger** so the toast survives the ensuing full-page reload;
-`restoreUndoToast()` re-renders it on `DOMContentLoaded`. Clicking **Undo**
-fires `POST /undo/{op_id}`, which pops the entry and calls
-`db.restore_task_row(table, snapshot)` — one idempotent UPDATE-or-INSERT that
-reverses complete, delete, and snooze uniformly (the row's original `uuid` is
-reused, so any references remain valid). Expired ops return `410 Gone`.
+`recurring_tasks`) plus discipline delete snapshots the pre-mutation row into
+a server-side in-memory queue (`_UNDO_QUEUE` in `app.py`, capped at 64
+entries with a 12 s TTL, guarded by a `threading.Lock`) and emits an
+`HX-Trigger: showUndo` event carrying `{op_id, label, ttl_ms}`. The client
+writes the pending entry to `localStorage.luigi.pendingUndo` **synchronously
+in the same tick as the `reloadBoard` trigger** so the toast survives the
+ensuing full-page reload; `restoreUndoToast()` re-renders it on
+`DOMContentLoaded`. Clicking **Undo** fires `POST /undo/{op_id}`, which pops
+the entry and dispatches on `table`: task-like snapshots go through
+`db.restore_task_row(table, snapshot)` (one idempotent UPDATE-or-INSERT that
+reverses complete, delete, and snooze uniformly), and discipline snapshots go
+through `db.restore_discipline_row(snapshot)` (puts back the
+`discipline_list` row **and** re-inserts every `discipline_completions` row
+via `ON CONFLICT DO NOTHING`, so the streak history returns intact). In
+every case the row's original `uuid` is reused, so any references remain
+valid. Expired ops return `410 Gone`.
 
 **New-task auto-refresh.** After the New Task modal POSTs successfully, the
 response carries an `HX-Trigger: reloadBoard` so the newly-created card shows
@@ -260,6 +265,9 @@ Authenticated (session cookie, or `?token=` / `Authorization: Bearer`):
 * `POST /discipline`      → create
 * `GET  /discipline/{uuid}/edit`, `POST /discipline/{uuid}` → update
 * `POST /discipline/{uuid}/deactivate` → set `active=0`
+* `POST /discipline/{uuid}/delete` → hard-delete the discipline **and** all
+  its `discipline_completions` rows, then emit `HX-Trigger: showUndo` so
+  the client toast can restore both within the 12 s window
 * `POST /discipline/toggle` → mark/unmark a day (also used by the Home
   discipline widget's "Done" button)
 * `GET  /follow-ups`      → table
@@ -293,10 +301,12 @@ Authenticated (session cookie, or `?token=` / `Authorization: Bearer`):
 * `POST /chat/reset`      → clear the in-memory chat history for the caller's
   session.
 * `POST /undo/{op_id}`    → pop the queued snapshot for `op_id` and restore
-  the row via `db.restore_task_row`. Returns `204` on success (with
-  `HX-Trigger: {reloadBoard, undoCleared}`) or `410 Gone` if the op has
-  expired or already been consumed. Covers complete / delete / snooze on
-  both `tasks` and `recurring_tasks`.
+  the row via `db.restore_task_row` (task-like) or
+  `db.restore_discipline_row` (discipline_list, including its completions).
+  Returns `204` on success (with `HX-Trigger: {reloadBoard, undoCleared}`)
+  or `410 Gone` if the op has expired or already been consumed. Covers
+  complete / delete / snooze on `tasks` and `recurring_tasks`, plus delete
+  on `discipline_list`.
 
 ---
 
