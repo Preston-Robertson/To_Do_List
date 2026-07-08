@@ -121,7 +121,13 @@
   {# Weekday picker (Mon..Sun = 0..6, matching Python's date.weekday()).
      Sits inside the recurring block so it's hidden alongside the interval
      when the Recurring box is unchecked. Both fields are allowed together:
-     see db.reactivation_date — weekdays win, interval is the fallback. #}
+     see db.reactivation_date — weekdays win, interval is the fallback.
+
+     Rendered only if the physical `recurring_days` column exists on
+     recurring_tasks. On DBs where the web-app role can't ALTER (owner is
+     LuigiBot's role), we show a short note instead so users don't fill in
+     values that would be silently dropped. #}
+  {% if has_web_column('recurring_tasks', 'recurring_days') %}
   <div
     class="form-row"
     data-recurring-days-row
@@ -149,6 +155,16 @@
       </p>
     </fieldset>
   </div>
+  {% else %}
+  <div class="form-row" data-recurring-days-row {% if not _recurring_checked %}hidden{% endif %}>
+    <p class="weekday-hint" style="margin:0">
+      Weekday scheduling is unavailable: the <code>recurring_days</code> column
+      isn't on <code>recurring_tasks</code>. Have a DB owner run
+      <code>ALTER TABLE recurring_tasks ADD COLUMN recurring_days TEXT;</code>
+      and restart the web app.
+    </p>
+  </div>
+  {% endif %}
   {% endif %}
 
   <div class="form-actions">

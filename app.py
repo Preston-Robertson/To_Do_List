@@ -71,6 +71,7 @@ templates.env.globals["reactivation_date"] = db.reactivation_date
 templates.env.globals["WEEKDAY_LABELS"] = db.WEEKDAY_LABELS
 templates.env.globals["recurring_days_list"] = db.recurring_days_list
 templates.env.globals["recurring_days_labels"] = db.recurring_days_labels
+templates.env.globals["has_web_column"] = db.has_web_column
 
 
 async def _form_dict(request: Request) -> dict[str, Any]:

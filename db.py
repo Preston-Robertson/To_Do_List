@@ -56,6 +56,21 @@ def check_schema_version() -> int:
     return int(row[0])
 
 
+import logging
+
+logger = logging.getLogger("luigi_web.db")
+
+# Per-table set of columns that _TASK_COLUMNS lists but the physical DB
+# lacks. Populated at startup by ensure_web_columns() so all downstream
+# SELECT/INSERT/UPDATE calls (via _cols_for) transparently skip missing
+# columns. Empty until ensure_web_columns() has run.
+_TABLES_MISSING_COLUMNS: dict[str, set[str]] = {}
+
+# Tables the web app is willing to run ALTERs against. Used both for the
+# startup migration and by restore_task_row's safety check.
+_TASK_LIKE_TABLES = ("tasks", "recurring_tasks")
+
+
 def ensure_web_columns() -> None:
     """Idempotently add columns the web GUI owns on top of the LuigiBot v2 schema.
 
@@ -67,14 +82,87 @@ def ensure_web_columns() -> None:
       set by the /recurring form when the user picks specific weekdays.
       LuigiBot ignores this until taught to read it. Added to both
       task-like tables so the shared column list stays symmetric.
+
+    The web-app's DB role is often *not* the owner of the LuigiBot tables,
+    which makes ``ALTER TABLE`` return ``InsufficientPrivilege``. That's
+    non-fatal: we log a warning and record which columns are missing so
+    the rest of the module can skip them. To actually enable the feature,
+    have a privileged role run the ALTERs (see the docstring commit
+    message) and restart the web app.
     """
-    stmts = [
-        "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS recurring_days TEXT",
-        "ALTER TABLE recurring_tasks ADD COLUMN IF NOT EXISTS recurring_days TEXT",
-    ]
-    with get_engine().begin() as conn:
-        for s in stmts:
-            conn.execute(text(s))
+    web_columns = {"recurring_days": "TEXT"}
+    engine = get_engine()
+    for table in _TASK_LIKE_TABLES:
+        for col, ddl_type in web_columns.items():
+            stmt = f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {ddl_type}"
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text(stmt))
+            except Exception as exc:  # noqa: BLE001 — swallow to keep booting
+                # Most common cause: InsufficientPrivilege (role isn't table
+                # owner). We just log; the missing-column detection below
+                # will notice and downstream code will elide the column.
+                logger.warning(
+                    "ensure_web_columns: could not add %s.%s (%s); "
+                    "feature will be inactive on this table until an owner "
+                    "runs the ALTER.",
+                    table, col, exc.__class__.__name__,
+                )
+    _refresh_missing_columns()
+
+
+def _refresh_missing_columns() -> None:
+    """Compare _TASK_COLUMNS to what each task-like table actually has.
+
+    Called once from ensure_web_columns. Any column we expect but that
+    the DB doesn't currently have is recorded so _cols_for(table) can
+    filter it out of every generated SQL statement.
+    """
+    with get_engine().connect() as conn:
+        for table in _TASK_LIKE_TABLES:
+            rows = conn.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = current_schema() "
+                    "AND table_name = :t"
+                ),
+                {"t": table},
+            ).all()
+            present = {r[0] for r in rows}
+            missing = {c for c in _TASK_COLUMNS if c not in present}
+            _TABLES_MISSING_COLUMNS[table] = missing
+            if missing:
+                logger.info(
+                    "Table %s is missing web columns: %s", table, sorted(missing)
+                )
+
+
+def _cols_for(table: str) -> tuple[str, ...]:
+    """Task-like columns actually present in ``table``.
+
+    Falls back to the full list when we haven't detected yet (e.g. a
+    unit test that skipped ensure_web_columns), which matches previous
+    behaviour.
+    """
+    missing = _TABLES_MISSING_COLUMNS.get(table)
+    if not missing:
+        return _TASK_COLUMNS
+    return tuple(c for c in _TASK_COLUMNS if c not in missing)
+
+
+def has_web_column(table: str, col: str) -> bool:
+    """True when the physical ``table`` has ``col`` (post-detection).
+
+    Templates use this to hide UI (e.g. the weekday picker) if the
+    underlying migration hasn't been applied on this DB, so the user
+    doesn't fill in values that would be silently dropped.
+    """
+    missing = _TABLES_MISSING_COLUMNS.get(table)
+    if missing is None:
+        # Not yet detected — be optimistic; the SQL layer will still
+        # filter on write, so this only affects UI visibility.
+        return True
+    return col not in missing
 
 
 # --------------------------------------------------------------------------- #
@@ -269,7 +357,7 @@ _TASK_EDITABLE = (
 
 def _list_task_like(table: str) -> list[dict[str, Any]]:
     q = text(f"""
-        SELECT {", ".join(_TASK_COLUMNS)}
+        SELECT {", ".join(_cols_for(table))}
         FROM {table}
         ORDER BY completed ASC, priority DESC NULLS LAST, due_date ASC NULLS LAST, task ASC
     """)
@@ -278,7 +366,7 @@ def _list_task_like(table: str) -> list[dict[str, Any]]:
 
 
 def _get_task_like(table: str, row_uuid: str) -> dict[str, Any] | None:
-    q = text(f"SELECT {', '.join(_TASK_COLUMNS)} FROM {table} WHERE uuid = :u")
+    q = text(f"SELECT {', '.join(_cols_for(table))} FROM {table} WHERE uuid = :u")
     with get_engine().connect() as conn:
         row = conn.execute(q, {"u": row_uuid}).first()
     return dict(row._mapping) if row else None
@@ -323,6 +411,10 @@ def _create_task_like(table: str, data: dict[str, Any], recurring_default: int) 
             if recurring_val else None
         ),
     }
+    # Drop any columns the physical table doesn't have (e.g. a DB where the
+    # web-owned ALTERs haven't been applied yet). _cols_for is authoritative.
+    allowed = set(_cols_for(table))
+    payload = {k: v for k, v in payload.items() if k in allowed}
     cols = ", ".join(payload.keys())
     binds = ", ".join(f":{k}" for k in payload)
     q = text(f"INSERT INTO {table} ({cols}) VALUES ({binds})")
@@ -374,6 +466,11 @@ def _update_task_like(table: str, row_uuid: str, data: dict[str, Any]) -> None:
     if updates.get("recurring") == 0:
         updates["recurring_interval"] = None
         updates["recurring_days"] = None
+
+    # Drop any columns the physical table doesn't have. Same reason as in
+    # _create_task_like: web-owned columns may not be present yet.
+    allowed = set(_cols_for(table))
+    updates = {k: v for k, v in updates.items() if k in allowed}
 
     if not updates:
         return
@@ -442,20 +539,21 @@ def restore_task_row(table: str, snapshot: dict[str, Any]) -> None:
     row_uuid = snapshot.get("uuid")
     if not row_uuid:
         raise ValueError("restore_task_row: snapshot is missing uuid")
-    payload = {c: snapshot.get(c) for c in _TASK_COLUMNS}
+    cols = _cols_for(table)
+    payload = {c: snapshot.get(c) for c in cols}
     with get_engine().begin() as conn:
         exists = conn.execute(
             text(f"SELECT 1 FROM {table} WHERE uuid = :u"), {"u": row_uuid}
         ).first()
         if exists:
-            set_clause = ", ".join(f"{c} = :{c}" for c in _TASK_COLUMNS if c != "uuid")
+            set_clause = ", ".join(f"{c} = :{c}" for c in cols if c != "uuid")
             payload["u"] = row_uuid
             conn.execute(
                 text(f"UPDATE {table} SET {set_clause} WHERE uuid = :u"), payload
             )
         else:
-            col_list = ", ".join(_TASK_COLUMNS)
-            bind_list = ", ".join(f":{c}" for c in _TASK_COLUMNS)
+            col_list = ", ".join(cols)
+            bind_list = ", ".join(f":{c}" for c in cols)
             conn.execute(
                 text(f"INSERT INTO {table} ({col_list}) VALUES ({bind_list})"), payload
             )
