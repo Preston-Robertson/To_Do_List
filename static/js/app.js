@@ -595,10 +595,18 @@
     scope.querySelectorAll("[data-recurring-toggle]").forEach((cb) => {
       if (cb.dataset.recInit === "1") return;
       cb.dataset.recInit = "1";
+      const form = cb.closest("form") || cb.closest("[data-recurring-row]").parentElement;
       const row = cb.closest("[data-recurring-row]") || cb.parentElement;
       const fields = row.querySelector("[data-recurring-fields]");
       const input = row.querySelector("[data-recurring-interval]");
       if (!fields || !input) return;
+
+      // Sibling weekday row lives outside the interval row so the fieldset
+      // can span the full width. It's optional — /tasks doesn't render it.
+      const daysRow = form ? form.querySelector("[data-recurring-days-row]") : null;
+      const dayInputs = daysRow
+        ? daysRow.querySelectorAll('input[name="recurring_days"]')
+        : [];
 
       const paintChips = () => {
         const v = String(input.value || "").trim();
@@ -610,9 +618,14 @@
       const sync = () => {
         if (cb.checked) {
           fields.removeAttribute("hidden");
+          if (daysRow) daysRow.removeAttribute("hidden");
         } else {
           fields.setAttribute("hidden", "");
           input.value = "";
+          if (daysRow) {
+            daysRow.setAttribute("hidden", "");
+            dayInputs.forEach((el) => { el.checked = false; });
+          }
           paintChips();
         }
       };
@@ -725,6 +738,14 @@
       case "completed-week":
         if (!completed) return false;
         if (!completedTime || completedTime < wk.mon || completedTime > wk.sun) return false;
+        break;
+      case "awaiting-reactivation":
+        // Completed recurring rows only; the server precomputed the next
+        // reactivation date into data-reactivation-date (see task_card.html
+        // and db.reactivation_date). Rows without one — non-recurring, or
+        // missing an interval — are hidden.
+        if (!completed) return false;
+        if (!card.dataset.reactivationDate) return false;
         break;
       default: break;
     }

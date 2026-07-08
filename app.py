@@ -64,6 +64,28 @@ def _asset_version() -> str:
 
 
 templates.env.globals["asset_version"] = _asset_version()
+# Exposed to templates so task_card.html can render the next reactivation date
+# on completed recurring cards without duplicating the interval math.
+templates.env.globals["reactivation_date"] = db.reactivation_date
+# Weekday helpers for the recurring form + card chip.
+templates.env.globals["WEEKDAY_LABELS"] = db.WEEKDAY_LABELS
+templates.env.globals["recurring_days_list"] = db.recurring_days_list
+templates.env.globals["recurring_days_labels"] = db.recurring_days_labels
+
+
+async def _form_dict(request: Request) -> dict[str, Any]:
+    """Read a form into a dict, preserving multi-value ``recurring_days``.
+
+    ``dict(await request.form())`` collapses repeated keys to just the last
+    value, which would silently drop every weekday except the last-checked
+    one. The DB layer's ``parse_recurring_days`` accepts either a list or a
+    CSV string, so we hand it the raw list.
+    """
+    form = await request.form()
+    data = dict(form)
+    if "recurring_days" in form:
+        data["recurring_days"] = form.getlist("recurring_days")
+    return data
 
 
 # --------------------------------------------------------------------------- #
@@ -79,6 +101,11 @@ def _startup_schema_check() -> None:
         _STARTUP_SCHEMA["version"] = v
         if v < 2:
             _STARTUP_SCHEMA["error"] = f"schema_version={v}; luigi-web requires 2"
+            return
+        # Idempotent: adds the web-app-owned `recurring_days` column if
+        # missing. Runs after the version check so we don't touch a
+        # pre-v2 DB by mistake.
+        db.ensure_web_columns()
     except Exception as exc:  # pragma: no cover — surfaced via /healthz
         _STARTUP_SCHEMA["error"] = f"schema check failed: {exc}"
 
@@ -420,7 +447,7 @@ def recurring_page(request: Request):
 @app.post("/recurring", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 async def recurring_create(request: Request):
     _require_v2()
-    form = dict(await request.form())
+    form = await _form_dict(request)
     row_uuid = db.create_recurring(form)
     row = db.get_recurring(row_uuid)
     return templates.TemplateResponse(
@@ -477,7 +504,7 @@ def recurring_edit_form(request: Request, row_uuid: str):
 )
 async def recurring_update(request: Request, row_uuid: str):
     _require_v2()
-    form = dict(await request.form())
+    form = await _form_dict(request)
     db.update_recurring(row_uuid, form)
     row = db.get_recurring(row_uuid)
     if not row:

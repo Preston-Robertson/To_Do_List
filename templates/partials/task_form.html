@@ -80,12 +80,13 @@
     </label>
   </div>
 
-  {# Recurring toggle: on /recurring pages we default to checked (and the row
-     already lives in recurring_tasks); on /tasks pages leave unchecked. The
-     interval field is hidden until the box is checked (see initRecurringToggle
-     in app.js). #}
-  {% set _is_recurring_endpoint = (endpoint_root == '/recurring') %}
-  {% set _recurring_checked = (t.recurring in (1, '1', True)) or (is_new and _is_recurring_endpoint) %}
+  {# Recurring block is /recurring-only. On /tasks we deliberately don't
+     render it: the checkbox used to be there but LuigiBot's reactivation
+     loop only scans the `recurring_tasks` table, so a "recurring" one-off
+     task never actually re-opened — it was a UI ghost. #}
+  {% if endpoint_root == '/recurring' %}
+  {% set _recurring_checked = (t.recurring in (1, '1', True)) or is_new %}
+  {% set _selected_days = recurring_days_list(t.recurring_days) %}
   <div class="form-row" data-recurring-row>
     <label class="checkbox">
       <input
@@ -116,6 +117,39 @@
       </div>
     </label>
   </div>
+
+  {# Weekday picker (Mon..Sun = 0..6, matching Python's date.weekday()).
+     Sits inside the recurring block so it's hidden alongside the interval
+     when the Recurring box is unchecked. Both fields are allowed together:
+     see db.reactivation_date — weekdays win, interval is the fallback. #}
+  <div
+    class="form-row"
+    data-recurring-days-row
+    {% if not _recurring_checked %}hidden{% endif %}
+  >
+    <fieldset class="weekday-picker" data-weekday-picker>
+      <legend>Specific days (optional)</legend>
+      <div class="weekday-chips" role="group" aria-label="Days of the week">
+        {% for label in WEEKDAY_LABELS %}
+          {% set _i = loop.index0 %}
+          <label class="weekday-chip">
+            <input
+              type="checkbox"
+              name="recurring_days"
+              value="{{ _i }}"
+              {% if _i in _selected_days %}checked{% endif %}
+            >
+            <span>{{ label }}</span>
+          </label>
+        {% endfor %}
+      </div>
+      <p class="weekday-hint">
+        If any day is picked, the task reactivates on the next selected weekday
+        after completion. Otherwise the interval above is used.
+      </p>
+    </fieldset>
+  </div>
+  {% endif %}
 
   <div class="form-actions">
     <button type="button" class="btn btn-ghost" data-close-modal>Cancel</button>

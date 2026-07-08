@@ -56,6 +56,27 @@ def check_schema_version() -> int:
     return int(row[0])
 
 
+def ensure_web_columns() -> None:
+    """Idempotently add columns the web GUI owns on top of the LuigiBot v2 schema.
+
+    LuigiBot manages ``schema_version`` on its own; we don't bump it here.
+    Any column added must be nullable so LuigiBot inserts (which don't know
+    the column) keep working. Currently:
+
+    * ``recurring_days`` (TEXT, comma-separated ints 0..6, Mon=0..Sun=6) —
+      set by the /recurring form when the user picks specific weekdays.
+      LuigiBot ignores this until taught to read it. Added to both
+      task-like tables so the shared column list stays symmetric.
+    """
+    stmts = [
+        "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS recurring_days TEXT",
+        "ALTER TABLE recurring_tasks ADD COLUMN IF NOT EXISTS recurring_days TEXT",
+    ]
+    with get_engine().begin() as conn:
+        for s in stmts:
+            conn.execute(text(s))
+
+
 # --------------------------------------------------------------------------- #
 # Utilities
 # --------------------------------------------------------------------------- #
@@ -96,6 +117,122 @@ def today_iso() -> str:
     return date.today().isoformat()
 
 
+# Weekday helpers ---------------------------------------------------------- #
+# Python's date.weekday() is Mon=0..Sun=6, so we mirror that ordering
+# everywhere (form values, stored CSV, and the labels rendered on cards).
+WEEKDAY_LABELS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+
+def parse_recurring_days(raw: Any) -> str | None:
+    """Normalise the form's ``recurring_days`` payload to sorted CSV.
+
+    Accepts a list (multiple checkboxes with the same name), a single
+    string (which may itself be a CSV like "0,2,4"), or nothing.
+    Returns a canonical "0,2,4"-style string, or ``None`` when nothing
+    valid was supplied. Silently drops anything outside 0..6 so a bad
+    payload can't wedge downstream date math.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        parts: Iterable[str] = raw.split(",")
+    elif isinstance(raw, (list, tuple)):
+        parts = []
+        for item in raw:
+            if isinstance(item, str):
+                parts.extend(item.split(","))
+            else:
+                parts.append(str(item))
+    else:
+        return None
+    seen: set[int] = set()
+    for p in parts:
+        p = p.strip()
+        if not p:
+            continue
+        try:
+            n = int(p)
+        except ValueError:
+            continue
+        if 0 <= n <= 6:
+            seen.add(n)
+    if not seen:
+        return None
+    return ",".join(str(n) for n in sorted(seen))
+
+
+def recurring_days_list(csv: Any) -> list[int]:
+    """Parse the stored CSV back into a sorted int list. Empty/invalid → []."""
+    if not csv or not isinstance(csv, str):
+        return []
+    out: list[int] = []
+    for p in csv.split(","):
+        p = p.strip()
+        if not p:
+            continue
+        try:
+            n = int(p)
+        except ValueError:
+            continue
+        if 0 <= n <= 6 and n not in out:
+            out.append(n)
+    out.sort()
+    return out
+
+
+def recurring_days_labels(csv: Any) -> list[str]:
+    """Human-friendly labels for the card chip (e.g. ['Mon','Wed','Fri'])."""
+    return [WEEKDAY_LABELS[i] for i in recurring_days_list(csv)]
+
+
+def reactivation_date(row: dict[str, Any]) -> str | None:
+    """When a completed recurring row will next come due.
+
+    Order of precedence (matches the /recurring form's "both allowed" rule):
+
+    1. ``recurring_days`` — the next selected weekday **strictly after**
+       ``completed_time``.
+    2. ``recurring_interval`` — ``completed_time + N days``.
+
+    Returns ``None`` if the row isn't a completed recurring task, if no
+    schedule fields are set, or if ``completed_time`` can't be parsed.
+    Timezone-naive on purpose — matches how the rest of the schema stores
+    dates.
+    """
+    if not row:
+        return None
+    if not (row.get("completed") and row.get("recurring")):
+        return None
+    completed_time = row.get("completed_time")
+    if not completed_time:
+        return None
+    try:
+        base = date.fromisoformat(str(completed_time)[:10])
+    except (ValueError, TypeError):
+        return None
+
+    days = recurring_days_list(row.get("recurring_days"))
+    if days:
+        # Strictly after: start at delta=1 and take the first match within a
+        # week. A non-empty `days` guarantees a hit before delta=8.
+        for delta in range(1, 8):
+            candidate = base + timedelta(days=delta)
+            if candidate.weekday() in days:
+                return candidate.isoformat()
+        return None
+
+    interval = row.get("recurring_interval")
+    if not interval:
+        return None
+    try:
+        n = int(interval)
+    except (ValueError, TypeError):
+        return None
+    if n <= 0:
+        return None
+    return (base + timedelta(days=n)).isoformat()
+
+
 def _to_int_bool(v: Any) -> int:
     """Coerce common form/JSON truthy values to the 0/1 the schema expects."""
     if isinstance(v, bool):
@@ -119,14 +256,14 @@ _TASK_COLUMNS = (
     "uuid", "task", "priority", "status", "due_date", "relevant_link",
     "catagory", "task_group", "sub_group", "task_creation", "start_time",
     "estimated_time", "logged_hours", "completed", "completed_time",
-    "recurring", "recurring_interval",
+    "recurring", "recurring_interval", "recurring_days",
 )
 
 # fields the edit form is allowed to change (mirrors bot's edit_task)
 _TASK_EDITABLE = (
     "task", "priority", "due_date", "catagory", "task_group", "sub_group",
     "relevant_link", "status", "estimated_time",
-    "recurring", "recurring_interval",
+    "recurring", "recurring_interval", "recurring_days",
 )
 
 
@@ -178,6 +315,13 @@ def _create_task_like(table: str, data: dict[str, Any], recurring_default: int) 
             if recurring_val and data.get("recurring_interval") not in (None, "")
             else None
         ),
+        # `recurring_days` is a web-GUI-only column (see ensure_web_columns).
+        # We only persist it when the row is actually recurring; otherwise
+        # null it out so LuigiBot's view stays consistent.
+        "recurring_days": (
+            parse_recurring_days(data.get("recurring_days"))
+            if recurring_val else None
+        ),
     }
     cols = ", ".join(payload.keys())
     binds = ", ".join(f":{k}" for k in payload)
@@ -210,15 +354,26 @@ def _update_task_like(table: str, row_uuid: str, data: dict[str, Any]) -> None:
             val = _to_int_bool(val)
         elif field == "recurring_interval":
             val = int(val) if val not in (None, "") else None
+        elif field == "recurring_days":
+            # May be a str (single checked box), list (multiple), or missing.
+            val = parse_recurring_days(val)
         elif isinstance(val, str) and val == "":
             val = None
         updates[field] = val
 
-    # Clear the interval whenever recurring is being turned off in the same
-    # update, so we don't leave orphan "every N days" values on a non-recurring
-    # row.
+    # If the form was posted without any weekday checkboxes ticked but with
+    # other task fields, the caller (route) is expected to include the key
+    # anyway (see _form_dict in app.py). Treat a missing key the same as
+    # "no weekdays" so unchecking every box actually clears the column.
+    if is_form_post and "recurring_days" not in data:
+        updates["recurring_days"] = None
+
+    # Clear the interval + weekdays whenever recurring is being turned off in
+    # the same update, so we don't leave orphan schedule values on a
+    # non-recurring row.
     if updates.get("recurring") == 0:
         updates["recurring_interval"] = None
+        updates["recurring_days"] = None
 
     if not updates:
         return

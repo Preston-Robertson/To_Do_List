@@ -252,6 +252,14 @@ main { padding: 20px; }
 .chip-due { background: var(--warn); color: #1a1000; font-weight: 600; }
 .chip-overdue { background: var(--danger, #e5484d); color: #fff; font-weight: 600; }
 .chip-streak { background: var(--danger-dim); color: var(--warn); font-weight: 600; }
+/* Reactivation date on completed recurring cards — rendered by task_card.html
+   when db.reactivation_date returns a date. Distinct from chip-due so it
+   reads as informational, not "action needed today". */
+.chip-recurring {
+  background: var(--accent-dim);
+  color: var(--text);
+  font-weight: 600;
+}
 
 /* Small inline badges used inside Home widget rows. */
 .streak-badge {
@@ -1085,7 +1093,7 @@ main { padding: 20px; }
   min-width: 60px;
 }
 
-/* Cards hidden by the client filter � animation-free so scrolling stays snappy. */
+/* Cards hidden by the client filter � animation-free so scrolling stays snappy. */
 .card.card-filtered-out { display: none; }
 
 /* Saved-filters popover, structured like widget-customizer. */
@@ -1510,6 +1518,73 @@ main { padding: 20px; }
 .date-chip-ghost:hover {
   color: var(--danger);
   border-color: var(--danger);
+}
+
+/* --------------------------------------------------------------------------
+   Weekday picker (recurring form). Reuses date-chip look-and-feel, but each
+   chip wraps a hidden checkbox so it can be toggled on/off independently.
+   The `:has(:checked)` selector switches the chip into the "is-active" look
+   without extra JS. Hidden fallback: browsers without :has() get the plain
+   chip with a native checkbox — usable, just less polished.
+   -------------------------------------------------------------------------- */
+.weekday-picker {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 0;
+  width: 100%;
+}
+.weekday-picker > legend {
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 0 4px;
+}
+.weekday-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.weekday-chip {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+}
+.weekday-chip > input[type="checkbox"] {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  width: 0;
+  height: 0;
+}
+.weekday-chip > span {
+  font: 500 11px var(--font);
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--bg-elev-2);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  transition: background 120ms, color 120ms, border-color 120ms;
+}
+.weekday-chip:hover > span {
+  background: var(--bg-hover);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.weekday-chip:has(> input:checked) > span {
+  background: var(--accent-dim);
+  color: var(--text);
+  border-color: var(--accent);
+}
+.weekday-chip > input:focus-visible + span {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.weekday-hint {
+  margin: 6px 4px 0;
+  font-size: 11px;
+  color: var(--text-dim);
 }
 
 /* --------------------------------------------------------------------------

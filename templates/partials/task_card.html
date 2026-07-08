@@ -4,6 +4,8 @@
    filter bar reads them (see initTasksFilter in app.js) so filtering works
    with zero server round-trips. Keep them lowercase; the JS lowercases the
    user's search query for comparison. #}
+{% set _reactivates = reactivation_date(t) %}
+{% set _weekday_labels = recurring_days_labels(t.recurring_days) %}
 <article
   class="card{% if t.completed %} card-completed{% endif %}"
   data-uuid="{{ t.uuid }}"
@@ -17,6 +19,9 @@
   data-due-date="{{ t.due_date or '' }}"
   data-completed="{{ t.completed or 0 }}"
   data-completed-time="{{ t.completed_time or '' }}"
+  data-recurring="{{ t.recurring or 0 }}"
+  data-recurring-interval="{{ t.recurring_interval or '' }}"
+  data-reactivation-date="{{ _reactivates or '' }}"
 >
   <header class="card-header">
     <span class="card-priority p{{ t.priority or 0 }}">P{{ t.priority or 0 }}</span>
@@ -29,6 +34,27 @@
     {% if t.task_group %}<span class="chip chip-muted">{{ t.task_group }}</span>{% endif %}
     {% if t.sub_group %}<span class="chip chip-muted">{{ t.sub_group }}</span>{% endif %}
     {% if t.estimated_time %}<span class="chip chip-muted">~{{ t.estimated_time }}h</span>{% endif %}
+    {% if _weekday_labels %}
+      {# Recurring schedule chip; visible whether or not the card is completed
+         so the user can see the plan at a glance. #}
+      <span
+        class="chip chip-recurring"
+        title="Recurs on these weekdays"
+      >{{ _weekday_labels|join(' · ') }}</span>
+    {% elif t.recurring and t.recurring_interval %}
+      <span
+        class="chip chip-recurring"
+        title="Recurring interval"
+      >every {{ t.recurring_interval }}d</span>
+    {% endif %}
+    {% if _reactivates %}
+      {# Only rendered for completed recurring rows with a valid schedule;
+         see db.reactivation_date. #}
+      <span
+        class="chip chip-recurring"
+        title="Next scheduled reactivation"
+      >↻ Reactivates {{ _reactivates }}</span>
+    {% endif %}
   </div>
 
   {% if t.relevant_link %}
