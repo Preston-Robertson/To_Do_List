@@ -80,6 +80,43 @@
     </label>
   </div>
 
+  {# Recurring toggle: on /recurring pages we default to checked (and the row
+     already lives in recurring_tasks); on /tasks pages leave unchecked. The
+     interval field is hidden until the box is checked (see initRecurringToggle
+     in app.js). #}
+  {% set _is_recurring_endpoint = (endpoint_root == '/recurring') %}
+  {% set _recurring_checked = (t.recurring in (1, '1', True)) or (is_new and _is_recurring_endpoint) %}
+  <div class="form-row" data-recurring-row>
+    <label class="checkbox">
+      <input
+        type="checkbox"
+        name="recurring"
+        value="1"
+        data-recurring-toggle
+        {% if _recurring_checked %}checked{% endif %}
+      >
+      Recurring
+    </label>
+    <label class="grow" data-recurring-fields {% if not _recurring_checked %}hidden{% endif %}>
+      Repeat every (days)
+      <input
+        type="number"
+        name="recurring_interval"
+        min="1"
+        step="1"
+        value="{{ t.recurring_interval or '' }}"
+        placeholder="e.g. 7"
+        data-recurring-interval
+      >
+      <div class="date-presets" role="group" aria-label="Recurrence presets">
+        <button type="button" class="date-chip" data-recurring-preset="1">Daily</button>
+        <button type="button" class="date-chip" data-recurring-preset="7">Weekly</button>
+        <button type="button" class="date-chip" data-recurring-preset="14">Bi-weekly</button>
+        <button type="button" class="date-chip" data-recurring-preset="30">Monthly</button>
+      </div>
+    </label>
+  </div>
+
   <div class="form-actions">
     <button type="button" class="btn btn-ghost" data-close-modal>Cancel</button>
     <button type="submit" class="btn btn-primary">{{ 'Create' if is_new else 'Save' }}</button>

@@ -586,6 +586,59 @@
     initDatePickers(e.target);
   });
 
+  // ------------------- Recurring toggle (task form) -------------------
+  // Show/hide the "Repeat every (days)" input based on the Recurring checkbox
+  // and wire preset chips (Daily / Weekly / Bi-weekly / Monthly). Unchecking
+  // clears the interval so the server stores NULL.
+  function initRecurringToggle(root) {
+    const scope = root && root.querySelectorAll ? root : document;
+    scope.querySelectorAll("[data-recurring-toggle]").forEach((cb) => {
+      if (cb.dataset.recInit === "1") return;
+      cb.dataset.recInit = "1";
+      const row = cb.closest("[data-recurring-row]") || cb.parentElement;
+      const fields = row.querySelector("[data-recurring-fields]");
+      const input = row.querySelector("[data-recurring-interval]");
+      if (!fields || !input) return;
+
+      const paintChips = () => {
+        const v = String(input.value || "").trim();
+        row.querySelectorAll("[data-recurring-preset]").forEach((btn) => {
+          btn.classList.toggle("is-active", btn.getAttribute("data-recurring-preset") === v);
+        });
+      };
+
+      const sync = () => {
+        if (cb.checked) {
+          fields.removeAttribute("hidden");
+        } else {
+          fields.setAttribute("hidden", "");
+          input.value = "";
+          paintChips();
+        }
+      };
+
+      row.querySelectorAll("[data-recurring-preset]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          input.value = btn.getAttribute("data-recurring-preset") || "";
+          if (!cb.checked) { cb.checked = true; sync(); }
+          paintChips();
+        });
+      });
+      input.addEventListener("input", paintChips);
+      cb.addEventListener("change", sync);
+      sync();
+      paintChips();
+    });
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => initRecurringToggle());
+  } else {
+    initRecurringToggle();
+  }
+  document.body.addEventListener("htmx:afterSwap", (e) => {
+    initRecurringToggle(e.target);
+  });
+
   // ------------------- Tasks filter bar + saved filters -------------------
   // All filtering is client-side: cards carry data-* attrs and we toggle a
   // `.card-filtered-out` class. Saved filters live in localStorage under

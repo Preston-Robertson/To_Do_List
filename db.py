@@ -126,6 +126,7 @@ _TASK_COLUMNS = (
 _TASK_EDITABLE = (
     "task", "priority", "due_date", "catagory", "task_group", "sub_group",
     "relevant_link", "status", "estimated_time",
+    "recurring", "recurring_interval",
 )
 
 
@@ -148,6 +149,13 @@ def _get_task_like(table: str, row_uuid: str) -> dict[str, Any] | None:
 
 def _create_task_like(table: str, data: dict[str, Any], recurring_default: int) -> str:
     row_uuid = new_uuid()
+    # The task/recurring form always renders a "Recurring" checkbox, so if the
+    # key is present we trust it; otherwise fall back to the endpoint's default
+    # (recurring_tasks rows default to 1, tasks rows default to 0).
+    if "recurring" in data:
+        recurring_val = _to_int_flag(data.get("recurring"))
+    else:
+        recurring_val = recurring_default
     payload = {
         "uuid": row_uuid,
         "task": data.get("task", "").strip(),
@@ -164,8 +172,12 @@ def _create_task_like(table: str, data: dict[str, Any], recurring_default: int) 
         "logged_hours": 0.0,
         "completed": 0,
         "completed_time": None,
-        "recurring": recurring_default,
-        "recurring_interval": int(data["recurring_interval"]) if data.get("recurring_interval") not in (None, "") else None,
+        "recurring": recurring_val,
+        "recurring_interval": (
+            int(data["recurring_interval"])
+            if recurring_val and data.get("recurring_interval") not in (None, "")
+            else None
+        ),
     }
     cols = ", ".join(payload.keys())
     binds = ", ".join(f":{k}" for k in payload)
@@ -176,6 +188,15 @@ def _create_task_like(table: str, data: dict[str, Any], recurring_default: int) 
 
 
 def _update_task_like(table: str, row_uuid: str, data: dict[str, Any]) -> None:
+    # The edit form always submits the "recurring" checkbox (present when
+    # checked, absent when not), so if any other task-editable field is in
+    # `data` we treat the payload as a full form post and normalise the
+    # checkbox to an explicit 0/1. This lets an unchecked box actually clear
+    # the flag instead of silently no-op'ing.
+    is_form_post = any(f in data for f in _TASK_EDITABLE if f != "recurring")
+    if is_form_post and "recurring" not in data:
+        data = {**data, "recurring": 0}
+
     updates: dict[str, Any] = {}
     for field in _TASK_EDITABLE:
         if field not in data:
@@ -185,9 +206,20 @@ def _update_task_like(table: str, row_uuid: str, data: dict[str, Any]) -> None:
             val = int(val or 0)
         elif field == "estimated_time":
             val = float(val) if val not in (None, "") else None
+        elif field == "recurring":
+            val = _to_int_flag(val)
+        elif field == "recurring_interval":
+            val = int(val) if val not in (None, "") else None
         elif isinstance(val, str) and val == "":
             val = None
         updates[field] = val
+
+    # Clear the interval whenever recurring is being turned off in the same
+    # update, so we don't leave orphan "every N days" values on a non-recurring
+    # row.
+    if updates.get("recurring") == 0:
+        updates["recurring_interval"] = None
+
     if not updates:
         return
     set_clause = ", ".join(f"{k} = :{k}" for k in updates)
