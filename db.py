@@ -153,7 +153,7 @@ def _create_task_like(table: str, data: dict[str, Any], recurring_default: int) 
     # key is present we trust it; otherwise fall back to the endpoint's default
     # (recurring_tasks rows default to 1, tasks rows default to 0).
     if "recurring" in data:
-        recurring_val = _to_int_flag(data.get("recurring"))
+        recurring_val = _to_int_bool(data.get("recurring"))
     else:
         recurring_val = recurring_default
     payload = {
@@ -207,7 +207,7 @@ def _update_task_like(table: str, row_uuid: str, data: dict[str, Any]) -> None:
         elif field == "estimated_time":
             val = float(val) if val not in (None, "") else None
         elif field == "recurring":
-            val = _to_int_flag(val)
+            val = _to_int_bool(val)
         elif field == "recurring_interval":
             val = int(val) if val not in (None, "") else None
         elif isinstance(val, str) and val == "":
