@@ -91,13 +91,13 @@ def main() -> int:
 
         print("\n=== constraints / unique indexes ===")
         cons = conn.execute(text("""
-            SELECT conname, pg_get_constraintdef(oid) AS def
+            SELECT conname, pg_get_constraintdef(oid) AS condef
             FROM pg_constraint
             WHERE conrelid = 'discipline_completions'::regclass
             ORDER BY conname
         """)).fetchall()
         for c in cons:
-            print(f"  - {c.conname}: {c.def}")
+            print(f"  - {c.conname}: {c.condef}")
         idx = conn.execute(text("""
             SELECT indexname, indexdef
             FROM pg_indexes
