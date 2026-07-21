@@ -44,6 +44,7 @@ _LLM_PROVIDER = llm_mod.build_provider_from_env()
 _LLM_TOOLS = chat_tools.build_registry()
 
 import env_file
+import gnw
 
 
 def _asset_version() -> str:
@@ -625,6 +626,138 @@ async def recurring_snooze(request: Request, row_uuid: str):
 
 
 # --------------------------------------------------------------------------- #
+# GAME'N'WATCH — Games & Shows boards backed by the bot's Google Sheet
+# --------------------------------------------------------------------------- #
+
+def _gnw_section(section: str) -> str:
+    if section not in ("games", "shows"):
+        raise HTTPException(404, "unknown section")
+    return section
+
+
+def _gnw_columns(section: str, profile: str | None):
+    """Bucket items by status into the section's fixed status order."""
+    items = gnw.list_items(section, profile or None)
+    columns: dict[str, list[dict[str, Any]]] = {s: [] for s in gnw.statuses_for(section)}
+    for it in items:
+        columns.setdefault(it["status"], []).append(it)
+    return columns
+
+
+def _gnw_board(request: Request, section: str, page_title: str):
+    reason = gnw.disabled_reason()
+    ctx: dict[str, Any] = {
+        "request": request,
+        "active_nav": section,
+        "page_title": page_title,
+        "section": section,
+        "disabled_reason": reason,
+        "profiles": [],
+        "profile": "",
+        "columns": {},
+        "statuses": gnw.statuses_for(section),
+        "status_labels": gnw.STATUS_LABELS,
+    }
+    if not reason:
+        profile = (request.query_params.get("profile") or "").strip()
+        ctx["profile"] = profile
+        ctx["profiles"] = gnw.list_profiles()
+        ctx["columns"] = _gnw_columns(section, profile)
+    return templates.TemplateResponse("media_board.html", ctx)
+
+
+@app.get("/games", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def games_page(request: Request):
+    return _gnw_board(request, "games", "Games")
+
+
+@app.get("/shows", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def shows_page(request: Request):
+    return _gnw_board(request, "shows", "Shows")
+
+
+@app.post("/gnw/{section}/status", dependencies=[Depends(require_auth)])
+async def gnw_set_status(section: str, request: Request):
+    _gnw_section(section)
+    form = dict(await request.form())
+    profile = (form.get("profile") or "").strip()
+    title = (form.get("title") or "").strip()
+    status = (form.get("status") or "").strip()
+    if not profile or not title:
+        raise HTTPException(400, "profile and title required")
+    try:
+        ok = gnw.set_status(section, profile, title, status)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    if not ok:
+        raise HTTPException(404, "item not found")
+    # Full refresh so the card lands in its new column and counts update.
+    return Response(status_code=204, headers={"HX-Refresh": "true"})
+
+
+@app.get(
+    "/gnw/{section}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_auth)],
+)
+def gnw_edit_form(section: str, request: Request, profile: str, title: str):
+    _gnw_section(section)
+    item = gnw.get_item(section, profile, title)
+    if not item:
+        raise HTTPException(404, "item not found")
+    return templates.TemplateResponse(
+        "partials/media_form.html",
+        {"request": request, "section": section, "item": item,
+         "statuses": gnw.statuses_for(section), "status_labels": gnw.STATUS_LABELS},
+    )
+
+
+@app.post(
+    "/gnw/{section}/update",
+    dependencies=[Depends(require_auth)],
+)
+async def gnw_update(section: str, request: Request):
+    _gnw_section(section)
+    form = dict(await request.form())
+    profile = (form.get("profile") or "").strip()
+    title = (form.get("title") or "").strip()
+    if not profile or not title:
+        raise HTTPException(400, "profile and title required")
+    editable = gnw.GAME_EDITABLE if section == "games" else gnw.SHOW_EDITABLE
+    int_fields = {"priority", "rating", "current_episode", "current_season", "total_episodes"}
+    fields: dict[str, Any] = {}
+    for key in editable:
+        if key not in form:
+            continue
+        val = form[key]
+        if key in int_fields:
+            raw = str(val).strip()
+            val = int(raw) if raw.lstrip("-").isdigit() else None
+        fields[key] = val
+    ok = gnw.update_item(section, profile, title, fields)
+    if not ok:
+        raise HTTPException(404, "item not found")
+    return Response(status_code=204, headers={"HX-Refresh": "true"})
+
+
+@app.post(
+    "/gnw/{section}/pick",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def gnw_pick(section: str, request: Request):
+    _gnw_section(section)
+    form = dict(await request.form())
+    profile = (form.get("profile") or "").strip() or None
+    pick = gnw.random_pick(section, profile)
+    return templates.TemplateResponse(
+        "partials/media_pick.html",
+        {"request": request, "section": section, "item": pick,
+         "status_labels": gnw.STATUS_LABELS},
+    )
+
+
+# --------------------------------------------------------------------------- #
 # UNDO — restore the most recent task-like snapshot for op_id
 # --------------------------------------------------------------------------- #
 
@@ -1147,6 +1280,16 @@ def home_page(request: Request):
     recent_activity = db.list_recent_activity(limit=15, days=14)
     weekly_review = db.weekly_review()
     disciplines_at_risk = db.list_disciplines_at_risk()
+    # Game'N'Watch: "currently playing/watching" widgets. Best-effort — never
+    # let a Sheets hiccup break the home page.
+    gnw_playing: list[dict[str, Any]] = []
+    gnw_watching: list[dict[str, Any]] = []
+    if gnw.is_enabled():
+        try:
+            gnw_playing = [i for i in gnw.list_items("games") if i["status"] == "playing"][:8]
+            gnw_watching = [i for i in gnw.list_items("shows") if i["status"] == "watching"][:8]
+        except Exception:  # noqa: BLE001
+            gnw_playing, gnw_watching = [], []
     return templates.TemplateResponse(
         "home.html",
         {
@@ -1165,6 +1308,9 @@ def home_page(request: Request):
             "recent_activity": recent_activity,
             "weekly_review": weekly_review,
             "disciplines_at_risk": disciplines_at_risk,
+            "gnw_enabled": gnw.is_enabled(),
+            "gnw_playing": gnw_playing,
+            "gnw_watching": gnw_watching,
             "week_of": monday.isoformat(),
             "today_iso": today.isoformat(),
             "chat_enabled": not isinstance(_LLM_PROVIDER, llm_mod.DisabledProvider),
@@ -1307,7 +1453,25 @@ def admin_page(request: Request):
             "env_unwritable_reason": unwritable_reason,
             "env_read_error": env_read_error,
             "env_groups": env_file.grouped_view(current_env),
+            "gnw": gnw.credentials_status(),
         },
+    )
+
+
+@app.post("/admin/gnw-credentials", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+async def admin_gnw_credentials(request: Request):
+    """Save a pasted Game'N'Watch service-account credentials.json.
+
+    Writes it to the app-managed path (see gnw.credentials_path) so no
+    host-side file placement is needed, then hot-reloads the Sheets client.
+    """
+    form = await request.form()
+    raw = form.get("credentials", "")
+    ok, message = gnw.save_credentials(raw if isinstance(raw, str) else "")
+    return templates.TemplateResponse(
+        "partials/admin_gnw_result.html",
+        {"request": request, "ok": ok, "message": message,
+         "status": gnw.credentials_status()},
     )
 
 

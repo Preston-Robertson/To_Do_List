@@ -1,0 +1,31 @@
+{# Result of saving Game'N'Watch credentials. Shown in #gnw-cred-result. #}
+{% if ok %}
+  <div class="admin-banner-ok">
+    Credentials saved{% if message %} for <code>{{ message }}</code>{% endif %}.
+  </div>
+  {% if status.sheet_id_set %}
+    {% if status.enabled %}
+      <p class="muted-hint" style="margin-top:6px;">
+        <strong>Games &amp; Shows are live</strong> — open the
+        <a href="/games">Games</a> or <a href="/shows">Shows</a> tab.
+      </p>
+    {% else %}
+      <div class="admin-banner-warn" style="margin-top:8px;">
+        Almost there: {{ status.reason }}
+      </div>
+    {% endif %}
+  {% else %}
+    <div class="admin-banner-warn" style="margin-top:8px;">
+      Now set <code>LUIGI_WEB_GNW_SHEET_ID</code> in the
+      <strong>Environment file</strong> section below, then restart.
+    </div>
+  {% endif %}
+  {% if message %}
+    <p class="muted-hint" style="margin-top:6px;">
+      Make sure this service account has <strong>Editor</strong> access to the
+      sheet — in Google Sheets, Share → add <code>{{ message }}</code>.
+    </p>
+  {% endif %}
+{% else %}
+  <div class="admin-banner-err">{{ message }}</div>
+{% endif %}

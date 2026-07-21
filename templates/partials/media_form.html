@@ -1,0 +1,60 @@
+{# Edit form for a game/show. Expects: section, item, statuses, status_labels.
+   Saving returns 204 + HX-Refresh, so the board re-renders with the change. #}
+<form
+  class="entity-form"
+  hx-post="/gnw/{{ section }}/update"
+  hx-swap="none"
+>
+  <input type="hidden" name="profile" value="{{ item.profile }}">
+  <input type="hidden" name="title" value="{{ item.title }}">
+
+  <h2>{{ item.title }}</h2>
+  <p class="muted-hint">{{ item.profile }}{% if item.link %} · <a href="{{ item.link }}" target="_blank" rel="noopener noreferrer">source ↗</a>{% endif %}</p>
+
+  <div class="form-row">
+    <label>
+      Status
+      <select name="status">
+        {% for s in statuses %}
+          <option value="{{ s }}" {% if s == item.status %}selected{% endif %}>{{ status_labels.get(s, s) }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      Priority
+      <input type="number" name="priority" min="1" max="5" value="{{ item.priority if item.priority is not none else 3 }}">
+    </label>
+    <label>
+      Rating
+      <input type="number" name="rating" min="0" max="10" value="{{ item.rating if item.rating is not none else '' }}">
+    </label>
+  </div>
+
+  {% if section == 'shows' %}
+    <div class="form-row">
+      <label>Season <input type="number" name="current_season" min="0" value="{{ item.current_season if item.current_season is not none else 1 }}"></label>
+      <label>Episode <input type="number" name="current_episode" min="0" value="{{ item.current_episode if item.current_episode is not none else 0 }}"></label>
+      <label>Total eps <input type="number" name="total_episodes" min="0" value="{{ item.total_episodes if item.total_episodes is not none else '' }}"></label>
+    </div>
+  {% endif %}
+
+  <div class="form-row">
+    <label>Platform <input type="text" name="platform" value="{{ item.platform or '' }}"></label>
+    <label>Genre <input type="text" name="genre" value="{{ item.genre or '' }}"></label>
+  </div>
+
+  <label>
+    Tags <small class="muted-hint">(comma-separated)</small>
+    <input type="text" name="tags" value="{{ item.tags | join(', ') }}">
+  </label>
+
+  <label>
+    Notes
+    <textarea name="notes" rows="3">{{ item.notes or '' }}</textarea>
+  </label>
+
+  <div class="form-actions">
+    <button type="button" class="btn btn-ghost" data-close-modal>Cancel</button>
+    <button type="submit" class="btn btn-primary">Save</button>
+  </div>
+</form>

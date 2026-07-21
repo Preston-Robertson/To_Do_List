@@ -14,3 +14,9 @@ sqlalchemy==2.0.34
 psycopg[binary]==3.2.1
 python-multipart==0.0.9
 httpx==0.27.2
+
+# Game'N'Watch integration (reads/writes the bot's Google Sheet). Optional at
+# runtime — gnw.py degrades gracefully if these are missing — but installed so
+# the Games/Shows tabs work out of the box.
+gspread==6.1.2
+google-auth==2.34.0

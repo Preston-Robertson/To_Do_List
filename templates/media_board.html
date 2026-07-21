@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="kanban-page">
+  <section class="board-header board-header-tasks">
+    <h1>{{ page_title }}</h1>
+
+    {% if not disabled_reason %}
+      {# Profile filter — plain GET form so the URL (and refreshes) keep it. #}
+      <form method="get" action="/{{ section }}" class="year-picker">
+        <label>Profile
+          <select name="profile" onchange="this.form.submit()">
+            <option value="" {% if not profile %}selected{% endif %}>All profiles</option>
+            {% for p in profiles %}
+              <option value="{{ p }}" {% if p == profile %}selected{% endif %}>{{ p }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </form>
+
+      <button
+        type="button"
+        class="btn btn-primary"
+        hx-post="/gnw/{{ section }}/pick"
+        hx-target="#modal-body"
+        hx-vals='{"profile": {{ profile|tojson }}}'
+        onclick="openModal()"
+        title="Weighted random pick from your backlog"
+      >🎲 Surprise me</button>
+    {% endif %}
+  </section>
+
+  {% if disabled_reason %}
+    <div class="gnw-notice">
+      <h2>Games &amp; Shows aren’t configured yet</h2>
+      <p>This tab reads your <strong>Game’N’Watch</strong> Google Sheet. To turn it on:</p>
+      <ol>
+        <li>Copy the bot’s <code>credentials.json</code> onto this host (e.g. <code>/etc/luigi-web-gnw.json</code>).</li>
+        <li>In <a href="/admin">Admin → Environment file</a>, set <code>LUIGI_WEB_GNW_SHEET_ID</code> (the id from the sheet URL) and <code>LUIGI_WEB_GNW_CREDS_FILE</code> (the path above).</li>
+        <li>Restart the service.</li>
+      </ol>
+      <p class="muted-hint">Current status: {{ disabled_reason }}</p>
+    </div>
+  {% else %}
+    <section class="kanban" id="media-board">
+      {% for status in statuses %}
+        <div class="kanban-column" data-status="{{ status }}">
+          <header class="kanban-column-header">
+            <span class="kanban-column-title">{{ status_labels.get(status, status) }}</span>
+            <span class="kanban-column-count">{{ columns[status]|length }}</span>
+          </header>
+          <div class="kanban-column-body">
+            {% for item in columns[status] %}
+              {% include "partials/media_card.html" %}
+            {% else %}
+              <p class="empty empty-sm">—</p>
+            {% endfor %}
+          </div>
+        </div>
+      {% endfor %}
+    </section>
+  {% endif %}
+</div>
+{% endblock %}

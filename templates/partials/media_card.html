@@ -1,0 +1,62 @@
+{# One game/show card. Expects: item (dict from gnw._row_to_item), section,
+   status_labels. Status changes + edit both trigger a full HX-Refresh so the
+   card re-buckets into the right column. #}
+<article class="media-card">
+  {% if item.cover_url %}
+    <div class="media-cover">
+      <img src="{{ item.cover_url }}" alt="" loading="lazy" referrerpolicy="no-referrer">
+    </div>
+  {% endif %}
+
+  <div class="media-body">
+    <h3 class="media-title" title="{{ item.title }}">
+      {% if item.link %}
+        <a href="{{ item.link }}" target="_blank" rel="noopener noreferrer">{{ item.title }}</a>
+      {% else %}
+        {{ item.title }}
+      {% endif %}
+    </h3>
+
+    <div class="media-meta">
+      <span class="chip chip-muted" title="Profile">{{ item.profile }}</span>
+      {% if item.priority %}<span class="chip" title="Priority">P{{ item.priority }}</span>{% endif %}
+      {% if item.rating is not none %}<span class="chip chip-streak" title="Rating">★ {{ item.rating }}/10</span>{% endif %}
+      {% if section == 'games' %}
+        {% if item.platform %}<span class="chip">{{ item.platform }}</span>{% endif %}
+        {% if item.is_multiplayer %}<span class="chip chip-muted">MP</span>{% endif %}
+        {% if item.price %}<span class="chip chip-muted">{{ item.price }}</span>{% endif %}
+      {% else %}
+        {% if item.genre %}<span class="chip">{{ item.genre }}</span>{% endif %}
+        <span class="chip chip-muted" title="Progress">
+          S{{ item.current_season or 1 }} · E{{ item.current_episode or 0 }}{% if item.total_episodes %}/{{ item.total_episodes }}{% endif %}
+        </span>
+      {% endif %}
+    </div>
+
+    {% for t in item.tags %}<span class="chip chip-tag">{{ t }}</span>{% endfor %}
+
+    <div class="media-actions">
+      <select
+        class="filter-select media-status"
+        aria-label="Status"
+        name="status"
+        hx-post="/gnw/{{ section }}/status"
+        hx-trigger="change"
+        hx-swap="none"
+        hx-vals='{"profile": {{ item.profile|tojson }}, "title": {{ item.title|tojson }}}'
+      >
+        {% for s in (['backlog','playing','completed','dropped'] if section == 'games' else ['backlog','watching','on_hold','completed','dropped']) %}
+          <option value="{{ s }}" {% if s == item.status %}selected{% endif %}>{{ status_labels.get(s, s) }}</option>
+        {% endfor %}
+      </select>
+
+      <button
+        type="button"
+        class="btn btn-tiny"
+        hx-get="/gnw/{{ section }}/edit?profile={{ item.profile | urlencode }}&title={{ item.title | urlencode }}"
+        hx-target="#modal-body"
+        onclick="openModal()"
+      >Edit</button>
+    </div>
+  </div>
+</article>

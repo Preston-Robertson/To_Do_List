@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{{ page_title }} · LuigiBot</title>
   <link rel="stylesheet" href="/static/css/app.css?v={{ asset_version }}">
-  <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
-  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js" defer></script>
+  <script src="/static/js/vendor/htmx.min.js?v={{ asset_version }}" defer></script>
+  <script src="/static/js/vendor/Sortable.min.js?v={{ asset_version }}" defer></script>
   <script src="/static/js/app.js?v={{ asset_version }}" defer></script>
 </head>
 <body>
@@ -19,6 +19,8 @@
       <a href="/projects"    class="tab {% if active_nav == 'projects' %}active{% endif %}">Projects</a>
       <a href="/discipline"  class="tab {% if active_nav == 'discipline' %}active{% endif %}">Discipline</a>
       <a href="/follow-ups"  class="tab {% if active_nav == 'follow-ups' %}active{% endif %}">Follow-ups</a>
+      <a href="/games"       class="tab {% if active_nav == 'games' %}active{% endif %}">Games</a>
+      <a href="/shows"       class="tab {% if active_nav == 'shows' %}active{% endif %}">Shows</a>
       <a href="/admin"       class="tab {% if active_nav == 'admin' %}active{% endif %}">Admin</a>
     </nav>
     <form method="post" action="/logout" class="logout">

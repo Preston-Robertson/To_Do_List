@@ -83,6 +83,70 @@
 
   <article class="widget widget-full">
     <header class="widget-header">
+      <h2>Game’N’Watch credentials</h2>
+      {% if gnw.enabled %}
+        <span class="chip">connected</span>
+      {% elif gnw.exists %}
+        <span class="chip chip-muted">key saved</span>
+      {% else %}
+        <span class="chip chip-muted">not set</span>
+      {% endif %}
+    </header>
+    <div class="widget-body">
+      <p class="muted-hint">
+        Paste the Google <strong>service-account</strong>
+        <code>credentials.json</code> below to enable the
+        <a href="/games">Games</a> / <a href="/shows">Shows</a> tabs — no need
+        to SSH into the host. It’s written to
+        <code>{{ gnw.path }}</code> (mode <code>600</code>) and applied live.
+      </p>
+      <dl class="kv">
+        <dt>Status</dt>
+        <dd>
+          {% if gnw.enabled %}<code>connected</code>
+          {% elif gnw.exists and not gnw.sheet_id_set %}<code>key saved — Sheet ID still needed</code>
+          {% elif gnw.exists %}<code>{{ gnw.reason }}</code>
+          {% else %}<code>no key saved yet</code>{% endif %}
+        </dd>
+        <dt>Service account</dt>
+        <dd><code>{{ gnw.client_email or '—' }}</code></dd>
+        <dt>Sheet ID</dt>
+        <dd><code>{{ 'set' if gnw.sheet_id_set else 'not set (add LUIGI_WEB_GNW_SHEET_ID below)' }}</code></dd>
+      </dl>
+
+      <form
+        hx-post="/admin/gnw-credentials"
+        hx-target="#gnw-cred-result"
+        hx-swap="innerHTML"
+        hx-indicator="#gnw-cred-spinner"
+      >
+        <label class="env-label" for="gnw-credentials">
+          <span class="env-desc">Contents of <code>credentials.json</code></span>
+        </label>
+        <textarea
+          id="gnw-credentials"
+          name="credentials"
+          rows="8"
+          spellcheck="false"
+          autocomplete="off"
+          placeholder='{&#10;  "type": "service_account",&#10;  "project_id": "…",&#10;  "private_key": "-----BEGIN PRIVATE KEY-----…",&#10;  "client_email": "…@….iam.gserviceaccount.com",&#10;  …&#10;}'
+          style="width:100%;font-family:monospace;font-size:12px;"
+        ></textarea>
+        <div class="form-actions" style="border-top:none;justify-content:flex-start;padding-top:8px;">
+          <button
+            type="submit"
+            class="btn btn-primary"
+            hx-confirm="Save these service-account credentials to disk?"
+          >Save credentials</button>
+          <span id="gnw-cred-spinner" class="htmx-indicator">saving…</span>
+        </div>
+        <div id="gnw-cred-result" class="admin-result"></div>
+      </form>
+    </div>
+  </article>
+
+  <article class="widget widget-full">
+    <header class="widget-header">
       <h2>Environment file</h2>
       <span class="chip chip-muted"><code>{{ env_file_path }}</code></span>
     </header>

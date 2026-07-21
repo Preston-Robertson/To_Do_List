@@ -68,6 +68,9 @@ KNOWN_KEYS: tuple[EnvKey, ...] = (
     EnvKey("LUIGI_WEB_LLM_MODEL",              "LLM model",     "e.g. openai/gpt-4o-mini, llama3.1:8b.",           "LLM"),
     EnvKey("LUIGI_WEB_LLM_TIMEOUT",            "LLM timeout",   "HTTP timeout in seconds (default 60).",           "LLM", input_type="number"),
     EnvKey("LUIGI_WEB_LLM_MAX_TOOL_ITERATIONS","LLM tool cap",  "Max tool round-trips per user turn (default 5).", "LLM", input_type="number"),
+    # Game'N'Watch (Google Sheets) -----------------------------------------
+    EnvKey("LUIGI_WEB_GNW_SHEET_ID",   "Game'N'Watch Sheet ID", "Google Sheet ID the bot uses (from the sheet URL). Blank disables the Games/Shows tabs.", "Game'N'Watch"),
+    EnvKey("LUIGI_WEB_GNW_CREDS_FILE", "Service-account creds", "Path to the credentials.json. Leave BLANK to use the app-managed path you can paste into from the Game'N'Watch credentials panel above.", "Game'N'Watch"),
 )
 
 _KEYS_BY_NAME: dict[str, EnvKey] = {k.name: k for k in KNOWN_KEYS}

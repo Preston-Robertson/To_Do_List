@@ -132,8 +132,11 @@ Other views:
 * **Discipline** — one GitHub-style yearly heatmap per discipline item, with a
   year-picker dropdown. Click any day cell to mark/unmark.
 * **Follow-ups** — plain table with inline edit.
+* **Games** / **Shows** — Kanban-by-status boards backed by the **Game'N'Watch**
+  Google Sheet (see *Game'N'Watch integration* below). Profile selector, per-card
+  status change + edit modal, and a weighted “Surprise me” random picker.
 * **Admin** — runtime info + self-update / restart controls + JSON backup
-  export (see below).
+  export + a paste-in Game'N'Watch credentials panel (see below).
 
 ### Future UI directions (noted for later)
 
@@ -233,6 +236,8 @@ of `LUIGI_WEB_UI_TOKEN` to get a session cookie.
 | `LUIGI_WEB_LLM_MODEL` | Default `openai/gpt-4o-mini` |
 | `LUIGI_WEB_LLM_TIMEOUT` | HTTP timeout in seconds (default `60`) |
 | `LUIGI_WEB_LLM_MAX_TOOL_ITERATIONS` | Cap on tool round-trips per message (default `5`) |
+| `LUIGI_WEB_GNW_SHEET_ID` | Game'N'Watch Google Sheet ID (from the sheet URL). Blank hides the Games/Shows tabs |
+| `LUIGI_WEB_GNW_CREDS_FILE` | Path to the service-account `credentials.json`. Leave **blank** to use the app-managed path (`<repo>/gnw-credentials.json`) that the Admin page writes to |
 
 Secrets **must** live outside the repo — in `/etc/luigi-web.env` on the LXC
 (mode `640 root:luigi-web`) or in `.env` locally. `.gitignore` blocks `.env`.
@@ -273,6 +278,16 @@ Authenticated (session cookie, or `?token=` / `Authorization: Bearer`):
 * `GET  /follow-ups`      → table
 * `POST /follow-ups`, `GET /follow-ups/{uuid}/edit`, `POST /follow-ups/{uuid}`,
   `POST /follow-ups/{uuid}/delete`
+* `GET  /games`, `GET /shows` → Game'N'Watch Kanban board (optional
+  `?profile=NAME`). Renders a “not configured” notice when the sheet id /
+  credentials are missing.
+* `POST /gnw/{section}/status` → change an item's status (form: `profile`,
+  `title`, `status`); writes the sheet, returns `204 + HX-Refresh`
+* `GET  /gnw/{section}/edit?profile=&title=` → modal edit form
+* `POST /gnw/{section}/update` → write editable fields back to the sheet
+* `POST /gnw/{section}/pick`   → weighted random pick partial
+* `POST /admin/gnw-credentials` → validate + save a pasted service-account
+  `credentials.json` to disk (mode `600`) and hot-reload the Sheets client
 * `GET  /admin`           → runtime info + update / restart controls +
   backup export
 * `GET  /admin/backup`    → read-only JSON dump of `tasks`,
@@ -475,3 +490,61 @@ in book-title capitalization (`Fix Kitchen Sink`, not `fix kitchen sink`).
 field (via `db.find_existing_categorical` against the frozen
 `_CATEGORICAL_FIELDS` set) so the agent reuses your existing category /
 group names instead of coining a new casing variant.
+
+---
+
+## Game'N'Watch integration (Games & Shows)
+
+Surfaces the [Game'N'Watch](https://github.com/Preston-Robertson/Game-N-Watch)
+Discord bot's games/shows backlog inside this GUI. **The bot stores its data in
+Google Sheets, not Postgres**, so this is a separate live read/write connection
+to that spreadsheet — it does not touch `luigi_todo`.
+
+**Data model** (`gnw.py`): reads/writes the bot's two worksheets, `Games` and
+`Shows` (23 columns each). Columns are addressed by **header name** (row 1),
+never by position, so the bot appending new columns never breaks the GUI. The
+row key is `(Profile, Title)`, case-insensitive. Statuses: games =
+`backlog / playing / completed / dropped`; shows =
+`backlog / watching / on_hold / completed / dropped`. List reads are cached
+~20 s and invalidated on write, keeping the boards snappy and well under the
+Sheets API quota. When a status changes to *playing/watching* or *completed*,
+the matching `Date Started` / `Date Completed` cell is stamped (only if empty),
+mirroring the bot.
+
+**Optional + graceful.** If `gspread`/`google-auth` aren't installed or the
+sheet id / credentials aren't set, `gnw.disabled_reason()` drives a friendly
+"not configured" panel instead of an error. `gspread==6.1.2` and
+`google-auth==2.34.0` are in `requirements.txt`, so a restart (which re-runs
+`pip install`) installs them automatically.
+
+**Features in the GUI:**
+
+* **Games** / **Shows** tabs — Kanban board bucketed by status, with a
+  **profile selector** (All profiles, or one) that persists in the URL.
+* Each card: cover art, external link (Steam / TVMaze / AniList / YouTube),
+  priority, rating, platform/genre, tags, and (for shows) `S…·E…/total`
+  progress. A per-card **status dropdown** writes straight to the sheet; an
+  **Edit** button opens a modal for status, priority, rating, notes,
+  platform, genre, tags, and (shows) season/episode/total.
+* **🎲 Surprise me** — priority-weighted random pick (priority 5 is 5× as
+  likely as priority 1), same algorithm as the bot's `/random`.
+* Home widgets: **Currently Playing** and **Currently Watching**.
+
+**Configuration.** Two env keys, both editable from **Admin**:
+
+| Var | Purpose |
+|---|---|
+| `LUIGI_WEB_GNW_SHEET_ID` | The sheet id from its URL (`…/spreadsheets/d/<THIS>/edit`). Blank hides the tabs. |
+| `LUIGI_WEB_GNW_CREDS_FILE` | Path to the service-account `credentials.json`. **Leave blank** to use the app-managed path `<repo>/gnw-credentials.json`. |
+
+**Credentials without SSH.** The **Admin → "Game'N'Watch credentials"** panel
+takes the service-account `credentials.json` as pasted text, validates it
+(`type: service_account` + `client_email` / `private_key` / `project_id`),
+writes it atomically at mode `600`, and hot-reloads the Sheets client — no host
+file placement, no restart. It defaults to `<repo>/gnw-credentials.json`
+because the systemd unit's `ProtectSystem=strict` + `ReadWritePaths=/opt/luigi-web`
+make `/etc` read-only to the service, but `/opt/luigi-web` writable. That file
+is git-ignored. Reuse the **bot's** service account (it already has Editor
+access to the sheet); the panel reminds you to Share the sheet with the
+account email if you ever use a new one.
+

@@ -1,0 +1,43 @@
+{# Result of a weighted random pick. Expects: section, item (may be None),
+   status_labels. Loaded into #modal-body. #}
+{% if not item %}
+  <div class="media-pick">
+    <h2>Nothing to pick 🤔</h2>
+    <p class="muted-hint">No backlog or in-progress {{ section }} for this profile.</p>
+    <div class="form-actions">
+      <button type="button" class="btn btn-ghost" data-close-modal>Close</button>
+    </div>
+  </div>
+{% else %}
+  <div class="media-pick">
+    <h2>🎲 {{ 'Play' if section == 'games' else 'Watch' }} this</h2>
+    {% if item.cover_url %}
+      <div class="media-pick-cover">
+        <img src="{{ item.cover_url }}" alt="" referrerpolicy="no-referrer">
+      </div>
+    {% endif %}
+    <h3 class="media-pick-title">
+      {% if item.link %}
+        <a href="{{ item.link }}" target="_blank" rel="noopener noreferrer">{{ item.title }}</a>
+      {% else %}{{ item.title }}{% endif %}
+    </h3>
+    <div class="media-meta">
+      <span class="chip chip-muted">{{ item.profile }}</span>
+      <span class="chip">{{ status_labels.get(item.status, item.status) }}</span>
+      {% if item.priority %}<span class="chip">P{{ item.priority }}</span>{% endif %}
+      {% if section == 'games' and item.platform %}<span class="chip">{{ item.platform }}</span>{% endif %}
+      {% if section == 'shows' and item.genre %}<span class="chip">{{ item.genre }}</span>{% endif %}
+    </div>
+
+    <div class="form-actions">
+      <button type="button" class="btn btn-ghost" data-close-modal>Close</button>
+      <button
+        type="button"
+        class="btn btn-primary"
+        hx-post="/gnw/{{ section }}/pick"
+        hx-target="#modal-body"
+        hx-vals='{"profile": {{ item.profile|tojson }}}'
+      >Pick again</button>
+    </div>
+  </div>
+{% endif %}

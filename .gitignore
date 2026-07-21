@@ -3,6 +3,10 @@
 *.env
 !.env.example
 
+# Game'N'Watch service-account key (written by the Admin page). Never commit.
+gnw-credentials.json
+*credentials*.json
+
 # Python
 __pycache__/
 *.py[cod]

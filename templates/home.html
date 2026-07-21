@@ -49,7 +49,10 @@
       <label><input type="checkbox" class="widget-toggle" data-widget="upcoming" checked> Upcoming (7 days)</label>
       <label><input type="checkbox" class="widget-toggle" data-widget="open-tasks" checked> Open tasks</label>
       <label><input type="checkbox" class="widget-toggle" data-widget="disc-pending" checked> Discipline (today)</label>
-      <label><input type="checkbox" class="widget-toggle" data-widget="disc-streaks" checked> Discipline streaks</label>
+      {% if gnw_enabled %}
+      <label><input type="checkbox" class="widget-toggle" data-widget="gnw-playing" checked> Currently playing</label>
+      <label><input type="checkbox" class="widget-toggle" data-widget="gnw-watching" checked> Currently watching</label>
+      {% endif %}      <label><input type="checkbox" class="widget-toggle" data-widget="disc-streaks" checked> Discipline streaks</label>
       <label><input type="checkbox" class="widget-toggle" data-widget="follow-ups" checked> Follow-ups</label>
       <label><input type="checkbox" class="widget-toggle" data-widget="recent-done" checked> Recent completions</label>
       <label><input type="checkbox" class="widget-toggle" data-widget="disc-week" checked> Discipline this week</label>
@@ -207,6 +210,62 @@
       {% endif %}
     </div>
   </article>
+
+  {% if gnw_enabled %}
+  <!-- Widget: Currently Playing (Game'N'Watch) -->
+  <article class="widget" data-widget="gnw-playing">
+    <header class="widget-header">
+      <h2>Currently Playing</h2>
+      <span class="widget-count">{{ gnw_playing|length }}</span>
+    </header>
+    <div class="widget-body scroll-y">
+      {% if gnw_playing %}
+        <ul class="widget-list">
+          {% for g in gnw_playing %}
+            <li class="widget-row">
+              <span class="widget-row-title" title="{{ g.title }}">
+                {% if g.link %}<a href="{{ g.link }}" target="_blank" rel="noopener noreferrer">{{ g.title }}</a>{% else %}{{ g.title }}{% endif %}
+              </span>
+              <span class="widget-row-meta">
+                <span class="chip chip-muted">{{ g.profile }}</span>
+                {% if g.platform %}<span class="chip">{{ g.platform }}</span>{% endif %}
+              </span>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="empty"><a href="/games">Start a game →</a></p>
+      {% endif %}
+    </div>
+  </article>
+
+  <!-- Widget: Currently Watching (Game'N'Watch) -->
+  <article class="widget" data-widget="gnw-watching">
+    <header class="widget-header">
+      <h2>Currently Watching</h2>
+      <span class="widget-count">{{ gnw_watching|length }}</span>
+    </header>
+    <div class="widget-body scroll-y">
+      {% if gnw_watching %}
+        <ul class="widget-list">
+          {% for s in gnw_watching %}
+            <li class="widget-row">
+              <span class="widget-row-title" title="{{ s.title }}">
+                {% if s.link %}<a href="{{ s.link }}" target="_blank" rel="noopener noreferrer">{{ s.title }}</a>{% else %}{{ s.title }}{% endif %}
+              </span>
+              <span class="widget-row-meta">
+                <span class="chip chip-muted">{{ s.profile }}</span>
+                <span class="chip">S{{ s.current_season or 1 }}·E{{ s.current_episode or 0 }}{% if s.total_episodes %}/{{ s.total_episodes }}{% endif %}</span>
+              </span>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="empty"><a href="/shows">Start a show →</a></p>
+      {% endif %}
+    </div>
+  </article>
+  {% endif %}
 
   <!-- Widget: Discipline streaks -->
   <article class="widget" data-widget="disc-streaks">
