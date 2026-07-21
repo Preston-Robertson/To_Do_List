@@ -17,6 +17,7 @@ win, so this never clobbers a live config.
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import traceback
 from pathlib import Path
@@ -35,9 +36,11 @@ def _load_env_file() -> str | None:
         if not path:
             continue
         p = Path(path)
-        if not p.is_file():
+        try:
+            text_content = p.read_text(encoding="utf-8")
+        except OSError:
             continue
-        for raw in p.read_text(encoding="utf-8").splitlines():
+        for raw in text_content.splitlines():
             line = raw.strip()
             if not line or line.startswith("#") or "=" not in line:
                 continue
@@ -49,9 +52,36 @@ def _load_env_file() -> str | None:
     return None
 
 
+def _load_from_service_environ() -> str | None:
+    """Pull LUIGI_WEB_* vars from the running luigi-web service's process
+    environment (root-only: reads /proc/<pid>/environ). Lets this run with no
+    env setup at all, using the exact config the live app connects with."""
+    try:
+        pid = subprocess.check_output(
+            ["systemctl", "show", "-p", "MainPID", "--value", "luigi-web"],
+            text=True,
+        ).strip()
+    except Exception:
+        return None
+    if not pid or pid == "0":
+        return None
+    try:
+        raw = Path(f"/proc/{pid}/environ").read_bytes()
+    except OSError:
+        return None
+    for chunk in raw.split(b"\0"):
+        if not chunk or b"=" not in chunk:
+            continue
+        key, _, val = chunk.partition(b"=")
+        k = key.decode("utf-8", "replace")
+        if k.startswith("LUIGI_WEB_"):
+            os.environ.setdefault(k, val.decode("utf-8", "replace"))
+    return pid
+
+
 def main() -> int:
     used = _load_env_file()
-    print(f"→ env file: {used or '(none found — relying on current environment)'}")
+    print(f"→ env file: {used or '(none found)'}")
 
     # The non-secret PG vars are supplied to the systemd service via its
     # ``Environment=`` lines (see luigi-web.service), not necessarily the env
@@ -66,8 +96,15 @@ def main() -> int:
         os.environ.setdefault(key, default)
 
     if not os.environ.get("LUIGI_WEB_PG_PASSWORD"):
-        print("  ✖ LUIGI_WEB_PG_PASSWORD is not set. Run as a user that can read\n"
-              "    /etc/luigi-web.env (e.g. `sudo -u luigi-web ...`), or export it first.")
+        pid = _load_from_service_environ()
+        if pid:
+            print(f"→ pulled credentials from running luigi-web service (pid {pid})")
+
+    if not os.environ.get("LUIGI_WEB_PG_PASSWORD"):
+        print("  ✖ Could not find LUIGI_WEB_PG_PASSWORD.\n"
+              "    Run as root so I can read it from the running service:\n"
+              "      sudo /opt/luigi-web/.venv/bin/python "
+              "/opt/luigi-web/scripts/diag_discipline.py")
         return 1
 
     from sqlalchemy import text  # noqa: E402
