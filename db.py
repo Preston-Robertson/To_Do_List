@@ -656,6 +656,66 @@ def snooze_recurring(row_uuid: str, days: int) -> str | None:
     return _snooze_task_like("recurring_tasks", row_uuid, days)
 
 
+def reactivate_due_recurring(today: date | None = None) -> int:
+    """Bring completed recurring tasks back once they're due again.
+
+    ``reactivation_date`` computes *when* a completed recurring row should
+    next come due, but nothing acts on it — so completed recurring cards used
+    to stay parked in the Completed column forever. This sweep closes that
+    loop: for every completed recurring row whose ``reactivation_date`` is on
+    or before ``today``, it clears the completion so the card returns to its
+    board:
+
+      * ``completed``      -> 0
+      * ``completed_time`` -> NULL
+      * ``status``         -> ``'Not Started'``
+      * ``due_date``       -> the reactivation date (so the row surfaces in the
+                              overdue / upcoming widgets on the right day)
+
+    Returns the number of rows reactivated. Idempotent and safe to call on
+    every request: rows without a schedule, or whose next occurrence is still
+    in the future, are left untouched, and once reset a row no longer matches
+    the ``completed = 1`` filter.
+    """
+    today = today or date.today()
+    cols = _cols_for("recurring_tasks")
+    q = text(f"""
+        SELECT {", ".join(cols)}
+        FROM recurring_tasks
+        WHERE completed = 1 AND recurring = 1
+    """)
+    with get_engine().connect() as conn:
+        rows = _rows(conn.execute(q))
+
+    due: list[tuple[str, str]] = []
+    for row in rows:
+        next_iso = reactivation_date(row)
+        if not next_iso:
+            continue
+        try:
+            next_date = date.fromisoformat(next_iso)
+        except (ValueError, TypeError):
+            continue
+        if next_date <= today:
+            due.append((row["uuid"], next_iso))
+
+    if not due:
+        return 0
+
+    upd = text("""
+        UPDATE recurring_tasks
+        SET completed = 0,
+            completed_time = NULL,
+            status = 'Not Started',
+            due_date = :d
+        WHERE uuid = :u
+    """)
+    with get_engine().begin() as conn:
+        for row_uuid, next_iso in due:
+            conn.execute(upd, {"d": next_iso, "u": row_uuid})
+    return len(due)
+
+
 # --------------------------------------------------------------------------- #
 # discipline_list + discipline_completions
 # --------------------------------------------------------------------------- #
@@ -776,8 +836,8 @@ def delete_discipline(row_uuid: str) -> dict[str, Any] | None:
 def restore_discipline_row(snapshot: dict[str, Any]) -> None:
     """Reverse ``delete_discipline`` from its snapshot.
 
-    Idempotent: uses UPDATE-or-INSERT on ``discipline_list`` and
-    ``ON CONFLICT DO NOTHING`` on ``discipline_completions``, so calling this
+    Idempotent: uses UPDATE-or-INSERT on ``discipline_list`` and an
+    existence-guarded insert on ``discipline_completions``, so calling this
     twice (or after a partial recovery) leaves the same end state.
     """
     disc = snapshot.get("discipline") or {}
@@ -807,8 +867,11 @@ def restore_discipline_row(snapshot: dict[str, Any]) -> None:
             conn.execute(
                 text("""
                     INSERT INTO discipline_completions (task, catagory, completed_date, logged_at)
-                    VALUES (:t, :c, :d, :ts)
-                    ON CONFLICT (task, completed_date) DO NOTHING
+                    SELECT :t, :c, :d, :ts
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM discipline_completions
+                        WHERE task = :t AND completed_date = :d
+                    )
                 """),
                 {
                     "t": comp.get("task"),
@@ -836,11 +899,23 @@ def list_completions_for_year(year: int) -> dict[str, set[str]]:
 
 
 def mark_completion(task: str, catagory: str | None, day: str) -> None:
-    """Insert (task, day). Uses ON CONFLICT DO NOTHING so this is idempotent."""
+    """Record (task, day) as done. Idempotent.
+
+    Uses an existence-guarded INSERT rather than ``ON CONFLICT`` on purpose:
+    ``discipline_completions`` is owned by LuigiBot, and the web app can't
+    assume a unique constraint on exactly ``(task, completed_date)`` exists.
+    If it doesn't, an ``ON CONFLICT (task, completed_date)`` clause raises
+    "no unique or exclusion constraint matching…" and the mark is silently
+    lost. ``WHERE NOT EXISTS`` gives the same idempotency with no schema
+    assumption.
+    """
     q = text("""
         INSERT INTO discipline_completions (task, catagory, completed_date, logged_at)
-        VALUES (:t, :c, :d, :ts)
-        ON CONFLICT (task, completed_date) DO NOTHING
+        SELECT :t, :c, :d, :ts
+        WHERE NOT EXISTS (
+            SELECT 1 FROM discipline_completions
+            WHERE task = :t AND completed_date = :d
+        )
     """)
     with get_engine().begin() as conn:
         conn.execute(q, {"t": task, "c": catagory, "d": day, "ts": now_iso()})

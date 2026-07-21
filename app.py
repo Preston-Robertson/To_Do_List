@@ -12,6 +12,7 @@ import os
 import shlex
 import subprocess
 import sys
+import signal
 import threading
 import time
 from datetime import date, timedelta
@@ -107,6 +108,8 @@ def _startup_schema_check() -> None:
         # missing. Runs after the version check so we don't touch a
         # pre-v2 DB by mistake.
         db.ensure_web_columns()
+        # Catch up any recurring tasks that came due while the app was down.
+        _reactivate_recurring()
     except Exception as exc:  # pragma: no cover — surfaced via /healthz
         _STARTUP_SCHEMA["error"] = f"schema check failed: {exc}"
 
@@ -114,6 +117,16 @@ def _startup_schema_check() -> None:
 def _require_v2() -> None:
     if _STARTUP_SCHEMA["error"]:
         raise HTTPException(status_code=503, detail=_STARTUP_SCHEMA["error"])
+
+
+def _reactivate_recurring() -> None:
+    """Bring due recurring tasks back to their boards. Safe to call on every
+    read path — it's idempotent and only writes when something is actually
+    due. Swallows errors so a transient DB hiccup never blocks a page load."""
+    try:
+        db.reactivate_due_recurring()
+    except Exception:  # pragma: no cover — best-effort, never fatal to a GET
+        pass
 
 
 # --------------------------------------------------------------------------- #
@@ -248,6 +261,7 @@ def _kanban_columns(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]
 @app.get("/tasks", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 def tasks_page(request: Request):
     _require_v2()
+    _reactivate_recurring()
     rows = db.list_tasks()
     return templates.TemplateResponse(
         "tasks.html",
@@ -431,6 +445,7 @@ async def tasks_snooze(request: Request, row_uuid: str):
 @app.get("/recurring", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 def recurring_page(request: Request):
     _require_v2()
+    _reactivate_recurring()
     rows = db.list_recurring()
     return templates.TemplateResponse(
         "tasks.html",
@@ -1117,6 +1132,7 @@ def projects_page(request: Request):
 @app.get("/home", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 def home_page(request: Request):
     _require_v2()
+    _reactivate_recurring()
     today = date.today()
     monday = today - timedelta(days=today.weekday())
     open_tasks = db.list_open_tasks(limit=25)
@@ -1475,9 +1491,27 @@ def admin_update(request: Request):
 
 @app.post("/admin/restart", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 def admin_restart(request: Request):
-    """Exit the process; systemd (Restart=always) brings it back with new code."""
+    """Exit the process; systemd (Restart=always) brings it back with new code.
+
+    ``os._exit(0)`` on its own only kills the *current* uvicorn worker — the
+    other worker(s) keep serving stale bytecode after a code pull, which
+    makes new-code and old-code behaviour appear "randomly". So we signal
+    our parent (the uvicorn master) first, which cleanly reaps every worker
+    and lets systemd's ``Restart=always`` bring the whole tree back on the
+    new code. If we're somehow not a worker (dev mode, single-process), the
+    ``os._exit`` fallback still gets us a fresh process.
+    """
     def _exit_soon() -> None:
         time.sleep(0.6)
+        try:
+            ppid = os.getppid()
+            # ppid == 1 means our parent is already init/systemd (we ARE
+            # the top process), so killing it would take out unrelated
+            # services. Fall through to _exit in that case.
+            if ppid > 1:
+                os.kill(ppid, signal.SIGTERM)
+        except OSError:
+            pass
         os._exit(0)
 
     threading.Thread(target=_exit_soon, daemon=True).start()
