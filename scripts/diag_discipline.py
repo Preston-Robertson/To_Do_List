@@ -53,6 +53,23 @@ def main() -> int:
     used = _load_env_file()
     print(f"→ env file: {used or '(none found — relying on current environment)'}")
 
+    # The non-secret PG vars are supplied to the systemd service via its
+    # ``Environment=`` lines (see luigi-web.service), not necessarily the env
+    # file. Mirror those known defaults so this runs standalone; only the
+    # password/token genuinely have to come from /etc/luigi-web.env.
+    for key, default in (
+        ("LUIGI_WEB_PG_HOST", "10.0.0.202"),
+        ("LUIGI_WEB_PG_PORT", "5432"),
+        ("LUIGI_WEB_PG_DB", "luigi_todo"),
+        ("LUIGI_WEB_PG_USER", "luigi_web"),
+    ):
+        os.environ.setdefault(key, default)
+
+    if not os.environ.get("LUIGI_WEB_PG_PASSWORD"):
+        print("  ✖ LUIGI_WEB_PG_PASSWORD is not set. Run as a user that can read\n"
+              "    /etc/luigi-web.env (e.g. `sudo -u luigi-web ...`), or export it first.")
+        return 1
+
     from sqlalchemy import text  # noqa: E402
     import db  # noqa: E402
 
