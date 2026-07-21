@@ -189,7 +189,58 @@ def main() -> int:
         trans.rollback()
         conn.close()
     print("\n(dry run rolled back — no data was written.)")
+
+    _http_self_test(disc.task, disc.catagory, today)
     return 0
+
+
+def _http_self_test(task: str, catagory: str | None, day: str) -> None:
+    """Hit the LIVE running endpoint the way the browser does, so we exercise
+    the FastAPI route + Jinja template (not just the DB). This is the part the
+    DB dry-run can't see. NOTE: on success this really marks ``day`` done for
+    ``task`` — which is the intended action anyway."""
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    port = os.environ.get("LUIGI_WEB_PORT", "8080")
+    token = os.environ.get("LUIGI_WEB_UI_TOKEN", "")
+    print(f"\n=== live endpoint POST /discipline/toggle (127.0.0.1:{port}) ===")
+    if not token:
+        print("  ✖ no LUIGI_WEB_UI_TOKEN in env; skipping live test.")
+        return
+    url = f"http://127.0.0.1:{port}/discipline/toggle?token={urllib.parse.quote(token)}"
+    data = urllib.parse.urlencode({
+        "task": task, "catagory": catagory or "", "day": day, "action": "mark",
+    }).encode()
+    req = urllib.request.Request(url, data=data, method="POST")
+    status = None
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            status = resp.status
+            body = resp.read().decode("utf-8", "replace")
+            print(f"  ✓ status={status}")
+            print("  body (first 800 chars):")
+            print("    " + body[:800].replace("\n", "\n    "))
+    except urllib.error.HTTPError as e:
+        status = e.code
+        body = e.read().decode("utf-8", "replace")
+        print(f"  ✖ HTTP {e.code}")
+        print("  body (first 800 chars):")
+        print("    " + body[:800].replace("\n", "\n    "))
+    except Exception as e:  # noqa: BLE001
+        print(f"  ✖ request failed: {e}")
+
+    if status != 200:
+        print("\n=== last luigi-web log lines (server-side traceback, if any) ===")
+        try:
+            out = subprocess.check_output(
+                ["journalctl", "-u", "luigi-web", "-n", "40", "--no-pager"],
+                text=True, stderr=subprocess.STDOUT,
+            )
+            print("    " + out.replace("\n", "\n    "))
+        except Exception as e:  # noqa: BLE001
+            print(f"  (couldn't read journal: {e} — run as root to see it)")
 
 
 if __name__ == "__main__":

@@ -641,7 +641,7 @@ main { padding: 20px; }
   flex: 1 1 auto;
   min-height: 0;
 }
-.scroll-y { overflow-y: auto; }
+.scroll-y { overflow-y: auto; max-height: min(320px, 45vh); }
 .scroll-y::-webkit-scrollbar { width: 8px; }
 .scroll-y::-webkit-scrollbar-track { background: transparent; }
 .scroll-y::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
