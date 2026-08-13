@@ -863,6 +863,16 @@ _DISCIPLINE_COLUMNS = (
 )
 
 
+def _discipline_frequency(value: Any) -> int:
+    try:
+        frequency = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("frequency_per_week must be an integer from 1 to 7") from exc
+    if not 1 <= frequency <= 7:
+        raise ValueError("frequency_per_week must be between 1 and 7")
+    return frequency
+
+
 def list_disciplines(include_inactive: bool = True) -> list[dict[str, Any]]:
     where = "" if include_inactive else "WHERE active = 1"
     q = text(f"""
@@ -891,7 +901,7 @@ def create_discipline(data: dict[str, Any]) -> str:
         "uuid": row_uuid,
         "task": task,
         "catagory": data.get("catagory") or None,
-        "frequency_per_week": int(data.get("frequency_per_week") or 0),
+        "frequency_per_week": _discipline_frequency(data.get("frequency_per_week") or 1),
         "active": _to_int_bool(data.get("active", 1)),
         "current_streak": 0,
     }
@@ -911,7 +921,7 @@ def update_discipline(row_uuid: str, data: dict[str, Any]) -> None:
             continue
         val = data[field]
         if field == "frequency_per_week":
-            val = int(val or 0)
+            val = _discipline_frequency(val)
         elif field == "active":
             val = _to_int_bool(val)
         elif isinstance(val, str) and val == "":
@@ -1076,6 +1086,19 @@ def list_completions_for_year(year: int) -> dict[str, set[str]]:
             day = (raw.isoformat() if hasattr(raw, "isoformat") else str(raw))[:10]
             result.setdefault(row.task, set()).add(day)
     return result
+
+
+def list_completion_tasks_for_day(day: str) -> set[str]:
+    """Task names with a persisted completion on one bare ISO date."""
+    with get_engine().connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT task FROM discipline_completions "
+                "WHERE completed_date = :day"
+            ),
+            {"day": str(day)[:10]},
+        ).all()
+    return {str(row.task) for row in rows if row.task}
 
 
 def completion_exists(task: str, day: str) -> bool:

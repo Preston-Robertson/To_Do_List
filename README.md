@@ -208,8 +208,10 @@ Other views:
   the database role cannot add the optional column. Archived rows are omitted
   from Tasks, dashboard task lists, Calendar, Projects, chat task search, and
   recurring reactivation until restored.
-* **Discipline** — one GitHub-style yearly heatmap per discipline item, with a
-  year-picker dropdown. Click any day cell to mark/unmark.
+* **Discipline** — each active item has an explicit UUID-backed **Done today** /
+  **Undo today** action, plus a GitHub-style yearly heatmap for marking or
+  clearing any past date. The server resolves the canonical task/category by
+  UUID and verifies the legacy completion write before refreshing the page.
 * **Follow-ups** — rule table at `/follow-ups`, also loaded into the Tasks
   modal through the **Follow-up rules** button.
 * **Games** / **Shows** — Kanban-by-status boards backed by the **Game'N'Watch**
@@ -695,9 +697,9 @@ sheet id / credentials aren't set, `gnw.disabled_reason()` drives a friendly
   fallback when no result matches.
 * Each card: cover art, external link (Steam / TVMaze / AniList / YouTube),
   priority, rating, platform/genre, tags, and (for shows) `S…·E…/total`
-  progress. Game cards expose a prominent inline **Your rating** selector
-  (`0–10`) that writes directly to the Sheet. A per-card **status dropdown**
-  also writes straight to the sheet; an
+  progress. Game and show cards expose a prominent inline **Your rating**
+  selector (`0–10`) that writes directly to the Sheet. A per-card **status
+  menu** also writes straight to the sheet; an
   **Edit** button opens a modal for status, priority, rating, notes,
   platform, genre, tags, and (shows) season/episode/total.
 * **🎲 Surprise me** — priority-weighted random pick (priority 5 is 5× as

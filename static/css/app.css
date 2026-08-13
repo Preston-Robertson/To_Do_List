@@ -1156,7 +1156,21 @@ kbd {
   flex-wrap: wrap;
 }
 .discipline-title h2 { margin: 0; font-size: 15px; font-weight: 600; }
-.discipline-actions { display: flex; gap: 4px; }
+.discipline-actions { display: flex; gap: 5px; flex-wrap: wrap; justify-content: flex-end; }
+.discipline-today-btn:not(.btn-primary) {
+  border-color: rgba(54,179,126,.38);
+  background: rgba(54,179,126,.1);
+  color: #7ed7ad;
+}
+.discipline-today-btn:not(.btn-primary):hover {
+  border-color: var(--success);
+  background: rgba(54,179,126,.16);
+}
+@media (max-width: 700px) {
+  .discipline-header { align-items: flex-start; flex-direction: column; }
+  .discipline-actions { width: 100%; justify-content: flex-start; }
+  .discipline-today-btn { min-height: 34px; }
+}
 
 .heatmap {
   display: flex;
@@ -2789,8 +2803,8 @@ kbd {
 }
 .media-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .media-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; position: relative; }
-.media-body-game .media-title,
-.media-body-game .media-meta { padding-right: 112px; }
+.media-body-rated .media-title,
+.media-body-rated .media-meta { padding-right: 112px; }
 .media-rating-box {
   position: absolute;
   top: 8px;

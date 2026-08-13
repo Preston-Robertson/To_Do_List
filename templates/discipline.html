@@ -1,7 +1,10 @@
 {% extends "base.html" %}
 {% block content %}
 <section class="board-header">
-  <h1>{{ page_title }}</h1>
+  <div class="page-heading">
+    <h1>{{ page_title }}</h1>
+    <span class="muted-hint">Use Done today for today, or select any past heatmap day.</span>
+  </div>
 
   <form method="get" action="/discipline" class="year-picker">
     <label>Year
@@ -33,6 +36,15 @@
           {% if not d.active %}<span class="chip chip-muted">inactive</span>{% endif %}
         </div>
         <div class="discipline-actions">
+          {% if d.active %}
+            <button
+              class="btn discipline-today-btn{% if not d._today_done %} btn-primary{% endif %}"
+              hx-post="/discipline/{{ d.uuid }}/today"
+              hx-vals='{"action":"{{ 'unmark' if d._today_done else 'mark' }}"}'
+              hx-swap="none"
+              title="{{ 'Remove today’s completion' if d._today_done else 'Mark this discipline complete today' }}"
+            >{{ '✓ Done today' if d._today_done else 'Done today' }}</button>
+          {% endif %}
           <button
             class="btn btn-tiny"
             hx-get="/discipline/{{ d.uuid }}/edit"
@@ -62,7 +74,7 @@
               {% if cell is none %}
                 <span class="heatmap-cell heatmap-empty" aria-hidden="true"></span>
               {% else %}
-                {% with task=d.task, catagory=d.catagory, day=cell.isoformat(),
+                {% with discipline_uuid=d.uuid, task=d.task, catagory=d.catagory, day=cell.isoformat(),
                         marked=(cell.isoformat() in d._year_days),
                         future=(cell.isoformat() > today_iso),
                         today_iso=today_iso %}

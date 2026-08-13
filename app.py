@@ -1144,6 +1144,8 @@ def discipline_page(request: Request, year: int | None = None):
         year = date.today().year
     disciplines = db.list_disciplines(include_inactive=True)
     completions = db.list_completions_for_year(year)
+    today_iso = date.today().isoformat()
+    today_tasks = db.list_completion_tasks_for_day(today_iso)
     # Index completions by a normalized task key too, so a completion logged
     # under a slightly different string (trailing space, different case) still
     # lights up its discipline's heatmap instead of silently going missing.
@@ -1153,12 +1155,14 @@ def discipline_page(request: Request, year: int | None = None):
     completions_by_norm: dict[str, set[str]] = {}
     for _task_name, _days in completions.items():
         completions_by_norm.setdefault(_norm(_task_name), set()).update(_days)
+    today_by_norm = {_norm(task) for task in today_tasks}
     # Attach year-specific completion sets + computed streak (from all-time in-year data).
     for d in disciplines:
         days = completions.get(d["task"])
         if not days:
             days = completions_by_norm.get(_norm(d["task"]), set())
         d["_year_days"] = days
+        d["_today_done"] = _norm(d["task"]) in today_by_norm
         # Streak is computed against the CURRENT date, so use full history when
         # viewing the current year and just the year's data otherwise.
         if year == date.today().year:
@@ -1175,7 +1179,7 @@ def discipline_page(request: Request, year: int | None = None):
             "year": year,
             "years": _available_years(),
             "grid": _year_grid(year),
-            "today_iso": date.today().isoformat(),
+            "today_iso": today_iso,
         },
     )
 
@@ -1192,7 +1196,10 @@ def discipline_new_form(request: Request):
 async def discipline_create(request: Request):
     _require_v2()
     form = dict(await request.form())
-    db.create_discipline(form)
+    try:
+        db.create_discipline(form)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     # Full-page reload is fine here — the heatmap grid depends on the discipline list.
     return Response(
         status_code=204,
@@ -1226,7 +1233,10 @@ def discipline_edit_form(request: Request, row_uuid: str):
 async def discipline_update(request: Request, row_uuid: str):
     _require_v2()
     form = dict(await request.form())
-    db.update_discipline(row_uuid, form)
+    try:
+        db.update_discipline(row_uuid, form)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     return Response(
         status_code=204,
         headers={
@@ -1271,6 +1281,50 @@ def discipline_delete(row_uuid: str):
                           "ttl_ms": _UNDO_TTL_SECONDS * 1000},
                 reloadBoard=None,
             ),
+        },
+    )
+
+
+@app.post("/discipline/{row_uuid}/today", dependencies=[Depends(require_auth)])
+async def discipline_today(row_uuid: str, request: Request):
+    """Explicit, discoverable mark/unmark action for the current day.
+
+    The server—not the browser—chooses today's date and resolves the current
+    canonical task/category by UUID before touching the legacy text-keyed
+    completion table.
+    """
+    _require_v2()
+    discipline = db.get_discipline(row_uuid)
+    if not discipline:
+        raise HTTPException(404, "discipline not found")
+    if not int(discipline.get("active") or 0):
+        raise HTTPException(409, "inactive disciplines cannot be marked")
+    form = dict(await request.form())
+    action = str(form.get("action") or "mark").strip().lower()
+    if action not in {"mark", "unmark"}:
+        raise HTTPException(400, "action must be mark or unmark")
+    task = str(discipline["task"])
+    day = date.today().isoformat()
+    try:
+        if action == "mark":
+            ok = db.mark_completion(task, discipline.get("catagory"), day)
+            message = f"{task} marked done for today"
+        else:
+            ok = db.unmark_completion(task, day)
+            message = f"{task} cleared for today"
+    except Exception as exc:  # noqa: BLE001
+        return _discipline_toggle_error(
+            f"Couldn't {action} “{task}” for {day}: {type(exc).__name__}: {exc}"
+        )
+    if not ok:
+        return _discipline_toggle_error(
+            f"“{task}” for {day} did not persist in the requested state."
+        )
+    return Response(
+        status_code=204,
+        headers={
+            "HX-Trigger": _hx_trigger(flashSuccess={"message": message}),
+            "HX-Refresh": "true",
         },
     )
 
@@ -1340,6 +1394,7 @@ async def discipline_toggle(request: Request):
         "partials/discipline_cell.html",
         {
             "request": request,
+            "discipline_uuid": discipline_uuid,
             "task": task,
             "catagory": catagory,
             "day": day,

@@ -22,7 +22,7 @@
     </label>
     <label>
       Freq / week
-      <input type="number" name="frequency_per_week" min="0" max="7" value="{{ d.frequency_per_week if d.frequency_per_week is not none else 7 }}">
+      <input type="number" name="frequency_per_week" min="1" max="7" required value="{{ d.frequency_per_week if d.frequency_per_week is not none else 7 }}">
     </label>
     <label class="checkbox">
       <input type="checkbox" name="active" value="1" {% if is_new or d.active %}checked{% endif %}>

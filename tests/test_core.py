@@ -157,6 +157,37 @@ class RecurringFormTests(unittest.TestCase):
             app._validate_recurring_form({"recurring": "1", "recurring_interval": ""})
 
 
+class DisciplineWorkflowTests(unittest.TestCase):
+    def test_done_today_marks_canonical_task_by_uuid(self) -> None:
+        import asyncio
+
+        class FormRequest:
+            async def form(self):
+                return {"action": "mark"}
+
+        discipline = {
+            "uuid": "disc-1", "task": "MacroFactor Logging",
+            "catagory": "Health", "active": 1,
+        }
+        with (
+            patch.object(app, "_require_v2"),
+            patch.object(db, "get_discipline", return_value=discipline),
+            patch.object(db, "mark_completion", return_value=True) as mark,
+        ):
+            response = asyncio.run(app.discipline_today("disc-1", FormRequest()))
+        mark.assert_called_once_with(
+            "MacroFactor Logging", "Health", date.today().isoformat()
+        )
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.headers.get("hx-refresh"), "true")
+        self.assertIn("flashSuccess", response.headers.get("hx-trigger", ""))
+
+    def test_discipline_frequency_is_one_to_seven(self) -> None:
+        self.assertEqual(db._discipline_frequency("7"), 7)
+        with self.assertRaisesRegex(ValueError, "between 1 and 7"):
+            db._discipline_frequency("0")
+
+
 class GameAndWatchTests(unittest.TestCase):
     def test_game_board_has_paused_and_achievement_sections(self) -> None:
         self.assertIn("paused", gnw.GAME_STATUSES)
@@ -223,6 +254,26 @@ class GameAndWatchTests(unittest.TestCase):
         self.assertIn("media-status-trigger", html)
         self.assertIn("Move to", html)
         self.assertIn('"status": "completed"', html)
+
+    def test_show_card_exposes_inline_rating(self) -> None:
+        template = app.templates.get_template("partials/media_card.html")
+        html = template.render(
+            section="shows",
+            statuses=gnw.SHOW_STATUSES,
+            status_labels=gnw.STATUS_LABELS,
+            item={
+                "title": "The Expanse", "profile": "Preston", "priority": 4,
+                "rating": 8, "cover_url": "", "link": None, "genre": "Sci-Fi",
+                "current_season": 3, "current_episode": 6, "total_episodes": 62,
+                "tags": [], "status": "watching", "source": "tvmaze",
+                "external_id": "2817",
+            },
+        )
+        self.assertIn("Your rating", html)
+        self.assertIn('name="rating"', html)
+        self.assertIn('value="8" selected', html)
+        self.assertIn('hx-post="/gnw/shows/update"', html)
+        self.assertIn("S3 · E6/62", html)
 
     def test_full_sheet_url_is_accepted(self) -> None:
         url = "https://docs.google.com/spreadsheets/d/abc_123-X/edit?gid=0"
