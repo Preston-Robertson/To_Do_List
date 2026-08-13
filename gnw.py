@@ -194,12 +194,68 @@ def is_enabled() -> bool:
     return disabled_reason() is None
 
 
+def _load_credentials():
+    """Read + parse the service-account key *ourselves* (via
+    ``from_service_account_info``) rather than ``from_service_account_file``.
+
+    Two reasons:
+    * A bad key file produces a precise, actionable message here instead of a
+      raw ``JSONDecodeError`` bubbling up from deep inside google-auth.
+    * Because we've fully consumed + parsed the file at this point, any
+      ``JSONDecodeError`` raised *later* in ``_get_sheet`` can ONLY come from
+      the Google API layer (gspread parsing an empty/non-JSON HTTP response) —
+      so the two failure domains stop being ambiguous.
+    """
+    path = _creds_file()
+    try:
+        with open(path, encoding="utf-8") as fh:
+            raw = fh.read()
+    except OSError as exc:
+        raise RuntimeError(f"credentials file {path} can't be read ({exc})") from exc
+    if not raw.strip():
+        raise RuntimeError(
+            f"credentials file {path} is empty ({len(raw)} bytes) — re-paste the "
+            "service-account key in Admin → Game'N'Watch credentials"
+        )
+    try:
+        info = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"credentials file {path} isn't valid JSON ({exc}) — re-paste the key "
+            "in Admin → Game'N'Watch credentials"
+        ) from exc
+    try:
+        return Credentials.from_service_account_info(info, scopes=SCOPES)
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(
+            f"credentials file {path} isn't a usable service-account key "
+            f"({type(exc).__name__}: {exc})"
+        ) from exc
+
+
 def _get_sheet():
     global _client, _sheet
     if _sheet is None:
-        creds = Credentials.from_service_account_file(_creds_file(), scopes=SCOPES)
-        _client = gspread.authorize(creds)
-        _sheet = _client.open_by_key(_sheet_id())
+        creds = _load_credentials()
+        try:
+            client = gspread.authorize(creds)
+            sheet = client.open_by_key(_sheet_id())
+        except Exception as exc:  # noqa: BLE001
+            # Past _load_credentials the key is known-good, so a failure here is
+            # the Google API / network layer — NOT the credentials file. gspread
+            # raises a char-0 JSONDecodeError when the API returns an EMPTY body,
+            # which on this LAN box most often means egress to googleapis.com is
+            # blocked/proxied, or the Sheets API is disabled for the project.
+            # A wrong/again-unshared sheet usually raises APIError /
+            # SpreadsheetNotFound with detail instead.
+            raise RuntimeError(
+                f"Google Sheets API call failed ({type(exc).__name__}: {exc}). "
+                f"Sheet ID={_sheet_id()!r}. Verify this host can reach "
+                "googleapis.com (LAN egress / firewall / DNS), the Sheets API is "
+                "enabled for the project, and the sheet is shared with the "
+                "service-account email."
+            ) from exc
+        _client, _sheet = client, sheet
     return _sheet
 
 

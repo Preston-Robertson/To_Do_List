@@ -670,12 +670,10 @@ def _gnw_board(request: Request, section: str, page_title: str):
             ctx["profiles"] = gnw.list_profiles()
             ctx["columns"] = _gnw_columns(section, profile)
         except Exception as exc:  # noqa: BLE001
-            ctx["disabled_reason"] = (
-                f"Couldn't reach the Google Sheet ({type(exc).__name__}: {exc}). "
-                "Check that LUIGI_WEB_GNW_SHEET_ID is correct, the sheet is "
-                "shared with the service-account email, and the Google Sheets "
-                "API is enabled for that project."
-            )
+            # gnw now raises RuntimeError with a precise, self-contained reason
+            # (bad credentials file vs. Google API/network failure), so surface
+            # it verbatim rather than wrapping it in a second generic guess.
+            ctx["disabled_reason"] = str(exc) or f"{type(exc).__name__}"
     return templates.TemplateResponse("media_board.html", ctx)
 
 
