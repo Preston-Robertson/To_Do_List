@@ -667,6 +667,13 @@
   // already blocked by onkeydown on the element. Here we just wire the
   // quick-preset chips (Today / Tomorrow / +1w / +2w / Clear) and keep the
   // active chip highlighted so the user always sees what got picked.
+  function localIsoDate(d) {
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
   function initDatePickers(root) {
     const scope = root && root.querySelectorAll ? root : document;
     scope.querySelectorAll("[data-datepicker]").forEach((dp) => {
@@ -689,7 +696,7 @@
             if (!Number.isNaN(days)) {
               const d = new Date(today);
               d.setDate(d.getDate() + days);
-              match = v === d.toISOString().slice(0, 10);
+              match = v === localIsoDate(d);
             }
           }
           btn.classList.toggle("is-active", match);
@@ -706,7 +713,7 @@
             const d = new Date();
             d.setHours(0, 0, 0, 0);
             d.setDate(d.getDate() + days);
-            input.value = d.toISOString().slice(0, 10);
+            input.value = localIsoDate(d);
           }
           paint();
         });
@@ -746,6 +753,14 @@
         ? daysRow.querySelectorAll('input[name="recurring_days"]')
         : [];
 
+      const validateSchedule = () => {
+        const hasWeekday = Array.from(dayInputs).some((el) => el.checked);
+        const missing = cb.checked && !hasWeekday && !String(input.value || "").trim();
+        input.setCustomValidity(missing
+          ? "Choose at least one weekday or enter a repeat interval."
+          : "");
+      };
+
       const paintChips = () => {
         const v = String(input.value || "").trim();
         row.querySelectorAll("[data-recurring-preset]").forEach((btn) => {
@@ -766,6 +781,7 @@
           }
           paintChips();
         }
+        validateSchedule();
       };
 
       row.querySelectorAll("[data-recurring-preset]").forEach((btn) => {
@@ -773,9 +789,11 @@
           input.value = btn.getAttribute("data-recurring-preset") || "";
           if (!cb.checked) { cb.checked = true; sync(); }
           paintChips();
+          validateSchedule();
         });
       });
-      input.addEventListener("input", paintChips);
+      input.addEventListener("input", () => { paintChips(); validateSchedule(); });
+      dayInputs.forEach((el) => el.addEventListener("change", validateSchedule));
       cb.addEventListener("change", sync);
       sync();
       paintChips();
@@ -825,7 +843,7 @@
   function isoAddDays(base, days) {
     const d = new Date(base.getTime());
     d.setDate(d.getDate() + days);
-    return d.toISOString().slice(0, 10);
+    return localIsoDate(d);
   }
   function weekBounds() {
     // Monday..Sunday for the current local week.
@@ -833,9 +851,9 @@
     const dow = (today.getDay() + 6) % 7;   // Mon=0..Sun=6
     const mon = new Date(today);
     mon.setDate(mon.getDate() - dow);
-    return { mon: mon.toISOString().slice(0, 10),
+    return { mon: localIsoDate(mon),
              sun: isoAddDays(mon, 6),
-             today: today.toISOString().slice(0, 10) };
+         today: localIsoDate(today) };
   }
 
   function cardMatches(card, state, wk) {

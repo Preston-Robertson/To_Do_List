@@ -27,7 +27,12 @@ from fastapi.templating import Jinja2Templates
 import db
 from auth import login_response, logout_response, require_auth
 
-app = FastAPI(title="LuigiBot Web GUI")
+app = FastAPI(
+    title="LuigiBot Web GUI",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
@@ -89,6 +94,27 @@ async def _form_dict(request: Request) -> dict[str, Any]:
     if "recurring_days" in form:
         data["recurring_days"] = form.getlist("recurring_days")
     return data
+
+
+def _validate_recurring_form(data: dict[str, Any]) -> None:
+    """Reject an enabled recurring row that can never reactivate."""
+    enabled = str(data.get("recurring") or "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+    if not enabled:
+        return
+    interval_raw = data.get("recurring_interval")
+    if interval_raw not in (None, ""):
+        try:
+            if int(interval_raw) < 1:
+                raise ValueError
+        except (TypeError, ValueError):
+            raise HTTPException(422, "Repeat interval must be a positive number of days")
+    if interval_raw in (None, "") and not db.parse_recurring_days(data.get("recurring_days")):
+        raise HTTPException(
+            422,
+            "Choose at least one weekday or enter a repeat interval",
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -465,6 +491,7 @@ def recurring_page(request: Request):
 async def recurring_create(request: Request):
     _require_v2()
     form = await _form_dict(request)
+    _validate_recurring_form(form)
     row_uuid = db.create_recurring(form)
     row = db.get_recurring(row_uuid)
     return templates.TemplateResponse(
@@ -522,6 +549,7 @@ def recurring_edit_form(request: Request, row_uuid: str):
 async def recurring_update(request: Request, row_uuid: str):
     _require_v2()
     form = await _form_dict(request)
+    _validate_recurring_form(form)
     db.update_recurring(row_uuid, form)
     row = db.get_recurring(row_uuid)
     if not row:
@@ -1392,6 +1420,8 @@ def home_page(request: Request):
 
 from auth import COOKIE_NAME as _AUTH_COOKIE  # keep import local — no top-of-file churn
 
+_CHAT_LOCK = threading.Lock()
+
 
 def _chat_session_id(request: Request) -> str:
     """Use the auth cookie itself as the chat session key. Falls back to the
@@ -1404,7 +1434,7 @@ def _chat_session_id(request: Request) -> str:
 
 
 @app.post("/chat", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
-async def chat_send(request: Request, message: str = Form(...)):
+def chat_send(request: Request, message: str = Form(...)):
     _require_v2()
     text = (message or "").strip()
     if not text:
@@ -1412,22 +1442,30 @@ async def chat_send(request: Request, message: str = Form(...)):
         return HTMLResponse("")
 
     session_id = _chat_session_id(request)
-    history = llm_mod.get_history(session_id)
-    if not history:
-        history.append({"role": "system", "content": chat_tools.SYSTEM_PROMPT})
-    history.append({"role": "user", "content": text})
+    # The provider is synchronous. A sync route runs in FastAPI's threadpool,
+    # keeping slow LLM calls from freezing every other request. Serialize chat
+    # turns so two rapid submissions cannot interleave one shared history.
+    with _CHAT_LOCK:
+        history = llm_mod.get_history(session_id)
+        if not history:
+            history.append({"role": "system", "content": chat_tools.SYSTEM_PROMPT})
+        turn_start = len(history)
+        history.append({"role": "user", "content": text})
 
-    try:
-        result = llm_mod.run_chat_with_tools(_LLM_PROVIDER, history, _LLM_TOOLS)
-        reply = result.reply or "(no response)"
-        tool_calls = result.tool_calls
-        error = None
-    except llm_mod.LLMError as exc:
-        # Roll back the user message so a retry doesn't double-log.
-        history.pop()
-        reply = ""
-        tool_calls = []
-        error = str(exc)
+        try:
+            result = llm_mod.run_chat_with_tools(_LLM_PROVIDER, history, _LLM_TOOLS)
+            reply = result.reply or "(no response)"
+            tool_calls = result.tool_calls
+            error = None
+        except llm_mod.LLMError as exc:
+            # Remove the complete partial turn (user, assistant and any tool
+            # messages), not merely whichever message happened to be last.
+            del history[turn_start:]
+            reply = ""
+            tool_calls = []
+            error = str(exc)
+        finally:
+            llm_mod.trim_history(session_id)
 
     return templates.TemplateResponse(
         "partials/chat_exchange.html",

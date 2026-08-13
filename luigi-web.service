@@ -33,7 +33,7 @@ ExecStartPre=-/opt/luigi-web/.venv/bin/python -m pip install \
 ExecStart=/opt/luigi-web/.venv/bin/uvicorn app:app \
   --host ${LUIGI_WEB_BIND} \
   --port ${LUIGI_WEB_PORT} \
-  --workers 2 \
+  --workers 1 \
   --no-access-log
 
 Restart=always

@@ -419,8 +419,27 @@ def _build_link(source: str, ext_id: str) -> str | None:
     return None
 
 
+def _header_index(headers: list[str]) -> dict[str, int]:
+    """Map trimmed header names to zero-based columns."""
+    return {str(header).strip(): i for i, header in enumerate(headers)}
+
+
+def _identity_columns(headers: list[str]) -> tuple[int, int]:
+    idx = _header_index(headers)
+    missing = [name for name in ("Profile", "Title") if name not in idx]
+    if missing:
+        raise RuntimeError(
+            f"{', '.join(missing)} column missing from the sheet header row"
+        )
+    return idx["Profile"], idx["Title"]
+
+
+def _row_value(row: list[str], column: int) -> str:
+    return row[column].strip() if column < len(row) else ""
+
+
 def _row_to_item(section: str, headers: list[str], row: list[str]) -> dict[str, Any]:
-    idx = {h: i for i, h in enumerate(headers)}
+    idx = _header_index(headers)
 
     def g(header: str, default: str = "") -> str:
         i = idx.get(header)
@@ -477,9 +496,13 @@ def list_profiles() -> list[str]:
     names: set[str] = set()
     for section in ("games", "shows"):
         values = _all_values(section)
+        if not values:
+            continue
+        profile_col, _ = _identity_columns(values[0])
         for row in values[1:] if values else []:
-            if row and row[0].strip():
-                names.add(row[0].strip())
+            profile = _row_value(row, profile_col)
+            if profile:
+                names.add(profile)
     return sorted(names, key=str.lower)
 
 
@@ -492,12 +515,15 @@ def list_items(section: str, profile: str | None = None) -> list[dict[str, Any]]
     if not values:
         return []
     headers = values[0]
+    profile_col, title_col = _identity_columns(headers)
     want = (profile or "").strip().lower()
     out: list[dict[str, Any]] = []
     for row in values[1:]:
-        if not row or len(row) < 2 or not row[0].strip() or not row[1].strip():
+        row_profile = _row_value(row, profile_col)
+        row_title = _row_value(row, title_col)
+        if not row_profile or not row_title:
             continue
-        if want and want != "all" and row[0].strip().lower() != want:
+        if want and want != "all" and row_profile.lower() != want:
             continue
         out.append(_row_to_item(section, headers, row))
     out.sort(key=lambda d: (-(d.get("priority") or 0), d["title"].lower()))
@@ -511,9 +537,10 @@ def get_item(section: str, profile: str, title: str) -> dict[str, Any] | None:
     if not values:
         return None
     headers = values[0]
+    profile_col, title_col = _identity_columns(headers)
     for row in values[1:]:
-        if (len(row) >= 2 and row[0].strip().lower() == profile.lower()
-                and row[1].strip().lower() == title.lower()):
+        if (_row_value(row, profile_col).lower() == profile.lower()
+                and _row_value(row, title_col).lower() == title.lower()):
             return _row_to_item(section, headers, row)
     return None
 
@@ -530,9 +557,10 @@ def _find_row_idx(section: str, profile: str, title: str) -> tuple[int | None, l
     read so we never write to a stale row position."""
     values = _all_values(section, force=True)
     headers = values[0] if values else []
+    profile_col, title_col = _identity_columns(headers)
     for i, row in enumerate(values[1:], start=2):
-        if (len(row) >= 2 and row[0].strip().lower() == profile.lower()
-                and row[1].strip().lower() == title.lower()):
+        if (_row_value(row, profile_col).lower() == profile.lower()
+                and _row_value(row, title_col).lower() == title.lower()):
             return i, headers
     return None, headers
 
@@ -548,7 +576,7 @@ def update_item(section: str, profile: str, title: str,
     row_idx, headers = _find_row_idx(section, profile, title)
     if not row_idx:
         return False
-    hidx = {h: i + 1 for i, h in enumerate(headers)}  # 1-based columns
+    hidx = {h: i + 1 for h, i in _header_index(headers).items()}
     ws = _ws(section)
 
     old_status = (get_item(section, profile, title) or {}).get("status")
@@ -622,7 +650,7 @@ def _bump_times_picked(section: str, profile: str, title: str) -> None:
         row_idx, headers = _find_row_idx(section, profile, title)
         if not row_idx:
             return
-        hidx = {h: i + 1 for i, h in enumerate(headers)}
+        hidx = {h: i + 1 for h, i in _header_index(headers).items()}
         col = hidx.get("Times Picked")
         if not col:
             return

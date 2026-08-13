@@ -21,7 +21,7 @@ from datetime import datetime, date, timedelta
 from typing import Any, Iterable
 
 from sqlalchemy import create_engine, text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Engine, URL
 
 
 # --------------------------------------------------------------------------- #
@@ -31,13 +31,26 @@ from sqlalchemy.engine import Engine
 _engine: Engine | None = None
 
 
-def _dsn() -> str:
+def _dsn() -> URL:
+    """Build a SQLAlchemy URL without interpolating credentials into text.
+
+    ``URL.create`` correctly escapes passwords containing characters such as
+    ``@``, ``/`` or ``:``; string interpolation made otherwise-valid database
+    credentials fail to connect.
+    """
     host = os.environ["LUIGI_WEB_PG_HOST"]
     port = os.environ.get("LUIGI_WEB_PG_PORT", "5432")
     db = os.environ["LUIGI_WEB_PG_DB"]
     user = os.environ["LUIGI_WEB_PG_USER"]
     pw = os.environ["LUIGI_WEB_PG_PASSWORD"]
-    return f"postgresql+psycopg://{user}:{pw}@{host}:{port}/{db}"
+    return URL.create(
+        "postgresql+psycopg",
+        username=user,
+        password=pw,
+        host=host,
+        port=int(port),
+        database=db,
+    )
 
 
 def get_engine() -> Engine:
@@ -501,7 +514,7 @@ def _toggle_task_like_completed(table: str, row_uuid: str) -> int:
     """Flip the ``completed`` flag; return the new value."""
     with get_engine().begin() as conn:
         cur = conn.execute(
-            text(f"SELECT completed FROM {table} WHERE uuid = :u"),
+            text(f"SELECT completed FROM {table} WHERE uuid = :u FOR UPDATE"),
             {"u": row_uuid},
         ).scalar_one()
         new_val = 0 if int(cur or 0) == 1 else 1
@@ -510,7 +523,7 @@ def _toggle_task_like_completed(table: str, row_uuid: str) -> int:
                 UPDATE {table}
                 SET completed = :c,
                     completed_time = :ct,
-                    status = CASE WHEN :c = 1 THEN 'Completed' ELSE status END
+                    status = CASE WHEN :c = 1 THEN 'Completed' ELSE 'Not Started' END
                 WHERE uuid = :u
             """),
             {"c": new_val, "ct": now_iso() if new_val else None, "u": row_uuid},
@@ -745,10 +758,13 @@ def get_discipline(row_uuid: str):
 
 
 def create_discipline(data: dict[str, Any]) -> str:
+    task = str(data.get("task") or "").strip()
+    if not task:
+        raise ValueError("discipline task is required")
     row_uuid = new_uuid()
     payload = {
         "uuid": row_uuid,
-        "task": data["task"].strip(),
+        "task": task,
         "catagory": data.get("catagory") or None,
         "frequency_per_week": int(data.get("frequency_per_week") or 0),
         "active": _to_int_bool(data.get("active", 1)),
@@ -778,11 +794,45 @@ def update_discipline(row_uuid: str, data: dict[str, Any]) -> None:
         updates[field] = val
     if not updates:
         return
+    if "task" in updates:
+        updates["task"] = str(updates["task"] or "").strip()
+        if not updates["task"]:
+            raise ValueError("discipline task is required")
     set_clause = ", ".join(f"{k} = :{k}" for k in updates)
     updates["u"] = row_uuid
     q = text(f"UPDATE discipline_list SET {set_clause} WHERE uuid = :u")
     with get_engine().begin() as conn:
+        old_task = conn.execute(
+            text("SELECT task FROM discipline_list WHERE uuid = :u"),
+            {"u": row_uuid},
+        ).scalar_one_or_none()
+        new_task = updates.get("task")
+        if old_task and new_task and old_task != new_task:
+            # Completion rows are linked by task text rather than uuid. Merge
+            # them into the new name before renaming the discipline so edits
+            # do not make the heatmap/streak history disappear.
+            conn.execute(
+                text("""
+                    INSERT INTO discipline_completions
+                        (task, catagory, completed_date, logged_at)
+                    SELECT :new_task, dc.catagory, dc.completed_date, dc.logged_at
+                    FROM discipline_completions dc
+                    WHERE dc.task = :old_task
+                      AND NOT EXISTS (
+                          SELECT 1 FROM discipline_completions existing
+                          WHERE existing.task = :new_task
+                            AND existing.completed_date = dc.completed_date
+                      )
+                """),
+                {"old_task": old_task, "new_task": new_task},
+            )
+            conn.execute(
+                text("DELETE FROM discipline_completions WHERE task = :old_task"),
+                {"old_task": old_task},
+            )
         conn.execute(q, updates)
+        if new_task:
+            _refresh_discipline_streak(conn, new_task)
 
 
 def deactivate_discipline(row_uuid: str) -> None:
@@ -915,6 +965,26 @@ def completion_exists(task: str, day: str) -> bool:
         ).first() is not None
 
 
+def _refresh_discipline_streak(conn, task: str) -> int:
+    """Recompute the stored streak after a web-side completion mutation."""
+    days = {
+        str(row.completed_date)[:10]
+        for row in conn.execute(
+            text(
+                "SELECT completed_date FROM discipline_completions "
+                "WHERE task = :t"
+            ),
+            {"t": task},
+        )
+    }
+    streak = compute_streak(days)
+    conn.execute(
+        text("UPDATE discipline_list SET current_streak = :s WHERE task = :t"),
+        {"s": streak, "t": task},
+    )
+    return streak
+
+
 def mark_completion(task: str, catagory: str | None, day: str) -> bool:
     """Record (task, day) as done. Idempotent. Returns True once the row is
     confirmed present (whether we just inserted it or it already existed).
@@ -938,13 +1008,16 @@ def mark_completion(task: str, catagory: str | None, day: str) -> bool:
     """)
     with get_engine().begin() as conn:
         conn.execute(q, {"t": task, "c": catagory, "d": day, "ts": now_iso()})
-        return conn.execute(
+        present = conn.execute(
             text(
                 "SELECT 1 FROM discipline_completions "
                 "WHERE task = :t AND completed_date = :d"
             ),
             {"t": task, "d": day},
         ).first() is not None
+        if present:
+            _refresh_discipline_streak(conn, task)
+        return present
 
 
 def unmark_completion(task: str, day: str) -> bool:
@@ -953,13 +1026,16 @@ def unmark_completion(task: str, day: str) -> bool:
     q = text("DELETE FROM discipline_completions WHERE task = :t AND completed_date = :d")
     with get_engine().begin() as conn:
         conn.execute(q, {"t": task, "d": day})
-        return conn.execute(
+        gone = conn.execute(
             text(
                 "SELECT 1 FROM discipline_completions "
                 "WHERE task = :t AND completed_date = :d"
             ),
             {"t": task, "d": day},
         ).first() is None
+        if gone:
+            _refresh_discipline_streak(conn, task)
+        return gone
 
 
 def compute_streak(dates: Iterable[str]) -> int:

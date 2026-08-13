@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Protocol
@@ -141,11 +142,19 @@ class OpenAICompatProvider:
             payload["tool_choice"] = "auto"
 
         with httpx.Client(timeout=self.timeout) as client:
-            r = client.post(url, json=payload, headers=headers)
+            try:
+                r = client.post(url, json=payload, headers=headers)
+            except httpx.HTTPError as exc:
+                raise LLMError(f"Could not reach {self.base_url}: {exc}") from exc
         if r.status_code >= 400:
             # Surface the error body — many providers put useful hints there.
             raise LLMError(f"{r.status_code} from {self.base_url}: {r.text[:500]}")
-        data = r.json()
+        try:
+            data = r.json()
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise LLMError(
+                f"Unexpected non-JSON response from {self.base_url}: {r.text[:500]}"
+            ) from exc
         try:
             return data["choices"][0]["message"]
         except (KeyError, IndexError):
@@ -195,7 +204,11 @@ def build_provider_from_env() -> LLMProvider:
         "https://models.github.ai/inference",
     ).strip()
     model = os.environ.get("LUIGI_WEB_LLM_MODEL", "openai/gpt-4o-mini").strip()
-    timeout = float(os.environ.get("LUIGI_WEB_LLM_TIMEOUT", "60"))
+    try:
+        timeout = float(os.environ.get("LUIGI_WEB_LLM_TIMEOUT", "60"))
+    except (TypeError, ValueError):
+        timeout = 60.0
+    timeout = min(max(timeout, 1.0), 600.0)
     return OpenAICompatProvider(base_url=base_url, api_key=api_key,
                                 model=model, timeout=timeout)
 
@@ -206,7 +219,13 @@ def build_provider_from_env() -> LLMProvider:
 
 # Hard cap on tool round-trips per user turn. A well-behaved model finishes in
 # 1-3; anything more usually means it's confused or looping. Never remove.
-MAX_TOOL_ITERATIONS = int(os.environ.get("LUIGI_WEB_LLM_MAX_TOOL_ITERATIONS", "5"))
+def _max_tool_iterations() -> int:
+    """Read the cap per turn so Admin hot-reloads actually take effect."""
+    try:
+        value = int(os.environ.get("LUIGI_WEB_LLM_MAX_TOOL_ITERATIONS", "5"))
+    except (TypeError, ValueError):
+        value = 5
+    return min(max(value, 1), 20)
 
 
 def run_chat_with_tools(
@@ -231,7 +250,7 @@ def run_chat_with_tools(
     tool_schemas = [t.as_openai_schema() for t in tools.values()] if tools else None
     audit: list[ToolCallRecord] = []
 
-    for _ in range(MAX_TOOL_ITERATIONS):
+    for _ in range(_max_tool_iterations()):
         assistant = provider.chat_completion(messages, tools=tool_schemas)
         messages.append(assistant)
 
@@ -294,26 +313,54 @@ def run_chat_with_tools(
 # persist history to disk — the chat is a scratchpad, not a system of record,
 # and any real audit trail belongs on the DB writes the tools perform.
 _HISTORY: dict[str, list[Message]] = {}
-_HISTORY_MAX = 32           # keep only the most-recent N messages per session
+_HISTORY_MAX = 64           # keep only the most-recent N messages per session
 _HISTORY_SESSIONS_MAX = 64  # evict oldest session when this many exist
+_HISTORY_LOCK = threading.RLock()
 
 
 def get_history(session_id: str) -> list[Message]:
-    return _HISTORY.setdefault(session_id, [])
+    with _HISTORY_LOCK:
+        # Pop/reinsert makes dict order an inexpensive least-recently-used
+        # order rather than arbitrary creation order.
+        hist = _HISTORY.pop(session_id, [])
+        _HISTORY[session_id] = hist
+        while len(_HISTORY) > _HISTORY_SESSIONS_MAX:
+            _HISTORY.pop(next(iter(_HISTORY)))
+        return hist
+
+
+def trim_history(session_id: str) -> None:
+    """Enforce the bound without starting history on an orphan tool message."""
+    with _HISTORY_LOCK:
+        hist = _HISTORY.get(session_id)
+        if hist is None or len(hist) <= _HISTORY_MAX:
+            return
+        head = hist[:1] if hist[0].get("role") == "system" else []
+        body = hist[len(head):]
+        budget = _HISTORY_MAX - len(head)
+        cutoff = max(0, len(body) - budget)
+        # Prefer the next complete user turn. If the newest single turn itself
+        # crosses the cutoff, retain that whole turn; the tool-loop cap keeps
+        # one turn below this history budget.
+        start = next(
+            (i for i in range(cutoff, len(body)) if body[i].get("role") == "user"),
+            None,
+        )
+        if start is None:
+            start = next(
+                (i for i in range(cutoff, -1, -1) if body[i].get("role") == "user"),
+                cutoff,
+            )
+        tail = body[start:]
+        _HISTORY[session_id] = head + tail
 
 
 def append_history(session_id: str, new_msgs: Iterable[Message]) -> None:
-    hist = get_history(session_id)
-    hist.extend(new_msgs)
-    # Trim from the front, but always keep the leading system message if present.
-    if len(hist) > _HISTORY_MAX:
-        head = hist[:1] if hist and hist[0].get("role") == "system" else []
-        tail = hist[-(_HISTORY_MAX - len(head)):]
-        _HISTORY[session_id] = head + tail
-    if len(_HISTORY) > _HISTORY_SESSIONS_MAX:
-        # Evict the arbitrarily-first key. Session IDs are opaque here.
-        _HISTORY.pop(next(iter(_HISTORY)))
+    with _HISTORY_LOCK:
+        get_history(session_id).extend(new_msgs)
+        trim_history(session_id)
 
 
 def reset_history(session_id: str) -> None:
-    _HISTORY.pop(session_id, None)
+    with _HISTORY_LOCK:
+        _HISTORY.pop(session_id, None)

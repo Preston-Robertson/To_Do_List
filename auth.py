@@ -42,7 +42,8 @@ def is_authenticated(
     if _token_matches(luigi_session):
         return True
     if authorization and authorization.lower().startswith("bearer "):
-        if _token_matches(authorization.split(None, 1)[1].strip()):
+        parts = authorization.split(None, 1)
+        if len(parts) == 2 and _token_matches(parts[1].strip()):
             return True
     if _token_matches(token):
         return True

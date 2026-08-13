@@ -5,7 +5,8 @@
 # the Python side (secrets, threading, datetime, json) and browser APIs on
 # the client side (SpeechSynthesis / SpeechRecognition, <input type=date>),
 # so no new packages are required. HTMX 1.9.12 and SortableJS 1.15.2 are
-# loaded from CDN in templates/base.html.
+# served locally from static/js/vendor so LAN-only installs do not depend on
+# public CDNs.
 
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
