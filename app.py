@@ -1067,6 +1067,17 @@ def follow_ups_page(request: Request):
     )
 
 
+@app.get("/follow-ups/panel", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def follow_ups_panel(request: Request):
+    """The follow-up rules manager as a standalone partial, loaded into the
+    Tasks-page modal (the feature lives there now rather than as a nav tab)."""
+    _require_v2()
+    return templates.TemplateResponse(
+        "partials/follow_ups_panel.html",
+        {"request": request, "rows": db.list_follow_ups()},
+    )
+
+
 @app.get("/follow-ups/new", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 def follow_ups_new_form(request: Request):
     return templates.TemplateResponse(

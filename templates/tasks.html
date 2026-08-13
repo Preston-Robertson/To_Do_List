@@ -70,13 +70,25 @@
       <span class="filter-summary" data-filter-summary aria-live="polite"></span>
     </div>
 
-    <button
-      class="btn btn-primary"
-      hx-get="{{ endpoint_root }}/new"
-      hx-target="#modal-body"
-      hx-trigger="click"
-      onclick="openModal()"
-    >+ New</button>
+    <div class="board-header-actions">
+      {% if active_nav == 'tasks' %}
+        <button
+          type="button"
+          class="btn btn-ghost"
+          title="Manage follow-up rules (auto-spawn a task when another is completed)"
+          hx-get="/follow-ups/panel"
+          hx-target="#modal-body"
+          onclick="openModal()"
+        >Follow-up rules</button>
+      {% endif %}
+      <button
+        class="btn btn-primary"
+        hx-get="{{ endpoint_root }}/new"
+        hx-target="#modal-body"
+        hx-trigger="click"
+        onclick="openModal()"
+      >+ New</button>
+    </div>
   </section>
 
   <section class="kanban" id="kanban-board">

@@ -1076,6 +1076,19 @@ main { padding: 20px; }
    Tasks filter bar (client-side; see initTasksFilter in app.js)
    -------------------------------------------------------------------------- */
 .board-header-tasks { flex-wrap: wrap; row-gap: 10px; }
+/* Right-aligned action cluster in the tasks header (Follow-up rules + New). */
+.board-header-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+/* Follow-up rules manager (shown standalone on /follow-ups and inside the
+   Tasks-page modal). */
+.followups-panel-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+.followups-panel-intro { flex: 1; }
+.followups-panel-intro h2 { margin: 0 0 4px; font-size: 18px; }
+.followups-panel-intro .muted-hint { margin: 0; }
 .filter-bar {
   display: flex;
   flex-wrap: wrap;

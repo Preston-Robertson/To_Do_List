@@ -1,0 +1,70 @@
+{# Follow-up RULES manager. Rendered inside the full /follow-ups page AND
+   loaded into the Tasks-page modal via GET /follow-ups/panel, so it must stand
+   on its own. A follow-up is an automation rule: when a task named
+   `trigger_task` is completed, LuigiBot spawns `follow_up_task` automatically.
+   Expects: rows (list of follow_up_tasks). #}
+<section class="followups-panel">
+  <header class="followups-panel-header">
+    <div class="followups-panel-intro">
+      <h2>Follow-up rules</h2>
+      <p class="muted-hint">
+        When a task named the <strong>trigger</strong> is completed, a new
+        <strong>follow-up</strong> task is spawned automatically (with the
+        category, group, priority and due-offset below).
+      </p>
+    </div>
+    <button
+      class="btn btn-primary"
+      hx-get="/follow-ups/new"
+      hx-target="#modal-body"
+      onclick="openModal()"
+    >+ New rule</button>
+  </header>
+
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Trigger</th>
+          <th>Follow-up</th>
+          <th>Category</th>
+          <th>Group</th>
+          <th>Sub-group</th>
+          <th>Priority</th>
+          <th>Est.h</th>
+          <th>Offset d</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for f in rows %}
+          <tr id="row-{{ f.uuid }}">
+            <td>{{ f.trigger_task }}</td>
+            <td>{{ f.follow_up_task }}</td>
+            <td>{{ f.catagory or '' }}</td>
+            <td>{{ f.task_group or '' }}</td>
+            <td>{{ f.subgroup or '' }}</td>
+            <td>{{ f.priority or 0 }}</td>
+            <td>{{ f.estimated_time or '' }}</td>
+            <td>{{ f.due_offset_days if f.due_offset_days is not none else '' }}</td>
+            <td class="row-actions">
+              <button class="btn btn-tiny"
+                hx-get="/follow-ups/{{ f.uuid }}/edit"
+                hx-target="#modal-body"
+                onclick="openModal()"
+              >Edit</button>
+              <button class="btn btn-tiny btn-danger"
+                hx-post="/follow-ups/{{ f.uuid }}/delete"
+                hx-target="#row-{{ f.uuid }}"
+                hx-swap="outerHTML"
+                hx-confirm="Delete this follow-up rule?"
+              >Delete</button>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="9" class="empty">No follow-up rules yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
