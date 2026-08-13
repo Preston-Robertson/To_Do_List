@@ -856,9 +856,20 @@ def discipline_page(request: Request, year: int | None = None):
         year = date.today().year
     disciplines = db.list_disciplines(include_inactive=True)
     completions = db.list_completions_for_year(year)
+    # Index completions by a normalized task key too, so a completion logged
+    # under a slightly different string (trailing space, different case) still
+    # lights up its discipline's heatmap instead of silently going missing.
+    def _norm(s: str | None) -> str:
+        return (s or "").strip().lower()
+
+    completions_by_norm: dict[str, set[str]] = {}
+    for _task_name, _days in completions.items():
+        completions_by_norm.setdefault(_norm(_task_name), set()).update(_days)
     # Attach year-specific completion sets + computed streak (from all-time in-year data).
     for d in disciplines:
-        days = completions.get(d["task"], set())
+        days = completions.get(d["task"])
+        if not days:
+            days = completions_by_norm.get(_norm(d["task"]), set())
         d["_year_days"] = days
         # Streak is computed against the CURRENT date, so use full history when
         # viewing the current year and just the year's data otherwise.

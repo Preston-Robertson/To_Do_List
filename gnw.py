@@ -103,8 +103,8 @@ _CACHE_TTL = 20.0  # seconds
 # ReadWritePaths (=/opt/luigi-web) — meaning the app can WRITE it from the
 # Admin page without any host-side file juggling. /etc is read-only to the
 # service (ProtectSystem=strict), so we deliberately don't default there.
-DEFAULT_CREDS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                 "gnw-credentials.json")
+_REPO_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_CREDS_PATH = os.path.join(_REPO_DIR, "gnw-credentials.json")
 
 
 def _sheet_id() -> str:
@@ -112,7 +112,21 @@ def _sheet_id() -> str:
 
 
 def _creds_file() -> str:
-    return os.environ.get("LUIGI_WEB_GNW_CREDS_FILE", "").strip() or DEFAULT_CREDS_PATH
+    """Absolute path to the service-account key.
+
+    Blank ``LUIGI_WEB_GNW_CREDS_FILE`` → the app-managed default. A *relative*
+    override (e.g. a bare ``luigi-web-gnw.json``) is resolved against the repo
+    dir, NOT the process CWD — otherwise "Save credentials" (which writes here)
+    and the reader could land on different files depending on where the service
+    happened to be started, leaving an empty/missing key. An absolute override
+    is used verbatim.
+    """
+    configured = os.environ.get("LUIGI_WEB_GNW_CREDS_FILE", "").strip()
+    if not configured:
+        return DEFAULT_CREDS_PATH
+    if not os.path.isabs(configured):
+        return os.path.join(_REPO_DIR, configured)
+    return configured
 
 
 def credentials_path() -> str:

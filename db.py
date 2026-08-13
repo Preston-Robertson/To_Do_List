@@ -894,7 +894,12 @@ def list_completions_for_year(year: int) -> dict[str, set[str]]:
     result: dict[str, set[str]] = {}
     with get_engine().connect() as conn:
         for row in conn.execute(q, {"start": start, "end": end}):
-            result.setdefault(row.task, set()).add(row.completed_date)
+            # Normalize to a bare YYYY-MM-DD string so the heatmap's
+            # cell.isoformat() lookup matches regardless of whether the column
+            # comes back as text with a time component or a date object.
+            raw = row.completed_date
+            day = (raw.isoformat() if hasattr(raw, "isoformat") else str(raw))[:10]
+            result.setdefault(row.task, set()).add(day)
     return result
 
 
