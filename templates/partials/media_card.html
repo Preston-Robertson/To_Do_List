@@ -59,19 +59,28 @@
     {% for t in item.tags %}<span class="chip chip-tag">{{ t }}</span>{% endfor %}
 
     <div class="media-actions">
-      <select
-        class="filter-select media-status"
-        aria-label="Status"
-        name="status"
-        hx-post="/gnw/{{ section }}/status"
-        hx-trigger="change"
-        hx-swap="none"
-        hx-vals='{"profile": {{ item.profile|tojson }}, "title": {{ item.title|tojson }}}'
-      >
-        {% for s in statuses %}
-          <option value="{{ s }}" {% if s == item.status %}selected{% endif %}>{{ status_labels.get(s, s) }}</option>
-        {% endfor %}
-      </select>
+      <details class="media-status-menu action-menu" data-action-menu>
+        <summary class="media-status-trigger" aria-label="Change status for {{ item.title }}">
+          <span class="media-status-dot status-{{ item.status }}" aria-hidden="true"></span>
+          <span>{{ status_labels.get(item.status, item.status) }}</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg>
+        </summary>
+        <div class="action-menu-popover media-status-popover">
+          <div class="action-menu-label">Move to</div>
+          {% for s in statuses %}
+            <button type="button"
+              class="action-menu-item media-status-option{% if s == item.status %} is-current{% endif %}"
+              hx-post="/gnw/{{ section }}/status"
+              hx-swap="none"
+              hx-vals='{"profile": {{ item.profile|tojson }}, "title": {{ item.title|tojson }}, "status": {{ s|tojson }}}'
+            >
+              <span class="media-status-dot status-{{ s }}" aria-hidden="true"></span>
+              <span>{{ status_labels.get(s, s) }}</span>
+              {% if s == item.status %}<span class="media-status-check" aria-label="Current status">✓</span>{% endif %}
+            </button>
+          {% endfor %}
+        </div>
+      </details>
 
       <details class="action-menu" data-action-menu>
         <summary class="btn btn-tiny btn-ghost" title="More actions" aria-label="More actions for {{ item.title }}">•••</summary>

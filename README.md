@@ -1,8 +1,10 @@
 # LuigiBot Web GUI (`luigi-web`)
 
-Server-rendered FastAPI + Jinja2 web GUI for the LuigiBot to-do system. It is the
-**second read-write client** of the shared Postgres database `luigi_todo`; LuigiBot
-is the first. Both write concurrently — Postgres/MVCC keeps things safe.
+Server-rendered FastAPI + Jinja2 web GUI for the
+[LuigiBot](https://github.com/Preston-Robertson/LuigiBot) to-do system. It is
+the **second read-write client** of the shared Postgres database `luigi_todo`;
+LuigiBot is the schema-owning first client. Both write concurrently —
+Postgres/MVCC keeps things safe.
 
 > **Prerequisite:** The `luigi_todo` DB must be at `schema_version = 2` (the four
 > list tables must have a `uuid` column). The app refuses to serve traffic if
@@ -216,9 +218,10 @@ Other views:
 * **Admin** — runtime info + self-update / restart controls + JSON backup
   export + a paste-in Game'N'Watch credentials panel (see below). Its
   read-only **Integration health** cards query PostgreSQL and Google Sheets,
-  probe the Steam Store, TVMaze, and AniList APIs, report Steam-progress /
-  YouTube / LLM configuration, and verify Git plus env-file access. Results
-  include response times and actionable errors—no terminal diagnostics needed.
+  run a fully rolled-back Discipline schema/permission write check, probe the
+  Steam Store, TVMaze, and AniList APIs, report Steam-progress / YouTube / LLM
+  configuration, and verify Git plus env-file access. Results include response
+  times and actionable errors—no terminal diagnostics needed.
 
 ### Future UI directions (noted for later)
 
@@ -247,6 +250,15 @@ Other views:
     pointing at `tasks.uuid` / `recurring_tasks.uuid`. GUI stays
     DDL-free — LuigiBot ships the migration; this app just reads/writes
     the table.
+* **In-app feedback:** a persistent, unobtrusive **Feedback** action for Bug,
+  Idea, and General feedback. A future implementation should capture the
+  current page, app version/commit, optional screenshot, and user message;
+  preview exactly what will be sent; redact secrets; and route submissions to
+  a configurable GitHub Issues repository or an app-owned feedback inbox.
+* **Discipline v2:** replace task-text-linked completion history with shared,
+  UUID-keyed Postgres definitions/events used by both LuigiBot and this GUI.
+  The coordinated schema, migration, validation, and cutover plan is documented
+  in [`docs/discipline-v2-plan.md`](docs/discipline-v2-plan.md).
 
 These are additive — the DB layer and route shape don't need to change to add
 them; only new templates + route variants (and, for Option C, one new table).
@@ -255,7 +267,9 @@ them; only new templates + route variants (and, for Option C, one new table).
 
 ## Data contract (short version)
 
-The SQL contract is centralized in `db.py`. Hard rules the GUI must obey:
+The web SQL adapter is centralized in `db.py`; authoritative schema creation
+and versioned migrations live in LuigiBot's `bot_modules/db.py`. Hard rules the
+GUI must obey:
 
 * Never insert an explicit `id` — PKs are `GENERATED ALWAYS AS IDENTITY`.
 * `uuid` is the durable row handle. All `UPDATE`/`DELETE` are scoped `WHERE uuid = :uuid`.
@@ -429,9 +443,10 @@ Authenticated (session cookie, or `?token=` / `Authorization: Bearer`):
 * `GET  /admin`           → runtime info + update / restart controls +
   backup export
 * `GET  /admin/integrations` → timed, read-only checks for PostgreSQL and
-  Google Sheets; network probes for Steam Store, TVMaze, and AniList; config
-  status for Steam progress, optional YouTube, and LLM; plus Git and managed
-  environment-file checks
+  Google Sheets; a rolled-back Discipline schema/INSERT/DELETE/UPDATE
+  capability test; network probes for Steam Store, TVMaze, and AniList;
+  configuration status for Steam progress, optional YouTube, and LLM; plus Git
+  and managed environment-file checks
 * `GET  /admin/backup`    → read-only JSON dump of `tasks`,
   `recurring_tasks`, `follow_up_tasks`, `discipline_list`, and
   `discipline_completions`, plus app-managed project/archive fallback

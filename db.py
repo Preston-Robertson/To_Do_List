@@ -1090,6 +1090,76 @@ def completion_exists(task: str, day: str) -> bool:
         ).first() is not None
 
 
+def discipline_storage_health() -> str:
+    """Validate Discipline schema and write permissions without saving data.
+
+    The current LuigiBot schema links completions to a discipline by task text,
+    not UUID. This check verifies the required columns plus INSERT, DELETE, and
+    streak UPDATE permissions inside one transaction that is always rolled
+    back, making it safe for the Admin integration-health panel.
+    """
+    required = {
+        "discipline_list": {
+            "uuid", "task", "catagory", "frequency_per_week", "active",
+            "current_streak",
+        },
+        "discipline_completions": {
+            "task", "catagory", "completed_date", "logged_at",
+        },
+    }
+    marker = f"__luigi_web_health_{new_uuid()}"
+    engine = get_engine()
+    with engine.connect() as conn:
+        transaction = conn.begin()
+        try:
+            rows = conn.execute(text("""
+                SELECT table_name, column_name
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name IN ('discipline_list', 'discipline_completions')
+            """)).all()
+            present: dict[str, set[str]] = {}
+            for table_name, column_name in rows:
+                present.setdefault(str(table_name), set()).add(str(column_name))
+            missing = {
+                table: sorted(columns - present.get(table, set()))
+                for table, columns in required.items()
+                if columns - present.get(table, set())
+            }
+            if missing:
+                detail = "; ".join(
+                    f"{table} missing {', '.join(columns)}"
+                    for table, columns in missing.items()
+                )
+                raise RuntimeError(detail)
+
+            conn.execute(text("""
+                INSERT INTO discipline_completions
+                    (task, catagory, completed_date, logged_at)
+                VALUES (:task, 'Health Check', '2099-12-31', :logged_at)
+            """), {"task": marker, "logged_at": now_iso()})
+            inserted = conn.execute(text("""
+                SELECT 1 FROM discipline_completions
+                WHERE task = :task AND completed_date = '2099-12-31'
+            """), {"task": marker}).first()
+            if inserted is None:
+                raise RuntimeError("completion INSERT was not visible")
+            conn.execute(text("""
+                DELETE FROM discipline_completions
+                WHERE task = :task AND completed_date = '2099-12-31'
+            """), {"task": marker})
+            # PostgreSQL checks UPDATE privilege even though this deliberately
+            # matches no rows and changes no user data.
+            conn.execute(text("""
+                UPDATE discipline_list
+                SET current_streak = current_streak
+                WHERE uuid = :marker
+            """), {"marker": marker})
+            return "legacy text-key schema ready; insert/delete/streak-update permissions verified"
+        finally:
+            transaction.rollback()
+
+
 def _refresh_discipline_streak(conn, task: str) -> int:
     """Recompute the stored streak after a web-side completion mutation."""
     days = {

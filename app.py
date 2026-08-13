@@ -1953,6 +1953,9 @@ def admin_integrations(request: Request):
         sheet = gnw._get_sheet()
         return f"sheet: {sheet.title}"
 
+    def check_discipline():
+        return db.discipline_storage_health()
+
     def check_tvmaze():
         response = httpx.get("https://api.tvmaze.com/shows/1", timeout=8)
         response.raise_for_status()
@@ -1998,6 +2001,7 @@ def admin_integrations(request: Request):
 
     checks = [
         _integration_result("PostgreSQL", check_db),
+        _integration_result("Discipline storage", check_discipline),
         _integration_result("Google Sheets", check_sheets),
         _integration_result("Steam", check_steam),
         _integration_result("TVMaze", check_tvmaze),

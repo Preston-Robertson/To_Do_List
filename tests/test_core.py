@@ -89,6 +89,65 @@ class DatabaseHelperTests(unittest.TestCase):
             db._try_refresh_discipline_streak("Gym")
         refresh.assert_called_once()
 
+    def test_discipline_health_check_always_rolls_back(self) -> None:
+        required = {
+            "discipline_list": [
+                "uuid", "task", "catagory", "frequency_per_week", "active",
+                "current_streak",
+            ],
+            "discipline_completions": [
+                "task", "catagory", "completed_date", "logged_at",
+            ],
+        }
+
+        class Result:
+            def __init__(self, rows=None, first=None):
+                self._rows = rows or []
+                self._first = first
+
+            def all(self):
+                return self._rows
+
+            def first(self):
+                return self._first
+
+        class Transaction:
+            rolled_back = False
+
+            def rollback(self):
+                self.rolled_back = True
+
+        transaction = Transaction()
+
+        class Connection:
+            def begin(self):
+                return transaction
+
+            def execute(self, statement, params=None):
+                sql = str(statement)
+                if "information_schema.columns" in sql:
+                    rows = [(table, column) for table, columns in required.items() for column in columns]
+                    return Result(rows=rows)
+                if "SELECT 1 FROM discipline_completions" in sql:
+                    return Result(first=(1,))
+                return Result()
+
+        class ConnectionContext:
+            def __enter__(self):
+                return Connection()
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+        class Engine:
+            def connect(self):
+                return ConnectionContext()
+
+        with patch.object(db, "get_engine", return_value=Engine()):
+            detail = db.discipline_storage_health()
+        self.assertIn("permissions verified", detail)
+        self.assertTrue(transaction.rolled_back)
+
 
 class RecurringFormTests(unittest.TestCase):
     def test_enabled_recurrence_requires_a_schedule(self) -> None:
@@ -161,6 +220,9 @@ class GameAndWatchTests(unittest.TestCase):
         self.assertIn('name="rating"', html)
         self.assertIn('value="9" selected', html)
         self.assertIn('hx-post="/gnw/games/update"', html)
+        self.assertIn("media-status-trigger", html)
+        self.assertIn("Move to", html)
+        self.assertIn('"status": "completed"', html)
 
     def test_full_sheet_url_is_accepted(self) -> None:
         url = "https://docs.google.com/spreadsheets/d/abc_123-X/edit?gid=0"
