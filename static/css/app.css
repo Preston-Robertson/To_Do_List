@@ -571,6 +571,15 @@ main { padding: 20px; }
   align-items: start;
 }
 
+/* Admin panels reuse the home `.widget` card, but they hold tall settings
+   forms (e.g. the Environment file editor). The home dashboard's fixed
+   `max-height` + `overflow:hidden` would clip the last group (Game'N'Watch)
+   with no way to reach it, so on admin let panels grow to their content and
+   let the page scroll normally. `overflow:hidden` stays for the rounded
+   accent-bar corners; without the height cap it has nothing to clip. */
+.admin-grid .widget { max-height: none; }
+.admin-grid .widget-body { overflow: visible; }
+
 /* Each widget: soft card with a colored accent bar along the top. Accent
    comes from a `--accent-c` custom prop set per-widget below. */
 .widget {

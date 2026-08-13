@@ -120,6 +120,46 @@ def credentials_path() -> str:
     return _creds_file()
 
 
+# Fields a Google service-account key must have for us to even attempt a
+# connection. Mirrors the validation in save_credentials().
+_REQUIRED_CRED_FIELDS = ("client_email", "private_key", "project_id")
+
+
+def _validate_creds_file(path: str) -> str | None:
+    """Return a human-readable reason the credentials file is unusable, or None
+    if it parses as a service-account key with the required fields.
+
+    Catches the common "file exists but is empty / half-written / not JSON"
+    case up front so callers get an actionable message instead of a raw
+    ``JSONDecodeError`` from deep inside google-auth at connect time.
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            raw = fh.read()
+    except OSError as exc:
+        return f"credentials file at {path} couldn't be read ({exc})"
+    if not raw.strip():
+        return (f"credentials file at {path} is empty — paste the "
+                "service-account key again in Admin → Game'N'Watch credentials.")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return (f"credentials file at {path} isn't valid JSON — paste the "
+                "service-account key again in Admin → Game'N'Watch credentials.")
+    if not isinstance(data, dict):
+        return (f"credentials file at {path} isn't a JSON object — paste the "
+                "full service-account key in Admin → Game'N'Watch credentials.")
+    if data.get("type") != "service_account":
+        return (f"credentials file at {path} isn't a service-account key "
+                "(missing \"type\": \"service_account\"). Re-download the key "
+                "from Google Cloud → Service Accounts → Keys and paste it in Admin.")
+    missing = [k for k in _REQUIRED_CRED_FIELDS if not data.get(k)]
+    if missing:
+        return (f"credentials file at {path} is missing required fields "
+                f"({', '.join(missing)}) — re-paste the full key in Admin.")
+    return None
+
+
 def disabled_reason() -> str | None:
     """Return why the integration is off, or None if it's ready to use."""
     if gspread is None or Credentials is None:
@@ -130,6 +170,9 @@ def disabled_reason() -> str | None:
         return "LUIGI_WEB_GNW_CREDS_FILE is not set"
     if not os.path.isfile(_creds_file()):
         return f"credentials file not found: {_creds_file()}"
+    bad = _validate_creds_file(_creds_file())
+    if bad:
+        return bad
     return None
 
 

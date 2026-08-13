@@ -192,15 +192,10 @@
               <button
                 type="button"
                 class="btn btn-tiny btn-primary"
-                hx-post="/discipline/toggle"
-                hx-target="closest li"
-                hx-swap="delete"
-                hx-vals='{
-                  "task": {{ d.task|tojson }},
-                  "catagory": {{ (d.catagory or "")|tojson }},
-                  "day": "{{ today_iso }}",
-                  "action": "mark"
-                }'
+                data-discipline-done
+                data-task="{{ d.task }}"
+                data-catagory="{{ d.catagory or '' }}"
+                data-day="{{ today_iso }}"
               >Done</button>
             </li>
           {% endfor %}

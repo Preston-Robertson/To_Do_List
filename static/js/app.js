@@ -287,6 +287,63 @@
     }
   });
 
+  // ------------------- Discipline "Done" (home widget) -------------------
+  // Explicit fetch (not htmx) so we get deterministic feedback: the row is
+  // removed ONLY after the server confirms the completion persisted; a failure
+  // shows the error toast with the server's reason instead of silently
+  // reverting or reloading the page.
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-discipline-done]");
+    if (!btn) return;
+    e.preventDefault();
+    const row = btn.closest(".widget-row") || btn.closest("li");
+    const widget = btn.closest(".widget");
+    const fd = new FormData();
+    fd.set("task", btn.dataset.task || "");
+    fd.set("day", btn.dataset.day || "");
+    if (btn.dataset.catagory) fd.set("catagory", btn.dataset.catagory);
+    fd.set("action", "mark");
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "…";
+    fetch("/discipline/toggle", {
+      method: "POST",
+      body: fd,
+      credentials: "same-origin",
+    })
+      .then(async (resp) => {
+        if (!resp.ok) {
+          let msg = "";
+          try { msg = (await resp.text()).trim(); } catch {}
+          window.showError(msg || `Couldn't save (${resp.status}). Try again.`);
+          btn.disabled = false;
+          btn.textContent = originalText;
+          return;
+        }
+        // Confirmed saved: drop the row and refresh the widget's count /
+        // empty-state without a full page reload.
+        if (row) row.remove();
+        if (widget) {
+          const list = widget.querySelector(".widget-list");
+          const count = widget.querySelector(".widget-count");
+          const remaining = list ? list.querySelectorAll(".widget-row").length : 0;
+          if (count) count.textContent = String(remaining);
+          if (remaining === 0) {
+            const body = widget.querySelector(".widget-body");
+            if (body) {
+              body.innerHTML = '<p class="empty">All disciplines done for today. \uD83C\uDF89</p>';
+            }
+          }
+        }
+        if (typeof reorderEmptyLast === "function") reorderEmptyLast();
+      })
+      .catch(() => {
+        window.showError("Couldn't reach the server — nothing was saved.");
+        btn.disabled = false;
+        btn.textContent = originalText;
+      });
+  });
+
   // ------------------- Kanban drag-and-drop -------------------
   function initKanban() {
     if (typeof Sortable === "undefined") return;
