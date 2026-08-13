@@ -236,7 +236,7 @@ of `LUIGI_WEB_UI_TOKEN` to get a session cookie.
 | `LUIGI_WEB_LLM_MODEL` | Default `openai/gpt-4o-mini` |
 | `LUIGI_WEB_LLM_TIMEOUT` | HTTP timeout in seconds (default `60`) |
 | `LUIGI_WEB_LLM_MAX_TOOL_ITERATIONS` | Cap on tool round-trips per message (default `5`) |
-| `LUIGI_WEB_GNW_SHEET_ID` | Game'N'Watch Google Sheet ID (from the sheet URL). Blank hides the Games/Shows tabs |
+| `LUIGI_WEB_GNW_SHEET_ID` | Game'N'Watch Google Sheet ID or full sheet URL. Blank hides the Games/Shows tabs |
 | `LUIGI_WEB_GNW_CREDS_FILE` | Path to the service-account `credentials.json`. Leave **blank** to use the app-managed path (`<repo>/gnw-credentials.json`) that the Admin page writes to |
 
 Secrets **must** live outside the repo — in `/etc/luigi-web.env` on the LXC
@@ -534,7 +534,7 @@ sheet id / credentials aren't set, `gnw.disabled_reason()` drives a friendly
 
 | Var | Purpose |
 |---|---|
-| `LUIGI_WEB_GNW_SHEET_ID` | The sheet id from its URL (`…/spreadsheets/d/<THIS>/edit`). Blank hides the tabs. |
+| `LUIGI_WEB_GNW_SHEET_ID` | The sheet ID or full Google Sheets URL. Blank hides the tabs. |
 | `LUIGI_WEB_GNW_CREDS_FILE` | Path to the service-account `credentials.json`. **Leave blank** to use the app-managed path `<repo>/gnw-credentials.json`. |
 
 **Credentials without SSH.** The **Admin → "Game'N'Watch credentials"** panel

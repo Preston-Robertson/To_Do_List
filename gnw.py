@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 import threading
 import time
 from datetime import date
@@ -106,9 +107,24 @@ _CACHE_TTL = 20.0  # seconds
 _REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CREDS_PATH = os.path.join(_REPO_DIR, "gnw-credentials.json")
 
+_SHEET_URL_ID_RE = re.compile(r"/spreadsheets/d/([A-Za-z0-9_-]+)")
+
+
+def _normalize_sheet_id(value: str) -> str:
+    """Accept either a bare spreadsheet ID or a normal Google Sheets URL.
+
+    The Admin form historically asked for "the id from the sheet URL", but it
+    is natural to paste the full URL. Passing that URL to gspread.open_by_key()
+    creates a malformed Sheets API request (and can surface as a misleading
+    char-0 JSONDecodeError), so extract the key before making any API call.
+    """
+    value = (value or "").strip()
+    match = _SHEET_URL_ID_RE.search(value)
+    return match.group(1) if match else value
+
 
 def _sheet_id() -> str:
-    return os.environ.get("LUIGI_WEB_GNW_SHEET_ID", "").strip()
+    return _normalize_sheet_id(os.environ.get("LUIGI_WEB_GNW_SHEET_ID", ""))
 
 
 def _creds_file() -> str:

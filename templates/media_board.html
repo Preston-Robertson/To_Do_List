@@ -35,7 +35,7 @@
       <p>This tab reads your <strong>Game’N’Watch</strong> Google Sheet. To turn it on:</p>
       <ol>
         <li>Copy the bot’s <code>credentials.json</code> onto this host (e.g. <code>/etc/luigi-web-gnw.json</code>).</li>
-        <li>In <a href="/admin">Admin → Environment file</a>, set <code>LUIGI_WEB_GNW_SHEET_ID</code> (the id from the sheet URL) and <code>LUIGI_WEB_GNW_CREDS_FILE</code> (the path above).</li>
+        <li>In <a href="/admin">Admin → Environment file</a>, set <code>LUIGI_WEB_GNW_SHEET_ID</code> (the sheet ID or full URL) and <code>LUIGI_WEB_GNW_CREDS_FILE</code> (the path above).</li>
         <li>Restart the service.</li>
       </ol>
       <p class="muted-hint">Current status: {{ disabled_reason }}</p>
