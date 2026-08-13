@@ -71,6 +71,9 @@ KNOWN_KEYS: tuple[EnvKey, ...] = (
     # Game'N'Watch (Google Sheets) -----------------------------------------
     EnvKey("LUIGI_WEB_GNW_SHEET_ID",   "Game'N'Watch Sheet", "Paste the Google Sheet ID or its full URL. Blank disables the Games/Shows tabs.", "Game'N'Watch"),
     EnvKey("LUIGI_WEB_GNW_CREDS_FILE", "Service-account creds", "Path to the credentials.json. Leave BLANK to use the app-managed path you can paste into from the Game'N'Watch credentials panel above.", "Game'N'Watch"),
+    EnvKey("LUIGI_WEB_STEAM_API_KEY", "Steam Web API key", "Optional. Enables owned-game playtime and achievement progress. Blank on save keeps the current key.", "Game'N'Watch", is_secret=True),
+    EnvKey("LUIGI_WEB_STEAM_ID", "Steam ID64", "Steam account ID used for playtime and achievement progress; game details/search need no key.", "Game'N'Watch"),
+    EnvKey("LUIGI_WEB_YOUTUBE_API_KEY", "YouTube Data API key", "Optional. Adds YouTube playlist results to show search. Blank on save keeps the current key.", "Game'N'Watch", is_secret=True),
 )
 
 _KEYS_BY_NAME: dict[str, EnvKey] = {k.name: k for k in KNOWN_KEYS}

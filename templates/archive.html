@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="board-header">
+  <div>
+    <h1>Archive</h1>
+    <span class="muted-hint">Completed history kept out of active views</span>
+  </div>
+</section>
+
+{% if not archive_enabled %}
+  <section class="empty-hero">
+    <p>Archive is unavailable because the web database role could not add its
+      optional <code>archived</code> columns. The rest of the app is unaffected.</p>
+  </section>
+{% elif not rows %}
+  <section class="empty-hero"><p>No archived tasks yet.</p></section>
+{% else %}
+  <section class="archive-list">
+    {% for t in rows %}
+      {% set endpoint = '/recurring' if t.source == 'recurring' else '/tasks' %}
+      <article class="archive-row">
+        <span class="card-priority p{{ t.priority or 0 }}">P{{ t.priority or 0 }}</span>
+        <div class="archive-row-main">
+          <strong>{{ t.task }}</strong>
+          <div class="card-meta">
+            {% if t.project %}<span class="chip">{{ t.project }}</span>{% endif %}
+            {% if t.catagory %}<span class="chip chip-muted">{{ t.catagory }}</span>{% endif %}
+            {% if t.source == 'recurring' %}<span class="chip chip-recurring">↻ Recurring</span>{% endif %}
+            {% if t.completed_time %}<span class="chip chip-muted">{{ t.completed_time[:10] }}</span>{% endif %}
+          </div>
+        </div>
+        <button class="btn btn-tiny" hx-post="{{ endpoint }}/{{ t.uuid }}/restore"
+                hx-swap="none">Restore</button>
+      </article>
+    {% endfor %}
+  </section>
+{% endif %}
+{% endblock %}

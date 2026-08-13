@@ -5,7 +5,10 @@
    without HTMX. Selected catagories become repeated ?catagory=... params so
    they survive bookmarks and browser back/forward. ------------------------- #}
 <section class="board-header projects-header">
-  <h1>Projects</h1>
+  <div>
+    <h1>Projects</h1>
+    <span class="muted-hint">Timeline of open work with due dates</span>
+  </div>
   <form method="get" action="/projects" class="projects-form"
         onchange="this.requestSubmit()">
     {# Keep include_recurring in the query even when unchecked so the
@@ -17,37 +20,32 @@
         {% if include_recurring %}checked{% endif %}> recurring
     </label>
 
-    {% if all_categories %}
-      <div class="proj-cat-chips" role="group" aria-label="Categories">
-        {% for c in all_categories %}
-          <label class="proj-cat-chip {% if c.catagory in selected_categories %}is-active{% endif %}">
-            <input type="checkbox" name="catagory" value="{{ c.catagory }}"
-              {% if c.catagory in selected_categories %}checked{% endif %}>
-            <span class="proj-cat-name">{{ c.catagory }}</span>
-            <span class="proj-cat-count">{{ c.n }}</span>
+    {% if all_projects %}
+      <div class="proj-cat-chips" role="group" aria-label="Projects">
+        {% for p in all_projects %}
+          <label class="proj-cat-chip {% if p.project in selected_projects %}is-active{% endif %}">
+            <input type="checkbox" name="project" value="{{ p.project }}"
+              {% if p.project in selected_projects %}checked{% endif %}>
+            <span class="proj-cat-name">{{ p.project }}</span>
+            <span class="proj-cat-count">{{ p.n }}</span>
           </label>
         {% endfor %}
       </div>
     {% else %}
-      <span class="muted-hint">No categories with open tasks.</span>
+      <span class="muted-hint">No projects with open tasks.</span>
     {% endif %}
 
-    {% if selected_categories %}
+    {% if selected_projects|length < all_projects|length %}
       <a href="/projects{% if not include_recurring %}?include_recurring=0{% endif %}"
-         class="btn btn-tiny btn-ghost">Clear</a>
+         class="btn btn-tiny btn-ghost">Show all</a>
     {% endif %}
   </form>
 </section>
 
-{% if not selected_categories %}
+{% if not chart %}
   <section class="empty-hero">
-    <p><strong>Pick one or more categories above</strong> to see a Gantt
-      timeline of their open tasks. Bars are drawn from each task's start
-      date (or creation date if no explicit start) through its due date.</p>
-  </section>
-{% elif not chart %}
-  <section class="empty-hero">
-    <p>No open items found in the selected categories.</p>
+    <p>No open project tasks are available yet. Add a project and due date to
+      a task and it will appear on this timeline.</p>
   </section>
 {% else %}
 
@@ -137,6 +135,7 @@
                 <title>{{ t.task }}
 Status: {{ t.status }}
 {{ t.start_iso }} → {{ t.end_iso }}
+Project: {{ t.project or lane.catagory }}
 Category: {{ t.catagory or '—' }}</title>
               </rect>
             </g>

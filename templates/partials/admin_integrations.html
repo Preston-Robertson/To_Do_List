@@ -1,0 +1,13 @@
+<div class="health-grid">
+  {% for check in checks %}
+    <article class="health-card {{ 'is-ok' if check.ok else 'is-error' }}">
+      <div class="health-card-title">
+        <span aria-hidden="true">{{ '●' if check.ok else '!' }}</span>
+        <strong>{{ check.name }}</strong>
+        <span class="muted-hint">{{ check.ms }} ms</span>
+      </div>
+      <p>{{ check.detail }}</p>
+    </article>
+  {% endfor %}
+</div>
+<p class="muted-hint">Last checked {{ checked_at }}. Checks are read-only.</p>

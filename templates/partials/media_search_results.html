@@ -1,0 +1,18 @@
+{% if error %}
+  <div class="admin-banner-err">Search failed: {{ error }}</div>
+{% endif %}
+<div class="catalog-results">
+  {% for result in results %}
+    <article class="catalog-result">
+      {% if result.cover_url %}<img src="{{ result.cover_url }}" alt="" loading="lazy" referrerpolicy="no-referrer">{% endif %}
+      <div><strong>{{ result.title }}</strong><span class="muted-hint">{{ result.detail }}</span></div>
+      <button class="btn btn-primary btn-tiny" hx-post="/gnw/{{ section }}/add" hx-swap="none"
+        hx-vals='{{ {"profile": profile, "status": status, "priority": priority, "source": result.source, "external_id": result.external_id}|tojson }}'>Add</button>
+    </article>
+  {% endfor %}
+  <article class="catalog-result manual-result">
+    <div><strong>Add “{{ query }}” manually</strong><span class="muted-hint">Use when no catalog result matches.</span></div>
+    <button class="btn btn-tiny" hx-post="/gnw/{{ section }}/add" hx-swap="none"
+      hx-vals='{{ {"profile": profile, "status": status, "priority": priority, "source": "manual", "title": query}|tojson }}'>Add manual</button>
+  </article>
+</div>

@@ -22,6 +22,7 @@
             </span>
             <button type="button" class="btn btn-tiny"
                     data-at-risk-done
+                  data-discipline-uuid="{{ d.uuid }}"
                     data-task="{{ d.task }}"
                     data-catagory="{{ d.catagory or '' }}"
                     data-day="{{ today_iso }}">Done</button>
@@ -193,6 +194,7 @@
                 type="button"
                 class="btn btn-tiny btn-primary"
                 data-discipline-done
+                data-discipline-uuid="{{ d.uuid }}"
                 data-task="{{ d.task }}"
                 data-catagory="{{ d.catagory or '' }}"
                 data-day="{{ today_iso }}"

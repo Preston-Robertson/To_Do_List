@@ -1,0 +1,28 @@
+<div class="steam-stats">
+  <h2>Steam progress</h2>
+  {% if error %}
+    <div class="admin-banner-err">{{ error }}</div>
+    <p class="muted-hint">Store search and metadata do not require a key. Personal progress requires a Steam Web API key, Steam ID64, and public game details.</p>
+  {% else %}
+    <h3>{{ stats.name }}</h3>
+    <div class="stat-grid">
+      <div><strong>{{ stats.hours_played }}</strong><span>hours played</span></div>
+      <div><strong>{{ stats.hours_recent }}</strong><span>hours in 2 weeks</span></div>
+      <div><strong>{{ stats.achievements_unlocked }}/{{ stats.achievements_total }}</strong><span>achievements</span></div>
+      <div><strong>{{ stats.achievement_percent if stats.achievement_percent is not none else '—' }}%</strong><span>complete</span></div>
+    </div>
+    {% if stats.complete %}
+      <p class="admin-banner-ok">🏆 Every Steam achievement is unlocked.</p>
+      <button class="btn btn-primary" hx-post="/gnw/games/status" hx-swap="none"
+        hx-vals='{{ {"profile": profile, "title": title, "status": "achievements"}|tojson }}'>Move to 100% Achievements</button>
+    {% elif stats.next_achievements %}
+      <h3>Still locked</h3>
+      <ul class="steam-achievements">
+        {% for achievement in stats.next_achievements %}
+          <li><strong>{{ achievement.name }}</strong>{% if achievement.description %}<span>{{ achievement.description }}</span>{% endif %}</li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  {% endif %}
+  <div class="form-actions"><button type="button" class="btn" data-close-modal>Close</button></div>
+</div>

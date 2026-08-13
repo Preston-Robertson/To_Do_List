@@ -1,0 +1,24 @@
+<div class="media-add">
+  <h2>Add {{ 'game' if section == 'games' else 'show' }}</h2>
+  <form hx-post="/gnw/{{ section }}/search" hx-target="#media-search-results" hx-swap="innerHTML">
+    <div class="form-row">
+      <label>Profile
+        <select name="profile" required>
+          {% for p in profiles %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Status
+        <select name="status">{% for s in statuses %}<option value="{{ s }}">{{ status_labels.get(s, s) }}</option>{% endfor %}</select>
+      </label>
+      <label>Priority <input type="number" name="priority" min="1" max="5" value="3"></label>
+    </div>
+    <label>{{ 'Steam URL, app ID, or game name' if section == 'games' else 'Show or anime title' }}
+      <input type="search" name="query" required autofocus placeholder="Search catalog…">
+    </label>
+    <div class="form-actions">
+      <button type="button" class="btn btn-ghost" data-close-modal>Cancel</button>
+      <button class="btn btn-primary" type="submit">Search</button>
+    </div>
+  </form>
+  <div id="media-search-results"></div>
+</div>

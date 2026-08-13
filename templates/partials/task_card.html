@@ -6,6 +6,7 @@
    user's search query for comparison. #}
 {% set _reactivates = reactivation_date(t) %}
 {% set _weekday_labels = recurring_days_labels(t.recurring_days) %}
+{% set card_endpoint = t._endpoint_root or endpoint_root %}
 <article
   class="card{% if t.completed %} card-completed{% endif %}"
   data-uuid="{{ t.uuid }}"
@@ -14,6 +15,7 @@
   data-priority="{{ t.priority or 0 }}"
   data-status="{{ t.status or 'Not Started' }}"
   data-catagory="{{ (t.catagory or '')|lower }}"
+  data-project="{{ (t.project or '')|lower }}"
   data-task-group="{{ (t.task_group or '')|lower }}"
   data-sub-group="{{ (t.sub_group or '')|lower }}"
   data-due-date="{{ t.due_date or '' }}"
@@ -22,6 +24,7 @@
   data-recurring="{{ t.recurring or 0 }}"
   data-recurring-interval="{{ t.recurring_interval or '' }}"
   data-reactivation-date="{{ _reactivates or '' }}"
+  data-endpoint="{{ card_endpoint }}"
 >
   <header class="card-header">
     <span class="card-priority p{{ t.priority or 0 }}">P{{ t.priority or 0 }}</span>
@@ -30,10 +33,12 @@
 
   <div class="card-meta">
     {% if t.due_date %}<span class="chip chip-due">{{ t.due_date }}</span>{% endif %}
+    {% if t.project %}<span class="chip" title="Project">◆ {{ t.project }}</span>{% endif %}
     {% if t.catagory %}<span class="chip">{{ t.catagory }}</span>{% endif %}
     {% if t.task_group %}<span class="chip chip-muted">{{ t.task_group }}</span>{% endif %}
     {% if t.sub_group %}<span class="chip chip-muted">{{ t.sub_group }}</span>{% endif %}
     {% if t.estimated_time %}<span class="chip chip-muted">~{{ t.estimated_time }}h</span>{% endif %}
+    {% if t.recurring %}<span class="chip chip-recurring">↻ Recurring</span>{% endif %}
     {% if _weekday_labels %}
       {# Recurring schedule chip; visible whether or not the card is completed
          so the user can see the plan at a glance. #}
@@ -64,14 +69,14 @@
   <footer class="card-actions">
     <button
       class="btn btn-tiny"
-      hx-get="{{ endpoint_root }}/{{ t.uuid }}/edit"
+      hx-get="{{ card_endpoint }}/{{ t.uuid }}/edit"
       hx-target="#modal-body"
       onclick="openModal()"
     >Edit</button>
 
     <button
       class="btn btn-tiny"
-      hx-post="{{ endpoint_root }}/{{ t.uuid }}/complete"
+      hx-post="{{ card_endpoint }}/{{ t.uuid }}/complete"
       hx-target="#card-{{ t.uuid }}"
       hx-swap="outerHTML"
     >{% if t.completed %}Undo{% else %}Done{% endif %}</button>
@@ -82,28 +87,28 @@
       <div class="snooze-menu-body">
         <button
           class="btn btn-tiny btn-ghost"
-          hx-post="{{ endpoint_root }}/{{ t.uuid }}/snooze"
+          hx-post="{{ card_endpoint }}/{{ t.uuid }}/snooze"
           hx-vals='{"days": "1"}'
           hx-target="#card-{{ t.uuid }}"
           hx-swap="outerHTML"
         >+1 day</button>
         <button
           class="btn btn-tiny btn-ghost"
-          hx-post="{{ endpoint_root }}/{{ t.uuid }}/snooze"
+          hx-post="{{ card_endpoint }}/{{ t.uuid }}/snooze"
           hx-vals='{"days": "3"}'
           hx-target="#card-{{ t.uuid }}"
           hx-swap="outerHTML"
         >+3 days</button>
         <button
           class="btn btn-tiny btn-ghost"
-          hx-post="{{ endpoint_root }}/{{ t.uuid }}/snooze"
+          hx-post="{{ card_endpoint }}/{{ t.uuid }}/snooze"
           hx-vals='{"days": "7"}'
           hx-target="#card-{{ t.uuid }}"
           hx-swap="outerHTML"
         >+1 week</button>
         <button
           class="btn btn-tiny btn-ghost"
-          hx-post="{{ endpoint_root }}/{{ t.uuid }}/snooze"
+          hx-post="{{ card_endpoint }}/{{ t.uuid }}/snooze"
           hx-vals='{"days": "14"}'
           hx-target="#card-{{ t.uuid }}"
           hx-swap="outerHTML"
@@ -112,9 +117,18 @@
     </details>
     {% endif %}
 
+    {% if t.completed %}
+    <button
+      class="btn btn-tiny btn-ghost"
+      hx-post="{{ card_endpoint }}/{{ t.uuid }}/archive"
+      hx-swap="none"
+      hx-confirm="Move this completed task to the archive?"
+    >Archive</button>
+    {% endif %}
+
     <button
       class="btn btn-tiny btn-danger"
-      hx-post="{{ endpoint_root }}/{{ t.uuid }}/delete"
+      hx-post="{{ card_endpoint }}/{{ t.uuid }}/delete"
       hx-target="#card-{{ t.uuid }}"
       hx-swap="outerHTML"
       hx-confirm="Delete this task?"

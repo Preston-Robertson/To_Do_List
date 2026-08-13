@@ -15,6 +15,7 @@ import sys
 import signal
 import threading
 import time
+import calendar as calendar_mod
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -290,6 +291,22 @@ def tasks_page(request: Request):
     _require_v2()
     _reactivate_recurring()
     rows = db.list_tasks()
+    for row in rows:
+        row["_endpoint_root"] = "/tasks"
+        row["_source"] = "task"
+    recurring_rows = db.list_recurring()
+    for row in recurring_rows:
+        row["_endpoint_root"] = "/recurring"
+        row["_source"] = "recurring"
+    rows.extend(recurring_rows)
+    rows.sort(
+        key=lambda row: (
+            int(row.get("completed") or 0),
+            -int(row.get("priority") or 0),
+            row.get("due_date") or "9999-12-31",
+            (row.get("task") or "").lower(),
+        )
+    )
     return templates.TemplateResponse(
         "tasks.html",
         {
@@ -299,6 +316,7 @@ def tasks_page(request: Request):
             "statuses": db.STATUS_DISPLAY_ORDER,
             "endpoint_root": "/tasks",
             "page_title": "Tasks",
+            "consolidated": True,
         },
     )
 
@@ -314,6 +332,28 @@ async def tasks_create(request: Request):
         {"request": request, "t": row, "endpoint_root": "/tasks"},
         headers={"HX-Trigger": "closeModal,reloadBoard"},
     )
+
+
+@app.post("/tasks/quick", dependencies=[Depends(require_auth)])
+async def tasks_quick_create(request: Request):
+    """Small header form for the common one-off task creation path."""
+    _require_v2()
+    form = dict(await request.form())
+    task = str(form.get("task") or "").strip()
+    if not task:
+        raise HTTPException(422, "Task name is required")
+    payload = {
+        "task": task,
+        "priority": form.get("priority") or 0,
+        "due_date": form.get("due_date") or None,
+        "project": form.get("project") or None,
+        "status": "Not Started",
+    }
+    try:
+        db.create_task(payload)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return Response(status_code=204, headers={"HX-Refresh": "true"})
 
 
 @app.get(
@@ -432,6 +472,22 @@ def tasks_delete(row_uuid: str):
     return Response(status_code=200, content="", headers={"HX-Trigger": trigger})
 
 
+@app.post("/tasks/{row_uuid}/archive", dependencies=[Depends(require_auth)])
+def tasks_archive(row_uuid: str):
+    _require_v2()
+    if not db.archive_task(row_uuid, True):
+        raise HTTPException(404, "task not found")
+    return Response(status_code=204, headers={"HX-Refresh": "true"})
+
+
+@app.post("/tasks/{row_uuid}/restore", dependencies=[Depends(require_auth)])
+def tasks_restore(row_uuid: str):
+    _require_v2()
+    if not db.archive_task(row_uuid, False):
+        raise HTTPException(404, "task not found")
+    return Response(status_code=204, headers={"HX-Refresh": "true"})
+
+
 @app.post(
     "/tasks/{row_uuid}/snooze",
     response_class=HTMLResponse,
@@ -471,20 +527,9 @@ async def tasks_snooze(request: Request, row_uuid: str):
 
 @app.get("/recurring", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 def recurring_page(request: Request):
+    """Legacy bookmark: recurring tasks now live on the Tasks board."""
     _require_v2()
-    _reactivate_recurring()
-    rows = db.list_recurring()
-    return templates.TemplateResponse(
-        "tasks.html",
-        {
-            "request": request,
-            "active_nav": "recurring",
-            "columns": _kanban_columns(rows),
-            "statuses": db.STATUS_DISPLAY_ORDER,
-            "endpoint_root": "/recurring",
-            "page_title": "Recurring",
-        },
-    )
+    return RedirectResponse(url="/tasks", status_code=303)
 
 
 @app.post("/recurring", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
@@ -619,6 +664,37 @@ def recurring_delete(row_uuid: str):
     return Response(status_code=200, content="", headers={"HX-Trigger": trigger})
 
 
+@app.post("/recurring/{row_uuid}/archive", dependencies=[Depends(require_auth)])
+def recurring_archive(row_uuid: str):
+    _require_v2()
+    if not db.archive_recurring(row_uuid, True):
+        raise HTTPException(404, "recurring task not found")
+    return Response(status_code=204, headers={"HX-Refresh": "true"})
+
+
+@app.post("/recurring/{row_uuid}/restore", dependencies=[Depends(require_auth)])
+def recurring_restore(row_uuid: str):
+    _require_v2()
+    if not db.archive_recurring(row_uuid, False):
+        raise HTTPException(404, "recurring task not found")
+    return Response(status_code=204, headers={"HX-Refresh": "true"})
+
+
+@app.get("/archive", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def archive_page(request: Request):
+    _require_v2()
+    return templates.TemplateResponse(
+        "archive.html",
+        {
+            "request": request,
+            "active_nav": "archive",
+            "page_title": "Archive",
+            "rows": db.list_archived(),
+            "archive_enabled": True,
+        },
+    )
+
+
 @app.post(
     "/recurring/{row_uuid}/snooze",
     response_class=HTMLResponse,
@@ -713,6 +789,101 @@ def games_page(request: Request):
 @app.get("/shows", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 def shows_page(request: Request):
     return _gnw_board(request, "shows", "Shows")
+
+
+@app.get("/gnw/{section}/new", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def gnw_new_form(section: str, request: Request):
+    _gnw_section(section)
+    try:
+        profiles = gnw.list_profiles()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(503, str(exc)) from exc
+    return templates.TemplateResponse(
+        "partials/media_new.html",
+        {
+            "request": request,
+            "section": section,
+            "profiles": profiles,
+            "statuses": gnw.statuses_for(section),
+            "status_labels": gnw.STATUS_LABELS,
+        },
+    )
+
+
+@app.post("/gnw/{section}/search", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+async def gnw_search(section: str, request: Request):
+    _gnw_section(section)
+    form = dict(await request.form())
+    query = str(form.get("query") or "").strip()
+    if not query:
+        raise HTTPException(422, "Search text is required")
+    try:
+        results = gnw.search_catalog(section, query)
+        error = None
+    except Exception as exc:  # noqa: BLE001
+        results = []
+        error = f"{type(exc).__name__}: {exc}"
+    return templates.TemplateResponse(
+        "partials/media_search_results.html",
+        {
+            "request": request,
+            "section": section,
+            "query": query,
+            "profile": str(form.get("profile") or ""),
+            "status": str(form.get("status") or "backlog"),
+            "priority": str(form.get("priority") or "3"),
+            "results": results,
+            "error": error,
+        },
+    )
+
+
+@app.post("/gnw/{section}/add", dependencies=[Depends(require_auth)])
+async def gnw_add_item(section: str, request: Request):
+    _gnw_section(section)
+    form = dict(await request.form())
+    profile = str(form.get("profile") or "").strip()
+    status = str(form.get("status") or "backlog")
+    try:
+        priority = int(form.get("priority") or 3)
+    except (TypeError, ValueError):
+        raise HTTPException(422, "priority must be a number")
+    source = str(form.get("source") or "manual")
+    external_id = str(form.get("external_id") or "")
+    try:
+        if source == "manual":
+            ok, message = gnw.add_manual_item(
+                section, profile, str(form.get("title") or ""),
+                status=status, priority=priority,
+            )
+        else:
+            metadata = gnw.catalog_lookup(section, source, external_id)
+            if not metadata:
+                raise RuntimeError("The selected catalog result is no longer available")
+            ok, message = gnw.add_catalog_item(
+                section, profile, metadata, status=status, priority=priority,
+            )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(422, f"Could not add item: {type(exc).__name__}: {exc}") from exc
+    if not ok:
+        raise HTTPException(409, message)
+    return Response(status_code=204, headers={"HX-Refresh": "true"})
+
+
+@app.get("/gnw/games/steam-stats", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def gnw_steam_stats(request: Request, profile: str, title: str, app_id: str):
+    try:
+        stats = gnw.steam_stats(app_id)
+        # Keep the existing sheet's Hours Played field useful to the bot too.
+        gnw.update_item("games", profile, title, {"hours_played": stats["hours_played"]})
+        error = None
+    except Exception as exc:  # noqa: BLE001
+        stats = None
+        error = f"{type(exc).__name__}: {exc}"
+    return templates.TemplateResponse(
+        "partials/steam_stats.html",
+        {"request": request, "stats": stats, "error": error, "profile": profile, "title": title},
+    )
 
 
 @app.post("/gnw/{section}/status", dependencies=[Depends(require_auth)])
@@ -1015,6 +1186,16 @@ async def discipline_toggle(request: Request):
     catagory = form.get("catagory") or None
     day = form.get("day", "")
     action = form.get("action", "toggle")
+    discipline_uuid = form.get("discipline_uuid", "")
+    if discipline_uuid:
+        discipline = db.get_discipline(discipline_uuid)
+        if not discipline:
+            raise HTTPException(404, "discipline not found")
+        # Resolve the canonical current values server-side. Completion rows
+        # are keyed by task text in the LuigiBot schema, so stale/rendered
+        # text must not create a detached history row.
+        task = discipline["task"]
+        catagory = discipline.get("catagory")
     if not task or not day:
         raise HTTPException(400, "task and day required")
 
@@ -1247,7 +1428,7 @@ def _build_gantt(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
 
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for r in scheduled:
-        groups[r.get("catagory") or "(none)"].append(r)
+        groups[r.get("project") or "(none)"].append(r)
 
     swimlanes: list[dict[str, Any]] = []
     y = _GANTT_HEADER_H
@@ -1267,6 +1448,7 @@ def _build_gantt(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
                 "uuid": t["uuid"],
                 "source": t.get("source", "task"),
                 "catagory": t.get("catagory") or "",
+                "project": t.get("project") or "",
                 "start_iso": t["_start"].isoformat(),
                 "end_iso": t["_end"].isoformat(),
                 "bar_x": x1,
@@ -1323,12 +1505,18 @@ def projects_page(request: Request):
     so first-time load stays snappy on large DBs.
     """
     _require_v2()
-    selected = [c for c in request.query_params.getlist("catagory") if c]
+    selected = [p for p in request.query_params.getlist("project") if p]
+    # Preserve old bookmarks from the category-grouped version.
+    if not selected:
+        selected = [p for p in request.query_params.getlist("catagory") if p]
     include_recurring = request.query_params.get("include_recurring", "1") == "1"
 
-    all_categories = db.list_categories_with_open_tasks(
+    all_projects = db.list_projects_with_open_tasks(
         include_recurring=include_recurring
     )
+    # The old empty-by-default screen looked broken until chips were selected.
+    if not selected:
+        selected = [row["project"] for row in all_projects]
     rows = db.list_project_rows(selected, include_recurring=include_recurring)
     chart = _build_gantt(rows)
 
@@ -1338,11 +1526,65 @@ def projects_page(request: Request):
             "request": request,
             "active_nav": "projects",
             "page_title": "Projects",
-            "all_categories": all_categories,
-            "selected_categories": set(selected),
+            "all_projects": all_projects,
+            "selected_projects": set(selected),
+            "project_grouping_enabled": db.project_grouping_enabled(),
             "include_recurring": include_recurring,
             "chart": chart,
             "today_iso": date.today().isoformat(),
+        },
+    )
+
+
+# --------------------------------------------------------------------------- #
+# CALENDAR — month view of task due dates
+# --------------------------------------------------------------------------- #
+
+@app.get("/calendar", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def calendar_page(request: Request, month: str | None = None):
+    _require_v2()
+    _reactivate_recurring()
+    today = date.today()
+    try:
+        current = date.fromisoformat(f"{month}-01") if month else today.replace(day=1)
+    except ValueError:
+        raise HTTPException(400, "month must be YYYY-MM")
+    last_day = calendar_mod.monthrange(current.year, current.month)[1]
+    month_end = current.replace(day=last_day)
+    # Full Sunday..Saturday weeks around the selected month.
+    grid_start = current - timedelta(days=(current.weekday() + 1) % 7)
+    grid_end = month_end + timedelta(days=(5 - month_end.weekday()) % 7)
+    rows = db.list_calendar_rows(grid_start, grid_end)
+    by_day: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        by_day.setdefault(str(row.get("due_date") or "")[:10], []).append(row)
+    weeks: list[list[dict[str, Any]]] = []
+    cursor = grid_start
+    while cursor <= grid_end:
+        week: list[dict[str, Any]] = []
+        for _ in range(7):
+            week.append({
+                "date": cursor,
+                "iso": cursor.isoformat(),
+                "in_month": cursor.month == current.month,
+                "tasks": by_day.get(cursor.isoformat(), []),
+            })
+            cursor += timedelta(days=1)
+        weeks.append(week)
+    prev_month = (current - timedelta(days=1)).replace(day=1)
+    next_month = (month_end + timedelta(days=1)).replace(day=1)
+    return templates.TemplateResponse(
+        "calendar.html",
+        {
+            "request": request,
+            "active_nav": "calendar",
+            "page_title": "Calendar",
+            "month_label": current.strftime("%B %Y"),
+            "month_value": current.strftime("%Y-%m"),
+            "prev_month": prev_month.strftime("%Y-%m"),
+            "next_month": next_month.strftime("%Y-%m"),
+            "weeks": weeks,
+            "today_iso": today.isoformat(),
         },
     )
 
@@ -1557,6 +1799,102 @@ def admin_page(request: Request):
     )
 
 
+def _integration_result(name: str, check) -> dict[str, Any]:
+    started = time.perf_counter()
+    try:
+        detail = str(check() or "connected")
+        return {
+            "name": name,
+            "ok": True,
+            "detail": detail,
+            "ms": round((time.perf_counter() - started) * 1000),
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "name": name,
+            "ok": False,
+            "detail": f"{type(exc).__name__}: {exc}",
+            "ms": round((time.perf_counter() - started) * 1000),
+        }
+
+
+@app.get("/admin/integrations", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def admin_integrations(request: Request):
+    """Run bounded, read-only checks without requiring server-terminal access."""
+    import httpx
+    from sqlalchemy import text as sql_text
+
+    def check_db():
+        with db.get_engine().connect() as conn:
+            return f"query returned {conn.execute(sql_text('SELECT 1')).scalar_one()}"
+
+    def check_sheets():
+        reason = gnw.disabled_reason()
+        if reason:
+            raise RuntimeError(reason)
+        sheet = gnw._get_sheet()
+        return f"sheet: {sheet.title}"
+
+    def check_tvmaze():
+        response = httpx.get("https://api.tvmaze.com/shows/1", timeout=8)
+        response.raise_for_status()
+        return "catalog reachable"
+
+    def check_anilist():
+        data = gnw._anilist_request("query { Media(id: 1) { id } }", {})
+        if not data.get("Media"):
+            raise RuntimeError("unexpected response")
+        return "catalog reachable"
+
+    def check_youtube():
+        if not os.environ.get("LUIGI_WEB_YOUTUBE_API_KEY", "").strip():
+            raise RuntimeError("optional API key not configured")
+        return "playlist search configured"
+
+    def check_steam():
+        response = httpx.get(
+            "https://store.steampowered.com/api/appdetails",
+            params={"appids": 10, "cc": "us", "l": "en"}, timeout=8,
+        )
+        response.raise_for_status()
+        progress = bool(os.environ.get("LUIGI_WEB_STEAM_API_KEY") and os.environ.get("LUIGI_WEB_STEAM_ID"))
+        return "store reachable; progress configured" if progress else "store reachable; progress not configured"
+
+    def check_llm():
+        if isinstance(_LLM_PROVIDER, llm_mod.DisabledProvider):
+            raise RuntimeError("not configured")
+        return f"{_LLM_PROVIDER.name} · {_LLM_PROVIDER.model}"
+
+    def check_git():
+        head = _git_head_short()
+        if not head:
+            raise RuntimeError("git checkout unavailable")
+        return f"{_git_branch()} · {head}"
+
+    def check_env():
+        path = env_file.env_file_path(REPO_DIR)
+        writable, reason = env_file.env_file_writable(path)
+        if not writable:
+            raise RuntimeError(reason)
+        return f"writable: {path}"
+
+    checks = [
+        _integration_result("PostgreSQL", check_db),
+        _integration_result("Google Sheets", check_sheets),
+        _integration_result("Steam", check_steam),
+        _integration_result("TVMaze", check_tvmaze),
+        _integration_result("AniList", check_anilist),
+        _integration_result("YouTube", check_youtube),
+        _integration_result("LLM", check_llm),
+        _integration_result("Git checkout", check_git),
+        _integration_result("Environment file", check_env),
+    ]
+    return templates.TemplateResponse(
+        "partials/admin_integrations.html",
+        {"request": request, "checks": checks, "checked_at": _dt.now().strftime("%H:%M:%S")},
+    )
+
+
 @app.post("/admin/gnw-credentials", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 async def admin_gnw_credentials(request: Request):
     """Save a pasted Game'N'Watch service-account credentials.json.
@@ -1661,6 +1999,9 @@ _HOT_RELOADABLE = {
     "LUIGI_WEB_LLM_MODEL",
     "LUIGI_WEB_LLM_TIMEOUT",
     "LUIGI_WEB_LLM_MAX_TOOL_ITERATIONS",
+    "LUIGI_WEB_STEAM_API_KEY",
+    "LUIGI_WEB_STEAM_ID",
+    "LUIGI_WEB_YOUTUBE_API_KEY",
 }
 
 

@@ -48,7 +48,11 @@ All widget queries are read-only, bounded with `LIMIT`, and live in `db.py`
 `list_follow_ups_preview`, `weekly_discipline_counts`,
 `weekly_task_completion_counts`, `list_recent_activity`, `weekly_review`).
 
-**Kanban board by status.** Tasks and Recurring live on 3×2 Kanban boards. The
+**Kanban board by status.** One-off and recurring items share the Tasks 3×2
+Kanban board. Recurring cards are marked with a `↻ Recurring` chip and retain
+their recurrence schedule; the **+ Task** and **+ Recurring** buttons create
+the appropriate row type. The legacy `/recurring` page redirects to `/tasks`.
+The
 column layout is:
 
     Row 1 :  Not Started  |  In Progress  |  Completed
@@ -87,6 +91,11 @@ valid. Expired ops return `410 Gone`.
 response carries an `HX-Trigger: reloadBoard` so the newly-created card shows
 up in its column immediately without the user having to reload manually.
 
+**Quick Add.** The Tasks header has a compact form for a one-off task name,
+due date, priority, and optional project. It posts to `POST /tasks/quick` and
+refreshes the board after a confirmed insert; the full modal remains available
+for categories, links, and recurrence details.
+
 **Native date picker with presets.** The `Due date` field in the task modal
 uses `<input type="date">` (so you get the OS-native calendar GUI — no
 typing) plus quick chips: **Today · Tomorrow · +1w · +2w · Clear**. The
@@ -110,8 +119,11 @@ backend accepts.
 
 Other views:
 
-* **Projects** — category-scoped Gantt chart at `/projects`. Pick one or more
-  `catagory` values (and optionally include recurring tasks); the page
+* **Projects** — named-project Gantt chart at `/projects`. Tasks have an
+  optional web-owned `project` field (for example, `Renovate Kitchen`), and
+  project chips narrow the timeline. If the DB role cannot add that optional
+  column, project assignments are retained in the app-managed, gitignored
+  `task-web-metadata.json` fallback. The page
   renders a two-pane view: a fixed names column on the left and a scrolling
   SVG timeline on the right. Bars derive their span from `start_time` (or
   `task_creation` as a fallback) through `due_date`; items without a
@@ -119,6 +131,13 @@ Other views:
   header draws month gridlines/labels and a dashed "today" marker; bars are
   colored by status. Clicking a task name opens the same edit modal used
   on the Kanban.
+* **Calendar** — month grid at `/calendar`, showing one-off and recurring tasks
+  by due date. Status-colored task pills open the normal edit modal; previous,
+  next, and Today controls make it useful as a schedule view.
+* **Archive** — completed cards can be moved out of active boards and restored
+  from `/archive`. It uses an optional web-owned `archived` column and never
+  deletes task history; the same app-managed metadata fallback is used when
+  the database role cannot add the optional column.
   * *Planned:* a **task-flow / dependency web** view on the same tab —
     Azure ML Designer-style drag-and-drop nodes, but flowing **left → right**
     along a date axis instead of top-to-bottom. Each node is a task card
@@ -136,7 +155,10 @@ Other views:
   Google Sheet (see *Game'N'Watch integration* below). Profile selector, per-card
   status change + edit modal, and a weighted “Surprise me” random picker.
 * **Admin** — runtime info + self-update / restart controls + JSON backup
-  export + a paste-in Game'N'Watch credentials panel (see below).
+  export + a paste-in Game'N'Watch credentials panel (see below). Its
+  read-only **Integration health** cards test PostgreSQL, Google Sheets,
+  Steam, TVMaze, AniList, optional YouTube, the LLM, Git, and env-file access
+  with response times and actionable errors—no terminal diagnostics required.
 
 ### Future UI directions (noted for later)
 
@@ -264,7 +286,9 @@ Authenticated (session cookie, or `?token=` / `Authorization: Bearer`):
 * `POST /tasks/{uuid}/snooze` → defer `due_date` by `days` (form field);
   returns the re-rendered card partial for an HTMX swap
 * `POST /tasks/{uuid}/delete` → delete
-* `GET  /recurring` … (same shape as `/tasks`, including `/snooze`)
+* `GET  /recurring` → compatibility redirect to `/tasks`; recurring create,
+  edit, status, complete, snooze, archive, restore, and delete routes remain
+  under `/recurring/*` for the consolidated board's recurring cards
 * `GET  /projects?catagory=X&catagory=Y&include_recurring=1` → Gantt chart
 * `GET  /discipline?year=YYYY` → yearly heatmaps
 * `POST /discipline`      → create
@@ -504,7 +528,8 @@ to that spreadsheet — it does not touch `luigi_todo`.
 `Shows` (23 columns each). Columns are addressed by **header name** (row 1),
 never by position, so the bot appending new columns never breaks the GUI. The
 row key is `(Profile, Title)`, case-insensitive. Statuses: games =
-`backlog / playing / completed / dropped`; shows =
+`backlog / playing / paused / completed / achievements / dropped` (the
+`achievements` column is labeled **100% Achievements**); shows =
 `backlog / watching / on_hold / completed / dropped`. List reads are cached
 ~20 s and invalidated on write, keeping the boards snappy and well under the
 Sheets API quota. When a status changes to *playing/watching* or *completed*,
@@ -521,6 +546,11 @@ sheet id / credentials aren't set, `gnw.disabled_reason()` drives a friendly
 
 * **Games** / **Shows** tabs — Kanban board bucketed by status, with a
   **profile selector** (All profiles, or one) that persists in the URL.
+* **Add game/show** — search and select using the same source strategy as the
+  Discord bot: Steam store search/direct app IDs for games; TVMaze + AniList
+  and optional YouTube playlist search for shows. Metadata and cover art are
+  written directly into the shared Google Sheet. Manual addition remains as a
+  fallback when no result matches.
 * Each card: cover art, external link (Steam / TVMaze / AniList / YouTube),
   priority, rating, platform/genre, tags, and (for shows) `S…·E…/total`
   progress. A per-card **status dropdown** writes straight to the sheet; an
@@ -529,6 +559,9 @@ sheet id / credentials aren't set, `gnw.disabled_reason()` drives a friendly
 * **🎲 Surprise me** — priority-weighted random pick (priority 5 is 5× as
   likely as priority 1), same algorithm as the bot's `/random`.
 * Home widgets: **Currently Playing** and **Currently Watching**.
+* **Steam stats** on Steam-backed cards reads owned-game playtime and personal
+  achievement progress when a Steam Web API key + Steam ID64 are configured;
+  refreshed playtime is also written to the existing `Hours Played` cell.
 
 **Configuration.** Two env keys, both editable from **Admin**:
 
@@ -536,6 +569,9 @@ sheet id / credentials aren't set, `gnw.disabled_reason()` drives a friendly
 |---|---|
 | `LUIGI_WEB_GNW_SHEET_ID` | The sheet ID or full Google Sheets URL. Blank hides the tabs. |
 | `LUIGI_WEB_GNW_CREDS_FILE` | Path to the service-account `credentials.json`. **Leave blank** to use the app-managed path `<repo>/gnw-credentials.json`. |
+| `LUIGI_WEB_STEAM_API_KEY` | Optional Steam Web API key for personal playtime/achievements. Store search and metadata do not require it. |
+| `LUIGI_WEB_STEAM_ID` | Steam ID64 whose owned games and achievements are displayed. |
+| `LUIGI_WEB_YOUTUBE_API_KEY` | Optional YouTube Data API key for playlist results in Add Show. |
 
 **Credentials without SSH.** The **Admin → "Game'N'Watch credentials"** panel
 takes the service-account `credentials.json` as pasted text, validates it

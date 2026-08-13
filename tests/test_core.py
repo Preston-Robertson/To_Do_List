@@ -10,7 +10,9 @@ import json
 import os
 import unittest
 from datetime import date
-from unittest.mock import patch
+from unittest.mock import MagicMock, Mock, patch
+
+from starlette.requests import Request
 
 import app
 import auth
@@ -54,6 +56,39 @@ class DatabaseHelperTests(unittest.TestCase):
         }
         self.assertEqual(db.reactivation_date(row), "2026-08-14")
 
+    def test_streak_refresh_failure_does_not_fail_completion(self) -> None:
+        class Result:
+            def first(self):
+                return (1,)
+
+        class Connection:
+            def execute(self, statement, params=None):
+                return Result()
+
+        class Transaction:
+            def __enter__(self):
+                return Connection()
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+        class Engine:
+            def begin(self):
+                return Transaction()
+
+        with (
+            patch.object(db, "get_engine", return_value=Engine()),
+            patch.object(
+                db,
+                "_refresh_discipline_streak",
+                side_effect=PermissionError("read-only streak column"),
+            ) as refresh,
+        ):
+            # Must return normally: this derived-value failure happens after
+            # the separate completion transaction has already committed.
+            db._try_refresh_discipline_streak("Gym")
+        refresh.assert_called_once()
+
 
 class RecurringFormTests(unittest.TestCase):
     def test_enabled_recurrence_requires_a_schedule(self) -> None:
@@ -64,6 +99,51 @@ class RecurringFormTests(unittest.TestCase):
 
 
 class GameAndWatchTests(unittest.TestCase):
+    def test_game_board_has_paused_and_achievement_sections(self) -> None:
+        self.assertIn("paused", gnw.GAME_STATUSES)
+        self.assertIn("achievements", gnw.GAME_STATUSES)
+        self.assertEqual(gnw.STATUS_LABELS["achievements"], "100% Achievements")
+
+    def test_steam_store_metadata_is_normalized(self) -> None:
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            "10": {"success": True, "data": {
+                "name": "Counter-Strike", "header_image": "cover.jpg",
+                "developers": ["Valve"], "genres": [{"description": "Action"}],
+                "categories": [{"id": 1}], "release_date": {"date": "Nov 1, 2000"},
+                "price_overview": {"final_formatted": "$9.99"},
+            }}
+        }
+        client = MagicMock()
+        client.__enter__.return_value.get.return_value = response
+        with patch.object(gnw.httpx, "Client", return_value=client):
+            result = gnw._steam_lookup("10")
+        assert result is not None
+        self.assertEqual(result["title"], "Counter-Strike")
+        self.assertTrue(result["is_multiplayer"])
+        self.assertEqual(result["source"], "steam")
+
+    def test_catalog_game_is_written_by_header_name(self) -> None:
+        headers = ["Title", "Profile", "Status", "Priority", "Cover URL", "External ID", "Source"]
+        worksheet = Mock()
+        with (
+            patch.object(gnw, "_all_values", return_value=[headers]),
+            patch.object(gnw, "_ws", return_value=worksheet),
+            patch.object(gnw, "_invalidate"),
+        ):
+            ok, title = gnw.add_catalog_item(
+                "games", "Preston",
+                {"title": "Portal", "source": "steam", "external_id": "400", "cover_url": "cover"},
+                status="backlog", priority=4,
+            )
+        self.assertTrue(ok)
+        self.assertEqual(title, "Portal")
+        written, cell_range = worksheet.update.call_args.args
+        self.assertEqual(cell_range, "A2:G2")
+        self.assertEqual(written[0][headers.index("Profile")], "Preston")
+        self.assertEqual(written[0][headers.index("Title")], "Portal")
+
     def test_full_sheet_url_is_accepted(self) -> None:
         url = "https://docs.google.com/spreadsheets/d/abc_123-X/edit?gid=0"
         self.assertEqual(gnw._normalize_sheet_id(url), "abc_123-X")
@@ -165,6 +245,56 @@ class GanttTests(unittest.TestCase):
         assert chart is not None
         self.assertEqual(chart["scheduled_count"], 1)
         self.assertEqual(len(chart["unscheduled"]), 1)
+
+    def test_projects_select_all_projects_by_default(self) -> None:
+        request = Request({"type": "http", "method": "GET", "path": "/projects",
+                           "query_string": b"", "headers": []})
+        projects = [{"project": "Kitchen", "n": 2}, {"project": "Launch", "n": 1}]
+        with (
+            patch.object(app, "_require_v2"),
+            patch.object(db, "list_projects_with_open_tasks", return_value=projects),
+            patch.object(db, "project_grouping_enabled", return_value=True),
+            patch.object(db, "list_project_rows", return_value=[]) as list_rows,
+        ):
+            response = app.projects_page(request)
+        list_rows.assert_called_once_with(["Kitchen", "Launch"], include_recurring=True)
+        self.assertEqual(response.context["selected_projects"], {"Kitchen", "Launch"})
+
+    def test_calendar_builds_month_grid(self) -> None:
+        request = Request({"type": "http", "method": "GET", "path": "/calendar",
+                           "query_string": b"", "headers": []})
+        with (
+            patch.object(app, "_require_v2"),
+            patch.object(app, "_reactivate_recurring"),
+            patch.object(db, "list_calendar_rows", return_value=[]),
+        ):
+            response = app.calendar_page(request, "2026-08")
+        self.assertEqual(response.context["month_label"], "August 2026")
+        self.assertGreaterEqual(len(response.context["weeks"]), 5)
+        self.assertTrue(all(len(week) == 7 for week in response.context["weeks"]))
+
+
+class ConsolidatedTasksTests(unittest.TestCase):
+    def test_tasks_page_includes_one_off_and_recurring_rows(self) -> None:
+        request = Request({"type": "http", "method": "GET", "path": "/tasks",
+                           "query_string": b"", "headers": []})
+        task = {"uuid": "task-1", "task": "One-off", "priority": 1,
+                "status": "Not Started", "completed": 0, "due_date": None}
+        recurring = {"uuid": "rec-1", "task": "Recurring", "priority": 2,
+                     "status": "Not Started", "completed": 0, "due_date": None,
+                     "recurring": 1}
+        with (
+            patch.object(app, "_require_v2"),
+            patch.object(app, "_reactivate_recurring"),
+            patch.object(db, "list_tasks", return_value=[task]),
+            patch.object(db, "list_recurring", return_value=[recurring]),
+        ):
+            response = app.tasks_page(request)
+        cards = response.context["columns"]["Not Started"]
+        self.assertEqual({row["uuid"] for row in cards}, {"task-1", "rec-1"})
+        endpoints = {row["uuid"]: row["_endpoint_root"] for row in cards}
+        self.assertEqual(endpoints, {"task-1": "/tasks", "rec-1": "/recurring"})
+        self.assertTrue(response.context["consolidated"])
 
 
 if __name__ == "__main__":

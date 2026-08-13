@@ -6,6 +6,8 @@
 # Game'N'Watch service-account key (written by the Admin page). Never commit.
 gnw-credentials.json
 *credentials*.json
+task-web-metadata.json
+task-web-metadata.json.tmp
 
 # Python
 __pycache__/

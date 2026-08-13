@@ -30,6 +30,8 @@ import time
 from datetime import date
 from typing import Any
 
+import httpx
+
 # gspread + google-auth are optional. Import lazily-tolerant so the whole app
 # doesn't fail to boot on a box where they aren't installed yet.
 try:  # pragma: no cover - import shape depends on the environment
@@ -61,15 +63,19 @@ SHOW_HEADERS = [
     "Runtime", "Times Picked",
 ]
 
-GAME_STATUSES = ["backlog", "playing", "completed", "dropped"]
+GAME_STATUSES = [
+    "backlog", "playing", "paused", "completed", "achievements", "dropped",
+]
 SHOW_STATUSES = ["backlog", "watching", "on_hold", "completed", "dropped"]
 
 STATUS_LABELS = {
     "backlog": "Backlog",
     "playing": "Playing",
+    "paused": "Paused",
     "watching": "Watching",
     "on_hold": "On Hold",
     "completed": "Completed",
+    "achievements": "100% Achievements",
     "dropped": "Dropped",
 }
 
@@ -81,6 +87,7 @@ ACTIVE_STATUS = {"games": "playing", "shows": "watching"}
 GAME_EDITABLE = {
     "status": "Status", "priority": "Priority", "rating": "Rating",
     "notes": "Notes", "platform": "Platform", "genre": "Genre", "tags": "Tags",
+    "hours_played": "Hours Played",
 }
 SHOW_EDITABLE = {
     "status": "Status", "priority": "Priority", "rating": "Rating",
@@ -438,6 +445,14 @@ def _row_value(row: list[str], column: int) -> str:
     return row[column].strip() if column < len(row) else ""
 
 
+def _a1(row: int, column: int) -> str:
+    label = ""
+    while column:
+        column, remainder = divmod(column - 1, 26)
+        label = chr(65 + remainder) + label
+    return f"{label}{row}"
+
+
 def _row_to_item(section: str, headers: list[str], row: list[str]) -> dict[str, Any]:
     idx = _header_index(headers)
 
@@ -547,6 +562,362 @@ def get_item(section: str, profile: str, title: str) -> dict[str, Any] | None:
 
 def statuses_for(section: str) -> list[str]:
     return GAME_STATUSES if section == "games" else SHOW_STATUSES
+
+
+# --------------------------------------------------------------------------- #
+# Catalog search + creation (mirrors Game'N'Watch /newgame and /newshow)
+# --------------------------------------------------------------------------- #
+
+_STEAM_APP_RE = re.compile(r"(?:store\.steampowered\.com/app/)?(\d{2,})")
+_YOUTUBE_PLAYLIST_RE = re.compile(r"(?:[?&]list=|^)([A-Za-z0-9_-]{10,})")
+
+
+def _steam_lookup(app_id: str) -> dict[str, Any] | None:
+    url = "https://store.steampowered.com/api/appdetails"
+    with httpx.Client(timeout=15, headers={"User-Agent": "LuigiWeb/1.0"}) as client:
+        response = client.get(url, params={"appids": app_id, "cc": "us", "l": "en"})
+        response.raise_for_status()
+        entry = response.json().get(str(app_id), {})
+    if not entry.get("success"):
+        return None
+    data = entry.get("data") or {}
+    multiplayer_ids = {1, 9, 36, 37, 38, 39}
+    categories = data.get("categories") or []
+    return {
+        "source": "steam",
+        "external_id": str(app_id),
+        "title": data.get("name") or f"Steam app {app_id}",
+        "cover_url": data.get("header_image") or "",
+        "platform": "Steam",
+        "release_date": (data.get("release_date") or {}).get("date") or "",
+        "price": (data.get("price_overview") or {}).get("final_formatted") or "",
+        "developers": ", ".join(data.get("developers") or []),
+        "is_multiplayer": any(c.get("id") in multiplayer_ids for c in categories),
+        "genre": ", ".join(g.get("description", "") for g in data.get("genres") or [] if g.get("description")),
+    }
+
+
+def _tvmaze_lookup(show_id: str) -> dict[str, Any] | None:
+    with httpx.Client(timeout=15, headers={"User-Agent": "LuigiWeb/1.0"}) as client:
+        response = client.get(
+            f"https://api.tvmaze.com/shows/{show_id}",
+            params={"embed": "episodes"},
+        )
+        response.raise_for_status()
+        data = response.json()
+    episodes = ((data.get("_embedded") or {}).get("episodes") or [])
+    image = data.get("image") or {}
+    network = data.get("network") or data.get("webChannel") or {}
+    return {
+        "source": "tvmaze",
+        "external_id": str(show_id),
+        "title": data.get("name") or f"TVMaze show {show_id}",
+        "cover_url": image.get("original") or image.get("medium") or "",
+        "genre": ", ".join(data.get("genres") or []),
+        "total_episodes": len(episodes) or None,
+        "platform": network.get("name") or "TV",
+        "premiere_date": data.get("premiered") or "",
+        "runtime": data.get("averageRuntime") or data.get("runtime") or "",
+    }
+
+
+def _anilist_request(query: str, variables: dict[str, Any]) -> dict[str, Any]:
+    with httpx.Client(timeout=15, headers={"User-Agent": "LuigiWeb/1.0"}) as client:
+        response = client.post(
+            "https://graphql.anilist.co",
+            json={"query": query, "variables": variables},
+        )
+        response.raise_for_status()
+        return response.json().get("data") or {}
+
+
+def _anilist_lookup(media_id: str) -> dict[str, Any] | None:
+    data = _anilist_request(
+        """query ($id: Int) { Media(id: $id, type: ANIME) {
+          id title { english romaji } episodes genres format seasonYear
+          coverImage { extraLarge large } duration
+        }}""",
+        {"id": int(media_id)},
+    ).get("Media")
+    if not data:
+        return None
+    title = data.get("title") or {}
+    cover = data.get("coverImage") or {}
+    return {
+        "source": "anilist",
+        "external_id": str(media_id),
+        "title": title.get("english") or title.get("romaji") or f"AniList {media_id}",
+        "cover_url": cover.get("extraLarge") or cover.get("large") or "",
+        "genre": ", ".join(data.get("genres") or []),
+        "total_episodes": data.get("episodes"),
+        "platform": "Anime",
+        "premiere_date": str(data.get("seasonYear") or ""),
+        "runtime": data.get("duration") or "",
+    }
+
+
+def _youtube_lookup(playlist_id: str) -> dict[str, Any] | None:
+    api_key = os.environ.get("LUIGI_WEB_YOUTUBE_API_KEY", "").strip()
+    if not api_key:
+        return None
+    with httpx.Client(timeout=15, headers={"User-Agent": "LuigiWeb/1.0"}) as client:
+        response = client.get(
+            "https://www.googleapis.com/youtube/v3/playlists",
+            params={"part": "snippet,contentDetails", "id": playlist_id, "key": api_key},
+        )
+        response.raise_for_status()
+        items = response.json().get("items") or []
+    if not items:
+        return None
+    item = items[0]
+    snippet = item.get("snippet") or {}
+    thumbs = snippet.get("thumbnails") or {}
+    thumb = thumbs.get("maxres") or thumbs.get("high") or thumbs.get("medium") or {}
+    return {
+        "source": "youtube",
+        "external_id": playlist_id,
+        "title": snippet.get("title") or f"YouTube playlist {playlist_id}",
+        "cover_url": thumb.get("url") or "",
+        "genre": "YouTube",
+        "total_episodes": (item.get("contentDetails") or {}).get("itemCount"),
+        "platform": "YouTube",
+        "premiere_date": str(snippet.get("publishedAt") or "")[:10],
+        "runtime": "",
+    }
+
+
+def search_catalog(section: str, query: str) -> list[dict[str, Any]]:
+    """Search the same public sources used by the Game'N'Watch bot."""
+    query = (query or "").strip()
+    if not query:
+        return []
+    results: list[dict[str, Any]] = []
+    if section == "games":
+        direct = _STEAM_APP_RE.search(query)
+        if direct and (query.isdigit() or "steampowered.com/app/" in query.lower()):
+            item = _steam_lookup(direct.group(1))
+            return [item] if item else []
+        with httpx.Client(timeout=15, headers={"User-Agent": "LuigiWeb/1.0"}) as client:
+            response = client.get(
+                "https://store.steampowered.com/api/storesearch/",
+                params={"term": query, "l": "english", "cc": "US"},
+            )
+            response.raise_for_status()
+            for item in (response.json().get("items") or [])[:8]:
+                results.append({
+                    "source": "steam",
+                    "external_id": str(item.get("id") or ""),
+                    "title": item.get("name") or "Untitled",
+                    "cover_url": item.get("tiny_image") or "",
+                    "detail": "Steam",
+                })
+        return results
+
+    playlist_match = _YOUTUBE_PLAYLIST_RE.search(query)
+    if playlist_match and ("youtube.com" in query.lower() or "youtu.be" in query.lower()):
+        playlist = _youtube_lookup(playlist_match.group(1))
+        return [playlist] if playlist else []
+
+    try:
+        with httpx.Client(timeout=15, headers={"User-Agent": "LuigiWeb/1.0"}) as client:
+            response = client.get("https://api.tvmaze.com/search/shows", params={"q": query})
+            response.raise_for_status()
+            for hit in response.json()[:5]:
+                show = hit.get("show") or {}
+                image = show.get("image") or {}
+                results.append({
+                    "source": "tvmaze",
+                    "external_id": str(show.get("id") or ""),
+                    "title": show.get("name") or "Untitled",
+                    "cover_url": image.get("medium") or "",
+                    "detail": f"TV · {show.get('premiered') or 'unknown year'}",
+                })
+    except Exception:  # noqa: BLE001 — other sources may still work
+        pass
+    try:
+        anime = _anilist_request(
+            """query ($search: String) { Page(page: 1, perPage: 5) {
+              media(search: $search, type: ANIME) { id title { english romaji }
+                seasonYear format episodes coverImage { large } }
+            }}""",
+            {"search": query},
+        )
+        for item in ((anime.get("Page") or {}).get("media") or []):
+            title = item.get("title") or {}
+            results.append({
+                "source": "anilist",
+                "external_id": str(item.get("id") or ""),
+                "title": title.get("english") or title.get("romaji") or "Untitled",
+                "cover_url": (item.get("coverImage") or {}).get("large") or "",
+                "detail": f"Anime · {item.get('seasonYear') or 'unknown year'}",
+            })
+    except Exception:  # noqa: BLE001 — TVMaze/YouTube may still work
+        pass
+    youtube_key = os.environ.get("LUIGI_WEB_YOUTUBE_API_KEY", "").strip()
+    if youtube_key:
+        try:
+            with httpx.Client(timeout=15, headers={"User-Agent": "LuigiWeb/1.0"}) as client:
+                response = client.get(
+                    "https://www.googleapis.com/youtube/v3/search",
+                    params={
+                        "part": "snippet", "type": "playlist", "maxResults": 3,
+                        "q": query, "key": youtube_key,
+                    },
+                )
+                response.raise_for_status()
+                for item in response.json().get("items") or []:
+                    playlist_id = (item.get("id") or {}).get("playlistId")
+                    snippet = item.get("snippet") or {}
+                    thumbs = snippet.get("thumbnails") or {}
+                    if playlist_id:
+                        results.append({
+                            "source": "youtube",
+                            "external_id": playlist_id,
+                            "title": snippet.get("title") or "Untitled playlist",
+                            "cover_url": (thumbs.get("high") or thumbs.get("medium") or {}).get("url") or "",
+                            "detail": "YouTube playlist",
+                        })
+        except Exception:  # noqa: BLE001 — optional source
+            pass
+    return results[:10]
+
+
+def catalog_lookup(section: str, source: str, external_id: str) -> dict[str, Any] | None:
+    if section == "games" and source == "steam":
+        return _steam_lookup(external_id)
+    if section == "shows" and source == "tvmaze":
+        return _tvmaze_lookup(external_id)
+    if section == "shows" and source == "anilist":
+        return _anilist_lookup(external_id)
+    if section == "shows" and source == "youtube":
+        return _youtube_lookup(external_id)
+    return None
+
+
+def add_catalog_item(
+    section: str,
+    profile: str,
+    metadata: dict[str, Any],
+    *,
+    status: str = "backlog",
+    priority: int = 3,
+) -> tuple[bool, str]:
+    """Insert a metadata-backed item into the live Games/Shows worksheet."""
+    if status not in statuses_for(section):
+        return False, f"invalid status: {status}"
+    title = str(metadata.get("title") or "").strip()
+    profile = (profile or "").strip()
+    if not profile or not title:
+        return False, "profile and title are required"
+    values = _all_values(section, force=True)
+    if not values:
+        return False, f"{_tab(section)} sheet has no header row"
+    headers = values[0]
+    profile_col, title_col = _identity_columns(headers)
+    target_row: int | None = None
+    for row_number, row in enumerate(values[1:], start=2):
+        row_profile = _row_value(row, profile_col)
+        row_title = _row_value(row, title_col)
+        if row_profile.lower() == profile.lower() and row_title.lower() == title.lower():
+            return False, f"{title} already exists for {profile}"
+        if row_profile.lower() == profile.lower() and not row_title and target_row is None:
+            target_row = row_number
+    target_row = target_row or (len(values) + 1)
+    row = ["" for _ in headers]
+    idx = _header_index(headers)
+
+    def put(header: str, value: Any) -> None:
+        column = idx.get(header)
+        if column is not None and value not in (None, ""):
+            row[column] = str(value)
+
+    put("Profile", profile)
+    put("Title", title)
+    put("Status", status)
+    put("Priority", max(1, min(int(priority), 5)))
+    put("Date Added", date.today().isoformat())
+    put("Cover URL", metadata.get("cover_url"))
+    put("External ID", metadata.get("external_id"))
+    put("Source", metadata.get("source"))
+    put("Platform", metadata.get("platform"))
+    put("Genre", metadata.get("genre"))
+    if section == "games":
+        put("Release Date", metadata.get("release_date"))
+        put("Price", metadata.get("price"))
+        put("Developers", metadata.get("developers"))
+        put("Is Multiplayer", "TRUE" if metadata.get("is_multiplayer") else "FALSE")
+    else:
+        put("Total Episodes", metadata.get("total_episodes"))
+        put("Premiere Date", metadata.get("premiere_date"))
+        put("Runtime", metadata.get("runtime"))
+        put("Current Season", 1)
+        put("Current Episode", 0)
+    start = _a1(target_row, 1)
+    end = _a1(target_row, len(headers))
+    _ws(section).update([row], f"{start}:{end}")
+    _invalidate(section)
+    return True, title
+
+
+def add_manual_item(
+    section: str, profile: str, title: str, *, status: str = "backlog", priority: int = 3,
+) -> tuple[bool, str]:
+    return add_catalog_item(
+        section,
+        profile,
+        {"title": title, "source": "manual"},
+        status=status,
+        priority=priority,
+    )
+
+
+def steam_stats(app_id: str) -> dict[str, Any]:
+    """Live playtime + achievement progress for the configured Steam user."""
+    api_key = os.environ.get("LUIGI_WEB_STEAM_API_KEY", "").strip()
+    steam_id = os.environ.get("LUIGI_WEB_STEAM_ID", "").strip()
+    if not api_key or not steam_id:
+        raise RuntimeError("Set LUIGI_WEB_STEAM_API_KEY and LUIGI_WEB_STEAM_ID in Admin")
+    with httpx.Client(timeout=20, headers={"User-Agent": "LuigiWeb/1.0"}) as client:
+        owned = client.get(
+            "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/",
+            params={
+                "key": api_key,
+                "steamid": steam_id,
+                "include_appinfo": 1,
+                "appids_filter[0]": int(app_id),
+            },
+        )
+        owned.raise_for_status()
+        games = (owned.json().get("response") or {}).get("games") or []
+        game = games[0] if games else {}
+        achievements_response = client.get(
+            "https://api.steampowered.com/ISteamUserStats/GetPlayerAchievements/v1/",
+            params={"key": api_key, "steamid": steam_id, "appid": int(app_id), "l": "english"},
+        )
+        achievements_response.raise_for_status()
+        stats = achievements_response.json().get("playerstats") or {}
+    achievements = stats.get("achievements") or []
+    unlocked = sum(1 for achievement in achievements if achievement.get("achieved"))
+    total = len(achievements)
+    locked = [
+        {
+            "name": achievement.get("name") or achievement.get("apiname") or "Achievement",
+            "description": achievement.get("description") or "",
+        }
+        for achievement in achievements
+        if not achievement.get("achieved")
+    ]
+    return {
+        "app_id": str(app_id),
+        "name": game.get("name") or stats.get("gameName") or f"Steam app {app_id}",
+        "hours_played": round(float(game.get("playtime_forever") or 0) / 60, 1),
+        "hours_recent": round(float(game.get("playtime_2weeks") or 0) / 60, 1),
+        "achievements_unlocked": unlocked,
+        "achievements_total": total,
+        "achievement_percent": round((unlocked / total) * 100) if total else None,
+        "complete": bool(total and unlocked == total),
+        "next_achievements": locked[:5],
+    }
 
 
 # --------------------------------------------------------------------------- #

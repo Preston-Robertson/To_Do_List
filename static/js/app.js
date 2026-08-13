@@ -254,6 +254,7 @@
     if (done) {
       e.preventDefault();
       const fd = new FormData();
+      fd.set("discipline_uuid", done.dataset.disciplineUuid || "");
       fd.set("task", done.dataset.task || "");
       fd.set("day", done.dataset.day || "");
       if (done.dataset.catagory) fd.set("catagory", done.dataset.catagory);
@@ -296,9 +297,8 @@
     const btn = e.target.closest("[data-discipline-done]");
     if (!btn) return;
     e.preventDefault();
-    const row = btn.closest(".widget-row") || btn.closest("li");
-    const widget = btn.closest(".widget");
     const fd = new FormData();
+    fd.set("discipline_uuid", btn.dataset.disciplineUuid || "");
     fd.set("task", btn.dataset.task || "");
     fd.set("day", btn.dataset.day || "");
     if (btn.dataset.catagory) fd.set("catagory", btn.dataset.catagory);
@@ -320,22 +320,9 @@
           btn.textContent = originalText;
           return;
         }
-        // Confirmed saved: drop the row and refresh the widget's count /
-        // empty-state without a full page reload.
-        if (row) row.remove();
-        if (widget) {
-          const list = widget.querySelector(".widget-list");
-          const count = widget.querySelector(".widget-count");
-          const remaining = list ? list.querySelectorAll(".widget-row").length : 0;
-          if (count) count.textContent = String(remaining);
-          if (remaining === 0) {
-            const body = widget.querySelector(".widget-body");
-            if (body) {
-              body.innerHTML = '<p class="empty">All disciplines done for today. \uD83C\uDF89</p>';
-            }
-          }
-        }
-        if (typeof reorderEmptyLast === "function") reorderEmptyLast();
+        // Confirmed persisted: reload so Pending, weekly totals, heatmap-derived
+        // state, streaks, and at-risk widgets all reflect the same DB truth.
+        window.location.reload();
       })
       .catch(() => {
         window.showError("Couldn't reach the server — nothing was saved.");
@@ -357,7 +344,7 @@
           const card = evt.item;
           const uuid = card.dataset.uuid;
           const targetCol = evt.to.dataset.status;
-          const endpoint = evt.to.dataset.endpoint;
+          const endpoint = card.dataset.endpoint || evt.to.dataset.endpoint;
           if (!uuid || !targetCol || !endpoint) return;
           // Fire-and-forget; if it fails, the visual state and DB will diverge,
           // but a page refresh will restore truth.
@@ -861,6 +848,7 @@
     if (state.q) {
       const hay = [
         card.dataset.title,
+        card.dataset.project,
         card.dataset.catagory,
         card.dataset.taskGroup,
         card.dataset.subGroup,

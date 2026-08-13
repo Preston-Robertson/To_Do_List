@@ -45,7 +45,7 @@
         hx-swap="none"
         hx-vals='{"profile": {{ item.profile|tojson }}, "title": {{ item.title|tojson }}}'
       >
-        {% for s in (['backlog','playing','completed','dropped'] if section == 'games' else ['backlog','watching','on_hold','completed','dropped']) %}
+        {% for s in statuses %}
           <option value="{{ s }}" {% if s == item.status %}selected{% endif %}>{{ status_labels.get(s, s) }}</option>
         {% endfor %}
       </select>
@@ -57,6 +57,11 @@
         hx-target="#modal-body"
         onclick="openModal()"
       >Edit</button>
+      {% if section == 'games' and item.source == 'steam' and item.external_id %}
+      <button type="button" class="btn btn-tiny"
+        hx-get="/gnw/games/steam-stats?profile={{ item.profile|urlencode }}&title={{ item.title|urlencode }}&app_id={{ item.external_id|urlencode }}"
+        hx-target="#modal-body" onclick="openModal()">Steam stats</button>
+      {% endif %}
     </div>
   </div>
 </article>

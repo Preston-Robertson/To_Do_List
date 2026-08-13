@@ -19,6 +19,19 @@
     </div>
   </article>
 
+  <article class="widget widget-full">
+    <header class="widget-header">
+      <h2>Integration health</h2>
+      <button class="btn btn-tiny" hx-get="/admin/integrations"
+              hx-target="#integration-health" hx-indicator="#health-spinner">Test again</button>
+      <span id="health-spinner" class="htmx-indicator">checking…</span>
+    </header>
+    <div class="widget-body" id="integration-health"
+         hx-get="/admin/integrations" hx-trigger="load" hx-swap="innerHTML">
+      <span class="muted-hint">checking integrations…</span>
+    </div>
+  </article>
+
   <article class="widget">
     <header class="widget-header"><h2>Self-update</h2></header>
     <div class="widget-body">
@@ -66,7 +79,8 @@
         <code>tasks</code>, <code>recurring_tasks</code>,
         <code>discipline_list</code>, <code>discipline_completions</code>,
         <code>follow_up_tasks</code>. Read-only — no DB writes and no schema
-        changes. Save the file somewhere offline for safekeeping.
+        changes. App-managed project/archive fallback metadata is included too.
+        Save the file somewhere offline for safekeeping.
       </p>
       <div class="form-actions" style="border-top:none;justify-content:flex-start;padding-top:0;">
         {# Plain <a> so the browser handles the file download natively;

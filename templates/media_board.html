@@ -26,6 +26,9 @@
         onclick="openModal()"
         title="Weighted random pick from your backlog"
       >🎲 Surprise me</button>
+      <button type="button" class="btn btn-primary"
+        hx-get="/gnw/{{ section }}/new" hx-target="#modal-body"
+        onclick="openModal()">+ Add {{ 'game' if section == 'games' else 'show' }}</button>
     {% endif %}
   </section>
 

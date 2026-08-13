@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="board-header calendar-header">
+  <div>
+    <h1>Calendar</h1>
+    <span class="muted-hint">Tasks by due date</span>
+  </div>
+  <div class="calendar-nav">
+    <a class="btn btn-ghost" href="/calendar?month={{ prev_month }}">←</a>
+    <a class="btn" href="/calendar">Today</a>
+    <strong>{{ month_label }}</strong>
+    <a class="btn btn-ghost" href="/calendar?month={{ next_month }}">→</a>
+  </div>
+</section>
+
+<section class="calendar-grid" aria-label="{{ month_label }} calendar">
+  {% for label in ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'] %}
+    <div class="calendar-dow">{{ label }}</div>
+  {% endfor %}
+  {% for week in weeks %}
+    {% for day in week %}
+      <div class="calendar-day{% if not day.in_month %} is-outside{% endif %}{% if day.iso == today_iso %} is-today{% endif %}">
+        <div class="calendar-day-number">{{ day.date.day }}</div>
+        <div class="calendar-items">
+          {% for t in day.tasks %}
+            <button type="button"
+              class="calendar-item status-{{ (t.status or 'not-started')|lower|replace(' ', '-') }}{% if t.completed %} is-completed{% endif %}"
+              hx-get="/{{ 'recurring' if t.source == 'recurring' else 'tasks' }}/{{ t.uuid }}/edit"
+              hx-target="#modal-body"
+              onclick="openModal()"
+              title="{{ t.task }} · {{ t.status }}{% if t.project %} · {{ t.project }}{% endif %}">
+              {% if t.source == 'recurring' %}<span>↻</span>{% endif %}
+              <span class="calendar-item-title">{{ t.task }}</span>
+            </button>
+          {% endfor %}
+        </div>
+      </div>
+    {% endfor %}
+  {% endfor %}
+</section>
+{% endblock %}

@@ -4,6 +4,16 @@
   <section class="board-header board-header-tasks">
     <h1>{{ page_title }}</h1>
 
+    <form class="quick-add" hx-post="/tasks/quick" hx-swap="none">
+      <input type="text" name="task" required maxlength="240"
+             placeholder="Quick add a task…" aria-label="Task name">
+      <input type="date" name="due_date" aria-label="Due date" title="Due date">
+      <input type="number" name="priority" min="0" max="10" value="0"
+             aria-label="Priority" title="Priority">
+      <input type="text" name="project" placeholder="Project" aria-label="Project">
+      <button class="btn btn-primary" type="submit">Add</button>
+    </form>
+
     {# --- Filter bar ---------------------------------------------------------
        Fully client-side. Filters are applied by initTasksFilter() in app.js
        by toggling `.card-filtered-out` on cards whose data-* attrs miss the
@@ -87,7 +97,16 @@
         hx-target="#modal-body"
         hx-trigger="click"
         onclick="openModal()"
-      >+ New</button>
+      >+ Task</button>
+      {% if consolidated %}
+        <button
+          class="btn btn-primary"
+          hx-get="/recurring/new"
+          hx-target="#modal-body"
+          hx-trigger="click"
+          onclick="openModal()"
+        >+ Recurring</button>
+      {% endif %}
     </div>
   </section>
 

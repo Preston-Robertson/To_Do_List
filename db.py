@@ -16,6 +16,8 @@ Non-obvious rules (from the LuigiBot schema, v2):
 from __future__ import annotations
 
 import os
+import json
+import threading
 import uuid as _uuid
 from datetime import datetime, date, timedelta
 from typing import Any, Iterable
@@ -82,6 +84,60 @@ _TABLES_MISSING_COLUMNS: dict[str, set[str]] = {}
 # Tables the web app is willing to run ALTERs against. Used both for the
 # startup migration and by restore_task_row's safety check.
 _TASK_LIKE_TABLES = ("tasks", "recurring_tasks")
+_WEB_META_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "task-web-metadata.json")
+_WEB_META_LOCK = threading.Lock()
+
+
+def _read_web_metadata() -> dict[str, dict[str, dict[str, Any]]]:
+    try:
+        with open(_WEB_META_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_web_metadata(data: dict[str, Any]) -> None:
+    tmp = f"{_WEB_META_PATH}.tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2, sort_keys=True)
+    os.replace(tmp, _WEB_META_PATH)
+
+
+def _set_web_metadata(table: str, row_uuid: str, **values: Any) -> None:
+    if table not in _TASK_LIKE_TABLES or not row_uuid:
+        return
+    with _WEB_META_LOCK:
+        data = _read_web_metadata()
+        row = data.setdefault(table, {}).setdefault(row_uuid, {})
+        for key, value in values.items():
+            if value in (None, "", 0, False):
+                row.pop(key, None)
+            else:
+                row[key] = value
+        if not row:
+            data.get(table, {}).pop(row_uuid, None)
+        _write_web_metadata(data)
+
+
+def _apply_web_metadata(table: str, row: dict[str, Any]) -> dict[str, Any]:
+    fallback = _read_web_metadata().get(table, {}).get(str(row.get("uuid") or ""), {})
+    if not has_web_column(table, "project"):
+        row["project"] = fallback.get("project")
+    if not has_web_column(table, "archived"):
+        row["archived"] = int(bool(fallback.get("archived")))
+    return row
+
+
+def _visible_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Filter union-query results using local archive fallback metadata."""
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        table = "recurring_tasks" if row.get("source") == "recurring" else "tasks"
+        _apply_web_metadata(table, row)
+        if not row.get("archived"):
+            out.append(row)
+    return out
 
 
 def ensure_web_columns() -> None:
@@ -103,7 +159,11 @@ def ensure_web_columns() -> None:
     have a privileged role run the ALTERs (see the docstring commit
     message) and restart the web app.
     """
-    web_columns = {"recurring_days": "TEXT"}
+    web_columns = {
+        "recurring_days": "TEXT",
+        "project": "TEXT",
+        "archived": "INTEGER DEFAULT 0",
+    }
     engine = get_engine()
     for table in _TASK_LIKE_TABLES:
         for col, ddl_type in web_columns.items():
@@ -176,6 +236,14 @@ def has_web_column(table: str, col: str) -> bool:
         # filter on write, so this only affects UI visibility.
         return True
     return col not in missing
+
+
+def _active_filter(table: str, alias: str = "") -> str:
+    """SQL predicate hiding archived rows when the optional column exists."""
+    if not has_web_column(table, "archived"):
+        return "1=1"
+    prefix = f"{alias}." if alias else ""
+    return f"COALESCE({prefix}archived, 0) = 0"
 
 
 # --------------------------------------------------------------------------- #
@@ -357,14 +425,14 @@ _TASK_COLUMNS = (
     "uuid", "task", "priority", "status", "due_date", "relevant_link",
     "catagory", "task_group", "sub_group", "task_creation", "start_time",
     "estimated_time", "logged_hours", "completed", "completed_time",
-    "recurring", "recurring_interval", "recurring_days",
+    "recurring", "recurring_interval", "recurring_days", "project", "archived",
 )
 
 # fields the edit form is allowed to change (mirrors bot's edit_task)
 _TASK_EDITABLE = (
     "task", "priority", "due_date", "catagory", "task_group", "sub_group",
     "relevant_link", "status", "estimated_time",
-    "recurring", "recurring_interval", "recurring_days",
+    "recurring", "recurring_interval", "recurring_days", "project",
 )
 
 
@@ -372,17 +440,19 @@ def _list_task_like(table: str) -> list[dict[str, Any]]:
     q = text(f"""
         SELECT {", ".join(_cols_for(table))}
         FROM {table}
+        WHERE {_active_filter(table)}
         ORDER BY completed ASC, priority DESC NULLS LAST, due_date ASC NULLS LAST, task ASC
     """)
     with get_engine().connect() as conn:
-        return _rows(conn.execute(q))
+        rows = [_apply_web_metadata(table, row) for row in _rows(conn.execute(q))]
+    return [row for row in rows if not row.get("archived")]
 
 
 def _get_task_like(table: str, row_uuid: str) -> dict[str, Any] | None:
     q = text(f"SELECT {', '.join(_cols_for(table))} FROM {table} WHERE uuid = :u")
     with get_engine().connect() as conn:
         row = conn.execute(q, {"u": row_uuid}).first()
-    return dict(row._mapping) if row else None
+    return _apply_web_metadata(table, dict(row._mapping)) if row else None
 
 
 def _create_task_like(table: str, data: dict[str, Any], recurring_default: int) -> str:
@@ -423,6 +493,8 @@ def _create_task_like(table: str, data: dict[str, Any], recurring_default: int) 
             parse_recurring_days(data.get("recurring_days"))
             if recurring_val else None
         ),
+        "project": data.get("project") or None,
+        "archived": 0,
     }
     # Drop any columns the physical table doesn't have (e.g. a DB where the
     # web-owned ALTERs haven't been applied yet). _cols_for is authoritative.
@@ -433,6 +505,8 @@ def _create_task_like(table: str, data: dict[str, Any], recurring_default: int) 
     q = text(f"INSERT INTO {table} ({cols}) VALUES ({binds})")
     with get_engine().begin() as conn:
         conn.execute(q, payload)
+    if not has_web_column(table, "project") and data.get("project"):
+        _set_web_metadata(table, row_uuid, project=str(data["project"]).strip())
     return row_uuid
 
 
@@ -462,6 +536,8 @@ def _update_task_like(table: str, row_uuid: str, data: dict[str, Any]) -> None:
         elif field == "recurring_days":
             # May be a str (single checked box), list (multiple), or missing.
             val = parse_recurring_days(val)
+        elif field == "project":
+            val = str(val).strip() or None
         elif isinstance(val, str) and val == "":
             val = None
         updates[field] = val
@@ -479,6 +555,9 @@ def _update_task_like(table: str, row_uuid: str, data: dict[str, Any]) -> None:
     if updates.get("recurring") == 0:
         updates["recurring_interval"] = None
         updates["recurring_days"] = None
+
+    if "project" in updates and not has_web_column(table, "project"):
+        _set_web_metadata(table, row_uuid, project=updates.pop("project"))
 
     # Drop any columns the physical table doesn't have. Same reason as in
     # _create_task_like: web-owned columns may not be present yet.
@@ -535,6 +614,40 @@ def _delete_task_like(table: str, row_uuid: str) -> None:
     q = text(f"DELETE FROM {table} WHERE uuid = :u")
     with get_engine().begin() as conn:
         conn.execute(q, {"u": row_uuid})
+
+
+def _set_task_like_archived(table: str, row_uuid: str, archived: bool) -> bool:
+    if not has_web_column(table, "archived"):
+        if _get_task_like(table, row_uuid) is None:
+            return False
+        _set_web_metadata(table, row_uuid, archived=1 if archived else 0)
+        return True
+    with get_engine().begin() as conn:
+        result = conn.execute(
+            text(f"UPDATE {table} SET archived = :a WHERE uuid = :u"),
+            {"a": 1 if archived else 0, "u": row_uuid},
+        )
+    return bool(result.rowcount)
+
+
+def list_archived() -> list[dict[str, Any]]:
+    """Archived task-like rows across both physical tables."""
+    rows: list[dict[str, Any]] = []
+    for table, source in (("tasks", "task"), ("recurring_tasks", "recurring")):
+        where = "WHERE COALESCE(archived, 0) = 1" if has_web_column(table, "archived") else ""
+        with get_engine().connect() as conn:
+            found = _rows(conn.execute(text(f"""
+                SELECT {", ".join(_cols_for(table))}
+                FROM {table}
+                {where}
+                ORDER BY completed_time DESC NULLS LAST, task ASC
+            """)))
+        for row in found:
+            row["source"] = source
+            _apply_web_metadata(table, row)
+        rows.extend(row for row in found if row.get("archived"))
+    rows.sort(key=lambda row: (row.get("completed_time") or "", row.get("task") or ""), reverse=True)
+    return rows
 
 
 def restore_task_row(table: str, snapshot: dict[str, Any]) -> None:
@@ -636,6 +749,10 @@ def snooze_task(row_uuid: str, days: int) -> str | None:
     return _snooze_task_like("tasks", row_uuid, days)
 
 
+def archive_task(row_uuid: str, archived: bool = True) -> bool:
+    return _set_task_like_archived("tasks", row_uuid, archived)
+
+
 # public: recurring_tasks
 def list_recurring() -> list[dict[str, Any]]:
     return _list_task_like("recurring_tasks")
@@ -669,6 +786,10 @@ def snooze_recurring(row_uuid: str, days: int) -> str | None:
     return _snooze_task_like("recurring_tasks", row_uuid, days)
 
 
+def archive_recurring(row_uuid: str, archived: bool = True) -> bool:
+    return _set_task_like_archived("recurring_tasks", row_uuid, archived)
+
+
 def reactivate_due_recurring(today: date | None = None) -> int:
     """Bring completed recurring tasks back once they're due again.
 
@@ -695,13 +816,17 @@ def reactivate_due_recurring(today: date | None = None) -> int:
     q = text(f"""
         SELECT {", ".join(cols)}
         FROM recurring_tasks
-        WHERE completed = 1 AND recurring = 1
+                WHERE completed = 1 AND recurring = 1
+                    AND {_active_filter("recurring_tasks")}
     """)
     with get_engine().connect() as conn:
         rows = _rows(conn.execute(q))
 
     due: list[tuple[str, str]] = []
     for row in rows:
+        _apply_web_metadata("recurring_tasks", row)
+        if row.get("archived"):
+            continue
         next_iso = reactivation_date(row)
         if not next_iso:
             continue
@@ -985,6 +1110,25 @@ def _refresh_discipline_streak(conn, task: str) -> int:
     return streak
 
 
+def _try_refresh_discipline_streak(task: str) -> None:
+    """Best-effort derived-value refresh that cannot roll back a completion.
+
+    The LuigiBot-owned role may allow inserts into discipline_completions but
+    not updates to discipline_list.current_streak. Completion persistence is
+    the source of truth, so a permission/error refreshing this cached value
+    must never undo the user's mark.
+    """
+    try:
+        with get_engine().begin() as conn:
+            _refresh_discipline_streak(conn, task)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Could not refresh current_streak for %r after completion write (%s)",
+            task,
+            exc.__class__.__name__,
+        )
+
+
 def mark_completion(task: str, catagory: str | None, day: str) -> bool:
     """Record (task, day) as done. Idempotent. Returns True once the row is
     confirmed present (whether we just inserted it or it already existed).
@@ -1015,9 +1159,9 @@ def mark_completion(task: str, catagory: str | None, day: str) -> bool:
             ),
             {"t": task, "d": day},
         ).first() is not None
-        if present:
-            _refresh_discipline_streak(conn, task)
-        return present
+    if present:
+        _try_refresh_discipline_streak(task)
+    return present
 
 
 def unmark_completion(task: str, day: str) -> bool:
@@ -1033,9 +1177,9 @@ def unmark_completion(task: str, day: str) -> bool:
             ),
             {"t": task, "d": day},
         ).first() is None
-        if gone:
-            _refresh_discipline_streak(conn, task)
-        return gone
+    if gone:
+        _try_refresh_discipline_streak(task)
+    return gone
 
 
 def compute_streak(dates: Iterable[str]) -> int:
@@ -1158,17 +1302,19 @@ def list_open_tasks(limit: int | None = 20) -> list[dict[str, Any]]:
         SELECT uuid, task, priority, status, due_date, catagory,
                task_group, sub_group, estimated_time, 'task' AS source
         FROM tasks
-        WHERE status IN ('Not Started', 'In Progress') AND completed = 0
+                WHERE status IN ('Not Started', 'In Progress') AND completed = 0
+                    AND {_active_filter("tasks")}
         UNION ALL
         SELECT uuid, task, priority, status, due_date, catagory,
                task_group, sub_group, estimated_time, 'recurring' AS source
         FROM recurring_tasks
-        WHERE status IN ('Not Started', 'In Progress') AND completed = 0
+                WHERE status IN ('Not Started', 'In Progress') AND completed = 0
+                    AND {_active_filter("recurring_tasks")}
         ORDER BY priority DESC NULLS LAST, due_date ASC NULLS LAST, task ASC
         {lim}
     """)
     with get_engine().connect() as conn:
-        return _rows(conn.execute(q))
+        return _visible_rows(_rows(conn.execute(q)))
 
 
 def list_disciplines_pending_today() -> list[dict[str, Any]]:
@@ -1397,18 +1543,20 @@ def list_overdue_tasks(limit: int | None = 10) -> list[dict[str, Any]]:
         FROM tasks
         WHERE completed = 0
           AND (status IS NULL OR status != 'Completed')
+                    AND {_active_filter("tasks")}
           AND due_date IS NOT NULL AND due_date < :today
         UNION ALL
         SELECT uuid, task, priority, status, due_date, catagory, 'recurring' AS source
         FROM recurring_tasks
         WHERE completed = 0
           AND (status IS NULL OR status != 'Completed')
+                    AND {_active_filter("recurring_tasks")}
           AND due_date IS NOT NULL AND due_date < :today
         ORDER BY due_date ASC, priority DESC NULLS LAST
         {lim}
     """)
     with get_engine().connect() as conn:
-        return _rows(conn.execute(q, {"today": today}))
+        return _visible_rows(_rows(conn.execute(q, {"today": today})))
 
 
 def list_upcoming_tasks(days: int = 7, limit: int | None = 10) -> list[dict[str, Any]]:
@@ -1421,6 +1569,7 @@ def list_upcoming_tasks(days: int = 7, limit: int | None = 10) -> list[dict[str,
         FROM tasks
         WHERE completed = 0
           AND (status IS NULL OR status != 'Completed')
+                    AND {_active_filter("tasks")}
           AND due_date IS NOT NULL
           AND due_date >= :today AND due_date <= :end
         UNION ALL
@@ -1428,13 +1577,14 @@ def list_upcoming_tasks(days: int = 7, limit: int | None = 10) -> list[dict[str,
         FROM recurring_tasks
         WHERE completed = 0
           AND (status IS NULL OR status != 'Completed')
+                    AND {_active_filter("recurring_tasks")}
           AND due_date IS NOT NULL
           AND due_date >= :today AND due_date <= :end
         ORDER BY due_date ASC, priority DESC NULLS LAST
         {lim}
     """)
     with get_engine().connect() as conn:
-        return _rows(conn.execute(q, {"today": today.isoformat(), "end": end}))
+        return _visible_rows(_rows(conn.execute(q, {"today": today.isoformat(), "end": end})))
 
 
 def list_recent_completions(limit: int = 8) -> list[dict[str, Any]]:
@@ -1442,16 +1592,18 @@ def list_recent_completions(limit: int = 8) -> list[dict[str, Any]]:
     q = text(f"""
         SELECT uuid, task, priority, catagory, completed_time, 'task' AS source
         FROM tasks
-        WHERE completed = 1 AND completed_time IS NOT NULL
+                WHERE completed = 1 AND completed_time IS NOT NULL
+                    AND {_active_filter("tasks")}
         UNION ALL
         SELECT uuid, task, priority, catagory, completed_time, 'recurring' AS source
         FROM recurring_tasks
-        WHERE completed = 1 AND completed_time IS NOT NULL
+                WHERE completed = 1 AND completed_time IS NOT NULL
+                    AND {_active_filter("recurring_tasks")}
         ORDER BY completed_time DESC
         LIMIT {int(limit)}
     """)
     with get_engine().connect() as conn:
-        return _rows(conn.execute(q))
+        return _visible_rows(_rows(conn.execute(q)))
 
 
 def list_discipline_streaks(limit: int = 8) -> list[dict[str, Any]]:
@@ -1555,6 +1707,7 @@ def export_backup() -> dict[str, Any]:
         "generated_at": now_iso(),
         "schema_version": check_schema_version(),
         "tables": {},
+        "web_metadata": _read_web_metadata(),
     }
     with get_engine().connect() as conn:
         for t in tables:
@@ -1568,39 +1721,67 @@ def export_backup() -> dict[str, Any]:
 # Projects / Gantt
 # --------------------------------------------------------------------------- #
 
-def list_categories_with_open_tasks(include_recurring: bool = True) -> list[dict[str, Any]]:
-    """Distinct ``catagory`` values that own at least one open task.
+def project_grouping_enabled() -> bool:
+    # Native columns are preferred; task-web-metadata.json is the fallback.
+    return True
 
-    Powers the multi-select on ``/projects`` — the page only offers
-    categories that would actually have something to plot. ``include_recurring``
-    mirrors the page toggle so a category populated only by recurring items
-    doesn't appear when recurring is excluded.
+
+def list_projects_with_open_tasks(include_recurring: bool = True) -> list[dict[str, Any]]:
+    """Distinct project values that own at least one open task.
+
+    Falls back to the legacy ``catagory`` grouping if the optional project
+    column could not be added by the deployment's restricted database role.
     """
-    sources = ["""
-        SELECT catagory, COUNT(*) AS n FROM tasks
+    if not all(has_web_column(table, "project") for table in _TASK_LIKE_TABLES):
+        rows = list_tasks()
+        if include_recurring:
+            recurring = list_recurring()
+            for row in recurring:
+                row["source"] = "recurring"
+            rows.extend(recurring)
+        counts: dict[str, int] = {}
+        for row in rows:
+            project = str(row.get("project") or "").strip()
+            if project and not row.get("completed") and row.get("status") != "Completed":
+                counts[project] = counts.get(project, 0) + 1
+        return [{"project": name, "n": counts[name]} for name in sorted(counts, key=str.lower)]
+
+    field = "project"
+    sources = [f"""
+        SELECT {field} AS project, COUNT(*) AS n FROM tasks
         WHERE completed = 0 AND (status IS NULL OR status != 'Completed')
-          AND catagory IS NOT NULL AND catagory != ''
-        GROUP BY catagory
+          AND {_active_filter("tasks")}
+          AND {field} IS NOT NULL AND {field} != ''
+        GROUP BY {field}
     """]
     if include_recurring:
-        sources.append("""
-            SELECT catagory, COUNT(*) AS n FROM recurring_tasks
+        sources.append(f"""
+            SELECT {field} AS project, COUNT(*) AS n FROM recurring_tasks
             WHERE completed = 0 AND (status IS NULL OR status != 'Completed')
-              AND catagory IS NOT NULL AND catagory != ''
-            GROUP BY catagory
+                            AND {_active_filter("recurring_tasks")}
+              AND {field} IS NOT NULL AND {field} != ''
+            GROUP BY {field}
         """)
     q = text(f"""
-        SELECT catagory, SUM(n)::int AS n
+        SELECT project, SUM(n)::int AS n
         FROM ({' UNION ALL '.join(sources)}) x
-        GROUP BY catagory
-        ORDER BY catagory ASC
+        GROUP BY project
+        ORDER BY project ASC
     """)
     with get_engine().connect() as conn:
         return _rows(conn.execute(q))
 
 
+def list_categories_with_open_tasks(include_recurring: bool = True) -> list[dict[str, Any]]:
+    """Compatibility wrapper retained for older callers/tests."""
+    return [
+        {"catagory": row["project"], "n": row["n"]}
+        for row in list_projects_with_open_tasks(include_recurring)
+    ]
+
+
 def list_project_rows(
-    categories: list[str] | None,
+    projects: list[str] | None,
     include_recurring: bool = True,
 ) -> list[dict[str, Any]]:
     """Open items (tasks + optionally recurring) restricted to ``categories``.
@@ -1609,37 +1790,88 @@ def list_project_rows(
     an empty state instead of dumping every open item. All bar/timeline
     math happens in ``app._build_gantt`` — this stays a pure SQL fetch.
     """
-    if not categories:
+    if not projects:
         return []
-    cats = [c for c in categories if c]
-    if not cats:
+    selected = [p for p in projects if p]
+    if not selected:
         return []
-    fields = """
+    if not all(has_web_column(table, "project") for table in _TASK_LIKE_TABLES):
+        rows = list_tasks()
+        for row in rows:
+            row["source"] = "task"
+        if include_recurring:
+            recurring = list_recurring()
+            for row in recurring:
+                row["source"] = "recurring"
+            rows.extend(recurring)
+        return [
+            row for row in rows
+            if row.get("project") in selected
+            and not row.get("completed")
+            and row.get("status") != "Completed"
+        ]
+
+    field = "project"
+    project_select = "project"
+    fields = f"""
         uuid, task, priority, status, catagory, task_group, sub_group,
-        task_creation, start_time, due_date, estimated_time
+        task_creation, start_time, due_date, estimated_time, {project_select}
     """
     if include_recurring:
         sql = f"""
             SELECT {fields}, 'task' AS source FROM tasks
             WHERE completed = 0 AND (status IS NULL OR status != 'Completed')
-              AND catagory IN :cats
+                            AND {_active_filter("tasks")}
+              AND {field} IN :projects
             UNION ALL
             SELECT {fields}, 'recurring' AS source FROM recurring_tasks
             WHERE completed = 0 AND (status IS NULL OR status != 'Completed')
-              AND catagory IN :cats
-            ORDER BY catagory ASC, due_date ASC NULLS LAST, priority DESC
+                            AND {_active_filter("recurring_tasks")}
+                            AND {field} IN :projects
+                        ORDER BY project ASC, due_date ASC NULLS LAST, priority DESC
         """
     else:
         sql = f"""
             SELECT {fields}, 'task' AS source FROM tasks
             WHERE completed = 0 AND (status IS NULL OR status != 'Completed')
-              AND catagory IN :cats
-            ORDER BY catagory ASC, due_date ASC NULLS LAST, priority DESC
+                            AND {_active_filter("tasks")}
+                            AND {field} IN :projects
+                        ORDER BY project ASC, due_date ASC NULLS LAST, priority DESC
         """
     from sqlalchemy import bindparam
-    q = text(sql).bindparams(bindparam("cats", expanding=True))
+    q = text(sql).bindparams(bindparam("projects", expanding=True))
     with get_engine().connect() as conn:
-        return _rows(conn.execute(q, {"cats": cats}))
+        return _visible_rows(_rows(conn.execute(q, {"projects": selected})))
+
+
+def list_calendar_rows(start: date, end: date) -> list[dict[str, Any]]:
+        """Non-archived dated tasks for a calendar range, across both tables."""
+        project_task = "project" if has_web_column("tasks", "project") else "NULL::text AS project"
+        project_rec = (
+                "project" if has_web_column("recurring_tasks", "project")
+                else "NULL::text AS project"
+        )
+        q = text(f"""
+                SELECT uuid, task, priority, status, due_date, completed, catagory,
+                             {project_task}, 'task' AS source
+                FROM tasks
+                WHERE due_date IS NOT NULL
+                    AND SUBSTR(due_date, 1, 10) BETWEEN :start AND :end
+                    AND {_active_filter("tasks")}
+                UNION ALL
+                SELECT uuid, task, priority, status, due_date, completed, catagory,
+                             {project_rec}, 'recurring' AS source
+                FROM recurring_tasks
+                WHERE due_date IS NOT NULL
+                    AND SUBSTR(due_date, 1, 10) BETWEEN :start AND :end
+                    AND {_active_filter("recurring_tasks")}
+                ORDER BY due_date ASC, priority DESC NULLS LAST, task ASC
+        """)
+        with get_engine().connect() as conn:
+            return _visible_rows(_rows(conn.execute(q, {
+                        "start": start.isoformat(),
+                        "end": end.isoformat(),
+            })))
 
 
 # --------------------------------------------------------------------------- #
@@ -1662,16 +1894,18 @@ def find_tasks_by_name(
     q = text(f"""
         SELECT uuid, task, status, due_date, catagory, 'task' AS source
         FROM tasks
-        WHERE LOWER(task) LIKE :p {where_completed}
+                WHERE LOWER(task) LIKE :p {where_completed}
+                    AND {_active_filter("tasks")}
         UNION ALL
         SELECT uuid, task, status, due_date, catagory, 'recurring' AS source
         FROM recurring_tasks
-        WHERE LOWER(task) LIKE :p {where_completed}
+                WHERE LOWER(task) LIKE :p {where_completed}
+                    AND {_active_filter("recurring_tasks")}
         ORDER BY task ASC
         LIMIT {int(limit)}
     """)
     with get_engine().connect() as conn:
-        return _rows(conn.execute(q, {"p": pattern}))
+        return _visible_rows(_rows(conn.execute(q, {"p": pattern})))
 
 
 def find_discipline_by_name(query: str) -> dict[str, Any] | None:
