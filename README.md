@@ -29,6 +29,8 @@ internally, so an item with hundreds of rows never pushes the page taller.
 | **Tasks completed · This week** | Mon–Sun bar chart of items whose `completed_time` falls in the current ISO week | violet |
 | **Recent activity** | last N events across `tasks` + `recurring_tasks` + `discipline_completions` + `follow_up_tasks`, derived from existing timestamp columns (no audit table) | slate |
 | **Weekly review** | last 7 days ending yesterday: completions total, discipline days N/7, carried-over overdue, next-week upcoming, plus a top-categories bar list | sky |
+| **Currently Playing** | up to 8 Game'N'Watch games whose status is `playing`; shown when Google Sheets is configured | cyan |
+| **Currently Watching** | up to 8 Game'N'Watch shows whose status is `watching`; shown when Google Sheets is configured | purple |
 
 Above the widget grid there's an ambient **"Streaks at risk today" banner**
 (amber) that surfaces active disciplines whose `current_streak > 0` and whose
@@ -41,7 +43,8 @@ it. The banner never renders when the list is empty.
 
 Each widget can be shown/hidden via the "Customize widgets" dropdown; state
 is persisted in `localStorage` per browser (key `luigi.home.hiddenWidgets`).
-All widget queries are read-only, bounded with `LIMIT`, and live in `db.py`
+Widget queries are read-only and bounded by row limits and/or date windows;
+they live in `db.py`
 (`list_open_tasks`, `list_overdue_tasks`, `list_upcoming_tasks`,
 `list_recent_completions`, `list_discipline_streaks`,
 `list_disciplines_pending_today`, `list_disciplines_at_risk`,
@@ -52,15 +55,14 @@ All widget queries are read-only, bounded with `LIMIT`, and live in `db.py`
 Kanban board. Recurring cards are marked with a `↻ Recurring` chip and retain
 their recurrence schedule; the **+ Task** and **+ Recurring** buttons create
 the appropriate row type. The legacy `/recurring` page redirects to `/tasks`.
-The
-column layout is:
+The column layout is:
 
     Row 1 :  Not Started  |  In Progress  |  Completed
     Row 2 :  Blocked      |  Hiatus       |  Pending
 
 The board is height-capped to the viewport — each column is an independent
 scroll container, so a Completed column with hundreds of cards never blows up
-the page. Drag a card between columns to change status. Click a card to edit
+the page. Drag a card between columns to change status. Use **Edit** to change
 all fields in a modal. HTMX handles inline updates; SortableJS handles
 drag-and-drop.
 
@@ -83,7 +85,7 @@ the entry and dispatches on `table`: task-like snapshots go through
 reverses complete, delete, and snooze uniformly), and discipline snapshots go
 through `db.restore_discipline_row(snapshot)` (puts back the
 `discipline_list` row **and** re-inserts every `discipline_completions` row
-via `ON CONFLICT DO NOTHING`, so the streak history returns intact). In
+through an existence-guarded insert, so the streak history returns intact). In
 every case the row's original `uuid` is reused, so any references remain
 valid. Expired ops return `410 Gone`.
 
@@ -106,7 +108,8 @@ later still get the chips.
 Above each board is a **filter bar** with free-text search, a status /
 priority / category dropdown, and a **smart-list** picker with built-ins:
 *Overdue*, *Due this week*, *No due date*, *High priority (≥ 5)*, and
-*Completed this week*. Filtering is 100% client-side — the templates emit
+*Completed this week*. Text search covers title, project, category, group, and
+sub-group. Filtering is 100% client-side — the templates emit
 `data-*` attributes on each card and `static/js/app.js` toggles visibility
 in the DOM. Named filters can be saved ("☆ Save current") and reapplied per
 endpoint; state lives in `localStorage` under
@@ -134,31 +137,26 @@ Other views:
 * **Calendar** — month grid at `/calendar`, showing one-off and recurring tasks
   by due date. Status-colored task pills open the normal edit modal; previous,
   next, and Today controls make it useful as a schedule view.
-* **Archive** — completed cards can be moved out of active boards and restored
-  from `/archive`. It uses an optional web-owned `archived` column and never
-  deletes task history; the same app-managed metadata fallback is used when
-  the database role cannot add the optional column.
-  * *Planned:* a **task-flow / dependency web** view on the same tab —
-    Azure ML Designer-style drag-and-drop nodes, but flowing **left → right**
-    along a date axis instead of top-to-bottom. Each node is a task card
-    (title, status chip, due date); edges are prerequisite links. Any task
-    with an incomplete upstream node is auto-styled as **Blocked** (the
-    Kanban status stays canonical; the flow view just visualises it).
-    Timeline zoom + snap-to-day, click-drag to draw a dependency edge,
-    click a node to open the existing edit modal. Requires one small
-    schema addition (a `task_dependencies(uuid, blocks_uuid)` table) —
-    LuigiBot's DDL side, not the GUI's.
+* **Archive** — completed one-off and recurring cards can be moved out of
+  active boards and restored from `/archive`. It uses an optional web-owned
+  `archived` column and never deletes task history; the same app-managed
+  metadata fallback is used when
+  the database role cannot add the optional column. Archived rows are omitted
+  from Tasks, dashboard task lists, Calendar, Projects, chat task search, and
+  recurring reactivation until restored.
 * **Discipline** — one GitHub-style yearly heatmap per discipline item, with a
   year-picker dropdown. Click any day cell to mark/unmark.
-* **Follow-ups** — plain table with inline edit.
+* **Follow-ups** — rule table at `/follow-ups`, also loaded into the Tasks
+  modal through the **Follow-up rules** button.
 * **Games** / **Shows** — Kanban-by-status boards backed by the **Game'N'Watch**
   Google Sheet (see *Game'N'Watch integration* below). Profile selector, per-card
   status change + edit modal, and a weighted “Surprise me” random picker.
 * **Admin** — runtime info + self-update / restart controls + JSON backup
   export + a paste-in Game'N'Watch credentials panel (see below). Its
-  read-only **Integration health** cards test PostgreSQL, Google Sheets,
-  Steam, TVMaze, AniList, optional YouTube, the LLM, Git, and env-file access
-  with response times and actionable errors—no terminal diagnostics required.
+  read-only **Integration health** cards query PostgreSQL and Google Sheets,
+  probe the Steam Store, TVMaze, and AniList APIs, report Steam-progress /
+  YouTube / LLM configuration, and verify Git plus env-file access. Results
+  include response times and actionable errors—no terminal diagnostics needed.
 
 ### Future UI directions (noted for later)
 
@@ -166,7 +164,7 @@ Other views:
   drawer. Better once the task list grows and filtering matters more.
 * **Option B — Todoist-style two-pane** with a "Today" landing page mixing
   tasks-due-today + disciplines-due-today.
-* **Option C — Projects "task-flow" web (planned next).** Rework the
+* **Option C — Projects "task-flow" web.** Potentially rework the
   `/projects` tab into a free-flowing dependency graph, inspired by the
   Azure Machine Learning Designer canvas but time-aware:
   * **X-axis = timeline (dates)**, not "depth". Nodes snap to their
@@ -199,8 +197,7 @@ them; only new templates + route variants (and, for Option C, one new table).
 
 ## Data contract (short version)
 
-Read `LUIGI_WEB_GUI_SPEC.md` and LuigiBot's `bot_modules/db.py` for the full
-story. Hard rules the GUI must obey:
+The SQL contract is centralized in `db.py`. Hard rules the GUI must obey:
 
 * Never insert an explicit `id` — PKs are `GENERATED ALWAYS AS IDENTITY`.
 * `uuid` is the durable row handle. All `UPDATE`/`DELETE` are scoped `WHERE uuid = :uuid`.
@@ -208,11 +205,16 @@ story. Hard rules the GUI must obey:
 * Dates and datetimes are ISO-8601 `TEXT` (`YYYY-MM-DD` or full ISO).
 * Intentional SQL spellings: `catagory` (sic), `sub_group` in tasks, `subgroup`
   in follow-ups. The GUI talks SQL directly so it uses these names as-is.
-* `discipline_completions` is append-only with `UNIQUE(task, completed_date)`.
-  Mark = `INSERT ... ON CONFLICT DO NOTHING`. Unmark = `DELETE ... WHERE task
-  AND completed_date`.
+* `discipline_completions` has `UNIQUE(task, completed_date)`. Mark uses an
+  existence-guarded `INSERT ... SELECT ... WHERE NOT EXISTS`; unmark uses
+  `DELETE ... WHERE task AND completed_date`. Both writes verify their final
+  state before reporting success.
 * No whole-table rewrites. Ever.
-* No DDL from the GUI — LuigiBot owns the schema.
+* LuigiBot owns its schema and schema version. At startup the GUI only attempts
+  idempotent, nullable web-owned columns (`recurring_days`, `project`,
+  `archived`) and never bumps `schema_version`. Missing ALTER privileges are
+  non-fatal: weekday scheduling hides itself, while project/archive state uses
+  the app-managed `task-web-metadata.json` fallback.
 
 ---
 
@@ -223,19 +225,40 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 
-# copy .env.example to .env and fill in the two secrets
-Copy-Item .env.example .env
+# Runtime configuration comes from process environment variables. Set the
+# required database values and login token in this shell before starting.
+$env:LUIGI_WEB_PG_HOST="10.0.0.202"
+$env:LUIGI_WEB_PG_PORT="5432"
+$env:LUIGI_WEB_PG_DB="luigi_todo"
+$env:LUIGI_WEB_PG_USER="luigi_web"
+$env:LUIGI_WEB_PG_PASSWORD="<database password>"
+$env:LUIGI_WEB_UI_TOKEN="<login token>"
 
 # smoke-test the DB connection (read-only)
 python scripts\smoke_test.py
 
 # run
-$env:LUIGI_WEB_PG_HOST="10.0.0.202"    # etc. (or load .env with a dotenv loader)
 uvicorn app:app --reload --host 0.0.0.0 --port 8080
 ```
 
 Open `http://localhost:8080`. You'll be redirected to `/login`; enter the value
 of `LUIGI_WEB_UI_TOKEN` to get a session cookie.
+
+### Validation
+
+The offline regression suite does not require PostgreSQL, Google credentials,
+a Steam key, or an LLM endpoint:
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+It covers authentication, database URL construction, recurring schedule math,
+discipline failure isolation, combined task rendering, project/calendar
+shaping, Game'N'Watch URL/header handling, catalog metadata,
+Sheet insertion, and LLM history/tool limits. Admin's **Integration health**
+panel provides the corresponding read-only checks against configured live
+services.
 
 ---
 
@@ -251,7 +274,7 @@ of `LUIGI_WEB_UI_TOKEN` to get a session cookie.
 | `LUIGI_WEB_UI_TOKEN` | Shared login token — **env-only** |
 | `LUIGI_WEB_BIND` | Uvicorn bind address (default `0.0.0.0`) |
 | `LUIGI_WEB_PORT` | Uvicorn port (default `8080`) |
-| `LUIGI_WEB_ENV_FILE` | Path the Admin env editor writes. Defaults to `<repo>/.env`; set to `/etc/luigi-web.env` on the LXC |
+| `LUIGI_WEB_ENV_FILE` | Path the Admin env editor writes. Defaults to `<repo>/.env`; recommended LXC value is `/opt/luigi-web/luigi.env` |
 | `LUIGI_WEB_LLM_PROVIDER` | `openai` (default) or `disabled` |
 | `LUIGI_WEB_LLM_BASE_URL` | OpenAI-compatible endpoint. Default `https://models.github.ai/inference` (GitHub Models) |
 | `LUIGI_WEB_LLM_API_KEY` | Chat panel is disabled when blank. GitHub PAT with `models:read` for GitHub Models |
@@ -260,9 +283,14 @@ of `LUIGI_WEB_UI_TOKEN` to get a session cookie.
 | `LUIGI_WEB_LLM_MAX_TOOL_ITERATIONS` | Cap on tool round-trips per message (default `5`) |
 | `LUIGI_WEB_GNW_SHEET_ID` | Game'N'Watch Google Sheet ID or full sheet URL. Blank hides the Games/Shows tabs |
 | `LUIGI_WEB_GNW_CREDS_FILE` | Path to the service-account `credentials.json`. Leave **blank** to use the app-managed path (`<repo>/gnw-credentials.json`) that the Admin page writes to |
+| `LUIGI_WEB_STEAM_API_KEY` | Optional Steam Web API key for personal playtime and achievements. Steam store search/metadata works without it |
+| `LUIGI_WEB_STEAM_ID` | Steam ID64 used with the Steam API key for owned-game playtime and achievement progress |
+| `LUIGI_WEB_YOUTUBE_API_KEY` | Optional YouTube Data API key that adds playlist results to Add Show |
 
-Secrets **must** live outside the repo — in `/etc/luigi-web.env` on the LXC
-(mode `640 root:luigi-web`) or in `.env` locally. `.gitignore` blocks `.env`.
+Secrets **must** stay uncommitted — in `/opt/luigi-web/luigi.env` on the LXC
+(recommended mode `600`, owner `luigi-web`), in the process environment for
+local development, or in the legacy `/etc/luigi-web.env`. `.gitignore` blocks
+`.env`, service-account credentials, and app-managed task metadata.
 
 ---
 
@@ -276,22 +304,38 @@ Authenticated (session cookie, or `?token=` / `Authorization: Bearer`):
 * `GET  /`                → redirects to `/home`
 * `GET  /home`            → widget dashboard (overdue, upcoming, open tasks,
   discipline today, discipline streaks, follow-ups, recent completions,
-  weekly discipline chart, weekly tasks-completed chart)
-* `GET  /tasks`           → Kanban board
+  weekly discipline chart, weekly tasks-completed chart, recent activity,
+  weekly review, and optional currently-playing/watching widgets)
+* `GET  /tasks`           → combined one-off + recurring Kanban board
 * `POST /tasks`           → create
+* `POST /tasks/quick`     → Quick Add a one-off task
+* `GET  /tasks/new`       → task creation modal partial
 * `GET  /tasks/{uuid}/edit`   → modal edit form (HTMX partial)
 * `POST /tasks/{uuid}`    → update
 * `POST /tasks/{uuid}/status` → drag-drop status change
 * `POST /tasks/{uuid}/complete` → toggle `completed` + `completed_time`
 * `POST /tasks/{uuid}/snooze` → defer `due_date` by `days` (form field);
   returns the re-rendered card partial for an HTMX swap
+* `POST /tasks/{uuid}/archive`, `POST /tasks/{uuid}/restore` → move a
+  completed task into/out of Archive
 * `POST /tasks/{uuid}/delete` → delete
 * `GET  /recurring` → compatibility redirect to `/tasks`; recurring create,
   edit, status, complete, snooze, archive, restore, and delete routes remain
   under `/recurring/*` for the consolidated board's recurring cards
-* `GET  /projects?catagory=X&catagory=Y&include_recurring=1` → Gantt chart
+* `POST /recurring`, `GET /recurring/new`,
+  `GET /recurring/{uuid}/edit`, `POST /recurring/{uuid}` → recurring create
+  and edit flows
+* `POST /recurring/{uuid}/status`, `POST /recurring/{uuid}/complete`,
+  `POST /recurring/{uuid}/snooze`, `POST /recurring/{uuid}/archive`,
+  `POST /recurring/{uuid}/restore`, `POST /recurring/{uuid}/delete` →
+  recurring card mutations
+* `GET  /projects?project=X&project=Y&include_recurring=1` → named-project
+  Gantt chart; legacy `?catagory=` bookmarks remain accepted
+* `GET  /calendar?month=YYYY-MM` → month calendar of task due dates
+* `GET  /archive` → archived one-off and recurring task history with restore
 * `GET  /discipline?year=YYYY` → yearly heatmaps
 * `POST /discipline`      → create
+* `GET  /discipline/new`  → creation modal partial
 * `GET  /discipline/{uuid}/edit`, `POST /discipline/{uuid}` → update
 * `POST /discipline/{uuid}/deactivate` → set `active=0`
 * `POST /discipline/{uuid}/delete` → hard-delete the discipline **and** all
@@ -299,24 +343,39 @@ Authenticated (session cookie, or `?token=` / `Authorization: Bearer`):
   the client toast can restore both within the 12 s window
 * `POST /discipline/toggle` → mark/unmark a day (also used by the Home
   discipline widget's "Done" button)
-* `GET  /follow-ups`      → table
-* `POST /follow-ups`, `GET /follow-ups/{uuid}/edit`, `POST /follow-ups/{uuid}`,
-  `POST /follow-ups/{uuid}/delete`
+* `GET  /follow-ups`      → standalone rules table
+* `GET  /follow-ups/panel` → rules-manager partial loaded from Tasks
+* `GET  /follow-ups/new`, `POST /follow-ups`,
+  `GET /follow-ups/{uuid}/edit`, `POST /follow-ups/{uuid}`,
+  `POST /follow-ups/{uuid}/delete` → follow-up rule CRUD
 * `GET  /games`, `GET /shows` → Game'N'Watch Kanban board (optional
   `?profile=NAME`). Renders a “not configured” notice when the sheet id /
   credentials are missing.
+* `GET  /gnw/{section}/new` → Add Game/Show modal
+* `POST /gnw/{section}/search` → Steam catalog search for games; resilient
+  TVMaze + AniList + optional YouTube playlist search for shows
+* `POST /gnw/{section}/add` → write a catalog result or manual item into the
+  shared Google Sheet
 * `POST /gnw/{section}/status` → change an item's status (form: `profile`,
   `title`, `status`); writes the sheet, returns `204 + HX-Refresh`
 * `GET  /gnw/{section}/edit?profile=&title=` → modal edit form
 * `POST /gnw/{section}/update` → write editable fields back to the sheet
 * `POST /gnw/{section}/pick`   → weighted random pick partial
+* `GET  /gnw/games/steam-stats?profile=&title=&app_id=` → Steam-owned
+  playtime, achievement progress, and locked-achievement preview; refreshes
+  the sheet's `Hours Played` field
 * `POST /admin/gnw-credentials` → validate + save a pasted service-account
   `credentials.json` to disk (mode `600`) and hot-reload the Sheets client
 * `GET  /admin`           → runtime info + update / restart controls +
   backup export
+* `GET  /admin/integrations` → timed, read-only checks for PostgreSQL and
+  Google Sheets; network probes for Steam Store, TVMaze, and AniList; config
+  status for Steam progress, optional YouTube, and LLM; plus Git and managed
+  environment-file checks
 * `GET  /admin/backup`    → read-only JSON dump of `tasks`,
-  `recurring_tasks`, `follow_up_tasks`, `disciplines`, and
-  `discipline_completions`. Served with
+  `recurring_tasks`, `follow_up_tasks`, `discipline_list`, and
+  `discipline_completions`, plus app-managed project/archive fallback
+  metadata. Served with
   `Content-Disposition: attachment; filename="luigi-backup-{stamp}.json"`
   — the Admin page exposes it as a plain download link.
 * `POST /admin/update`    → `git fetch` + `git pull --ff-only` +
@@ -333,7 +392,7 @@ Authenticated (session cookie, or `?token=` / `Authorization: Bearer`):
   `LUIGI_WEB_UI_TOKEN` are hot-reloaded into `os.environ` and the running
   provider is rebuilt — no restart needed. DB / bind / port changes still
   require `systemctl restart luigi-web`; the result banner flags which is
-  which.
+  which. Steam and YouTube settings are also hot-reloaded.
 * `POST /chat`            → send one user message to the assistant; returns
   an HTML partial containing the user bubble, assistant reply, and any
   tool-call audit entries. Requires `LUIGI_WEB_LLM_API_KEY`.
@@ -342,7 +401,7 @@ Authenticated (session cookie, or `?token=` / `Authorization: Bearer`):
 * `POST /undo/{op_id}`    → pop the queued snapshot for `op_id` and restore
   the row via `db.restore_task_row` (task-like) or
   `db.restore_discipline_row` (discipline_list, including its completions).
-  Returns `204` on success (with `HX-Trigger: {reloadBoard, undoCleared}`)
+  Returns `200` on success (with `HX-Trigger: {reloadBoard, undoCleared}`)
   or `410 Gone` if the op has expired or already been consumed. Covers
   complete / delete / snooze on `tasks` and `recurring_tasks`, plus delete
   on `discipline_list`.
@@ -373,6 +432,8 @@ Manager.
 
 The systemd unit runs an `ExecStartPre` that reinstalls dependencies on every
 start (see next section) — no separate deploy pipeline needed.
+It intentionally runs one Uvicorn worker because Undo snapshots, chat history,
+live provider configuration, and Google Sheets client state are process-local.
 
 ---
 
@@ -381,11 +442,13 @@ start (see next section) — no separate deploy pipeline needed.
 The `/admin` page exposes two buttons backed by the routes above:
 
 * **Update** — runs `git fetch`, `git pull --ff-only`, then
-  `pip install --no-cache-dir -r requirements.txt` in `/opt/luigi-web`. Streams
-  each step's stdout/stderr and exit code back into the page so a failed pull
+  `pip install --no-cache-dir -r requirements.txt` in `/opt/luigi-web`. Renders
+  each step's captured stdout/stderr and exit code in the page so a failed pull
   (non-fast-forward, dirty tree, network error) is immediately visible.
-* **Restart** — sleeps 0.6 s, then calls `os._exit(0)`. `systemd` relaunches
-  the service because the unit has `Restart=always`.
+* **Restart** — after a short response delay, a worker signals the Uvicorn
+  parent and exits. This stops the complete process tree so `systemd` relaunches
+  every worker on the new code; single-process development falls back to a
+  direct process exit.
 
 Two properties of the unit make this safe and self-healing:
 
@@ -404,17 +467,20 @@ Constraints:
   Because `ProtectHome=true` hides `~/.cache/pip`, the unit sets
   `PIP_NO_CACHE_DIR=1` and passes `HOME` explicitly.
 * No sudo required — the app never asks systemd for anything; it just exits.
-* Rotate the shared token by editing `/etc/luigi-web.env` and restarting.
+* Saving a new shared token through Admin applies it live. Changes made outside
+  the application require a service restart.
 
 ---
 
 ## Non-goals
 
-* No DDL from the GUI.
+* No schema-version ownership or destructive DDL. The only DDL is idempotent
+  `ADD COLUMN IF NOT EXISTS` for nullable web-owned task metadata, with safe
+  degradation when the web role lacks ALTER privileges.
 * No optimistic concurrency — last-write-wins scoped by `uuid` (future work).
 * No user accounts — single shared token. Rotation = change env + restart.
-* No charts/analytics parity with the bot beyond the two weekly bar charts on
-  the Home dashboard and the category-scoped Gantt on `/projects`.
+* No full analytics parity with Game'N'Watch; the GUI focuses on operational
+  boards, calendar/project scheduling, Steam progress, and dashboard summaries.
 * No changes to LuigiBot.
 
 ---
@@ -423,8 +489,9 @@ Constraints:
 
 A collapsible chat panel at the top of `/home` lets you drive the app in
 natural language: *"add task fix printer priority 3 due tomorrow"*, *"mark
-read discipline done"*, *"what's overdue?"*. It's disabled by default; set
-`LUIGI_WEB_LLM_API_KEY` and restart to enable.
+read discipline done"*, *"what's overdue?"*. It's disabled by default. Saving
+`LUIGI_WEB_LLM_API_KEY` through Admin rebuilds the provider live; values changed
+outside the app take effect after restart.
 
 **Security contract** (see `chat_tools.py` for the exact list):
 
@@ -561,9 +628,12 @@ sheet id / credentials aren't set, `gnw.disabled_reason()` drives a friendly
 * Home widgets: **Currently Playing** and **Currently Watching**.
 * **Steam stats** on Steam-backed cards reads owned-game playtime and personal
   achievement progress when a Steam Web API key + Steam ID64 are configured;
-  refreshed playtime is also written to the existing `Hours Played` cell.
+  refreshed playtime is also written to the existing `Hours Played` cell. It
+  previews up to five locked achievements, reports 100% completion, and can
+  move a fully completed game into **100% Achievements**. Steam requires the
+  account's game details to be API-visible.
 
-**Configuration.** Two env keys, both editable from **Admin**:
+**Configuration.** Five environment keys, all editable from **Admin**:
 
 | Var | Purpose |
 |---|---|
