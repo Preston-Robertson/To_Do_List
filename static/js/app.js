@@ -4,6 +4,126 @@
 (function () {
   "use strict";
 
+  // ------------------- Application sidebar -------------------
+  // Desktop collapse state persists per browser. On narrow screens the same
+  // controls open a temporary drawer and never overwrite the desktop choice.
+  const SIDEBAR_KEY = "luigi.sidebar.collapsed";
+  const sidebarMedia = window.matchMedia("(max-width: 900px)");
+
+  function syncSidebarButtonLabels() {
+    const mobile = sidebarMedia.matches;
+    const open = document.body.classList.contains("sidebar-open");
+    const collapsed = document.body.classList.contains("sidebar-collapsed");
+    document.querySelectorAll("[data-sidebar-toggle]").forEach((button) => {
+      const label = mobile
+        ? (open ? "Close navigation" : "Open navigation")
+        : (collapsed ? "Expand navigation" : "Collapse navigation");
+      button.setAttribute("aria-label", label);
+      button.setAttribute("title", label);
+      button.setAttribute("aria-expanded", mobile ? String(open) : String(!collapsed));
+    });
+  }
+
+  function closeMobileSidebar() {
+    document.body.classList.remove("sidebar-open");
+    syncSidebarButtonLabels();
+  }
+
+  function initSidebar() {
+    if (!sidebarMedia.matches) {
+      try {
+        document.body.classList.toggle(
+          "sidebar-collapsed",
+          localStorage.getItem(SIDEBAR_KEY) === "1",
+        );
+      } catch {}
+    }
+    syncSidebarButtonLabels();
+  }
+
+  document.addEventListener("click", (e) => {
+    const toggle = e.target.closest("[data-sidebar-toggle]");
+    if (toggle) {
+      if (sidebarMedia.matches) {
+        document.body.classList.toggle("sidebar-open");
+      } else {
+        const collapsed = document.body.classList.toggle("sidebar-collapsed");
+        try { localStorage.setItem(SIDEBAR_KEY, collapsed ? "1" : "0"); } catch {}
+      }
+      syncSidebarButtonLabels();
+      return;
+    }
+    if (e.target.closest("[data-sidebar-dismiss]")) {
+      closeMobileSidebar();
+      return;
+    }
+    if (sidebarMedia.matches && e.target.closest(".sidebar .nav-item")) {
+      closeMobileSidebar();
+    }
+  });
+
+  sidebarMedia.addEventListener?.("change", () => {
+    document.body.classList.remove("sidebar-open");
+    initSidebar();
+  });
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initSidebar);
+  } else {
+    initSidebar();
+  }
+
+  // ------------------- Global command palette -------------------
+  const commandPalette = () => document.getElementById("command-palette");
+  const commandInput = () => document.querySelector("[data-command-input]");
+  let commandIndex = -1;
+
+  function commandOptions() {
+    const palette = commandPalette();
+    return palette ? Array.from(palette.querySelectorAll("[data-command-option]")) : [];
+  }
+
+  function selectCommandOption(nextIndex) {
+    const options = commandOptions();
+    options.forEach((option) => option.classList.remove("is-selected"));
+    if (!options.length) { commandIndex = -1; return; }
+    commandIndex = (nextIndex + options.length) % options.length;
+    options[commandIndex].classList.add("is-selected");
+    options[commandIndex].scrollIntoView({ block: "nearest" });
+  }
+
+  window.openCommandPalette = function () {
+    const palette = commandPalette();
+    const input = commandInput();
+    if (!palette || !input) return;
+    closeMobileSidebar();
+    palette.classList.remove("hidden");
+    document.body.classList.add("command-open");
+    commandIndex = -1;
+    input.value = "";
+    input.focus();
+    if (window.htmx) window.htmx.trigger(input, "search");
+  };
+
+  window.closeCommandPalette = function () {
+    const palette = commandPalette();
+    if (!palette) return;
+    palette.classList.add("hidden");
+    document.body.classList.remove("command-open");
+    commandIndex = -1;
+  };
+
+  document.addEventListener("click", (e) => {
+    if (e.target.closest("[data-command-open]")) {
+      e.preventDefault();
+      window.openCommandPalette();
+      return;
+    }
+    if (e.target.closest("[data-command-close]")) {
+      window.closeCommandPalette();
+    }
+  });
+
   // ------------------- Modal -------------------
   const modal = () => document.getElementById("modal");
   const modalBody = () => document.getElementById("modal-body");
@@ -11,6 +131,17 @@
   window.openModal = function () {
     const m = modal();
     if (!m) return;
+    const body = modalBody();
+    if (body && !body.children.length && !body.textContent.trim()) {
+      body.innerHTML = `
+        <div class="drawer-skeleton" aria-label="Loading">
+          <div class="skeleton-line is-title"></div>
+          <div class="skeleton-line is-short"></div>
+          <div class="skeleton-block"></div>
+          <div class="skeleton-line"></div>
+          <div class="skeleton-block"></div>
+        </div>`;
+    }
     m.classList.remove("hidden");
     // Focus the first input in the loaded form when it arrives.
     setTimeout(() => {
@@ -34,11 +165,104 @@
   });
 
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") window.closeModal();
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      const palette = commandPalette();
+      if (palette && !palette.classList.contains("hidden")) window.closeCommandPalette();
+      else window.openCommandPalette();
+      return;
+    }
+    const palette = commandPalette();
+    if (palette && !palette.classList.contains("hidden")) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        window.closeCommandPalette();
+      } else if (e.key === "ArrowDown") {
+        e.preventDefault();
+        selectCommandOption(commandIndex + 1);
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        selectCommandOption(commandIndex - 1);
+      } else if (e.key === "Enter" && commandIndex >= 0) {
+        e.preventDefault();
+        commandOptions()[commandIndex]?.click();
+      }
+      return;
+    }
+    if (e.key === "Escape") {
+      if (document.body.classList.contains("sidebar-open")) closeMobileSidebar();
+      else window.closeModal();
+    }
   });
 
   // HTMX custom event: server sends HX-Trigger: closeModal on save/create/delete.
   document.body.addEventListener("closeModal", () => window.closeModal());
+
+  document.body.addEventListener("htmx:afterSwap", (e) => {
+    if (!e.target || e.target.id !== "modal-body") return;
+    const first = e.target.querySelector("input, select, textarea, button, a[href]");
+    if (first) first.focus();
+  });
+
+  document.body.addEventListener("htmx:afterSwap", (e) => {
+    if (!e.target || e.target.id !== "command-results") return;
+    commandIndex = -1;
+  });
+
+  // ------------------- Global HTMX progress -------------------
+  let pendingRequests = 0;
+  const progress = () => document.getElementById("route-progress");
+  function beginProgress() {
+    pendingRequests += 1;
+    progress()?.classList.add("is-active");
+  }
+  function endProgress() {
+    pendingRequests = Math.max(0, pendingRequests - 1);
+    if (pendingRequests === 0) progress()?.classList.remove("is-active");
+  }
+  document.body.addEventListener("htmx:beforeRequest", beginProgress);
+  document.body.addEventListener("htmx:afterRequest", endProgress);
+
+  // ------------------- Success toast -------------------
+  const SUCCESS_KEY = "luigi.pendingSuccess";
+  let successTimer = null;
+  function hideSuccess() {
+    const toast = document.getElementById("success-toast");
+    if (toast) toast.classList.add("hidden");
+    if (successTimer) { clearTimeout(successTimer); successTimer = null; }
+    try { sessionStorage.removeItem(SUCCESS_KEY); } catch {}
+  }
+  window.showSuccess = function (message) {
+    const toast = document.getElementById("success-toast");
+    if (!toast) return;
+    const text = message || "Changes saved.";
+    const label = toast.querySelector(".success-toast-label");
+    if (label) label.textContent = text;
+    toast.classList.remove("hidden");
+    try { sessionStorage.setItem(SUCCESS_KEY, text); } catch {}
+    if (successTimer) clearTimeout(successTimer);
+    successTimer = setTimeout(hideSuccess, 3500);
+  };
+  document.addEventListener("click", (e) => {
+    if (e.target.closest("[data-success-dismiss]")) hideSuccess();
+  });
+  document.body.addEventListener("flashSuccess", (e) => {
+    window.showSuccess((e.detail || {}).message || "Changes saved.");
+  });
+  function restoreSuccess() {
+    try {
+      const message = sessionStorage.getItem(SUCCESS_KEY);
+      if (message) {
+        sessionStorage.removeItem(SUCCESS_KEY);
+        window.showSuccess(message);
+      }
+    } catch {}
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", restoreSuccess);
+  } else {
+    restoreSuccess();
+  }
 
   // Refresh the kanban board when the server asks (after edit/complete).
   document.body.addEventListener("reloadBoard", () => {
@@ -330,6 +554,43 @@
         btn.textContent = originalText;
       });
   });
+
+  // ------------------- Tasks Board/List view -------------------
+  const TASK_VIEW_KEY = "luigi.tasks.view";
+
+  function setTaskView(view) {
+    const scope = document.querySelector("[data-tasks-scope]");
+    if (!scope) return;
+    const next = view === "list" ? "list" : "board";
+    scope.querySelectorAll("[data-view-panel]").forEach((panel) => {
+      panel.hidden = panel.dataset.viewPanel !== next;
+    });
+    scope.querySelectorAll("[data-task-view]").forEach((button) => {
+      const active = button.dataset.taskView === next;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", String(active));
+    });
+    scope.dataset.activeView = next;
+    try { localStorage.setItem(TASK_VIEW_KEY, next); } catch {}
+  }
+
+  function initTaskView() {
+    if (!document.querySelector("[data-tasks-scope]")) return;
+    let saved = "board";
+    try { saved = localStorage.getItem(TASK_VIEW_KEY) || "board"; } catch {}
+    setTaskView(saved);
+  }
+
+  document.addEventListener("click", (e) => {
+    const button = e.target.closest("[data-task-view]");
+    if (button) setTaskView(button.dataset.taskView);
+  });
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initTaskView);
+  } else {
+    initTaskView();
+  }
 
   // ------------------- Kanban drag-and-drop -------------------
   function initKanban() {
@@ -634,18 +895,16 @@
     btn.textContent = input.type === "password" ? "👁" : "🙈";
   });
 
-  // ------------------- Snooze menu (close on outside click) -------------------
-  // The <details data-snooze-menu> element handles open/close natively; we
-  // just close any open menus when the user clicks outside of them so the
-  // page never has multiple menus hanging open. Also close after any hx-post
-  // resolves so the newly-swapped card doesn't inherit an "open" state.
+  // ------------------- Card action menus (close on outside click) ----------
+  // Native <details> handles open/close; this keeps only the active menu open
+  // and clears menus after an HTMX action resolves.
   document.addEventListener("click", (e) => {
-    document.querySelectorAll("details[data-snooze-menu][open]").forEach((d) => {
+    document.querySelectorAll("details[data-action-menu][open], details[data-snooze-menu][open]").forEach((d) => {
       if (!d.contains(e.target)) d.removeAttribute("open");
     });
   });
   document.body.addEventListener("htmx:afterSwap", () => {
-    document.querySelectorAll("details[data-snooze-menu][open]")
+    document.querySelectorAll("details[data-action-menu][open], details[data-snooze-menu][open]")
       .forEach((d) => d.removeAttribute("open"));
   });
 
@@ -912,6 +1171,9 @@
       });
       const badge = col.querySelector("[data-column-count]");
       if (badge) badge.textContent = String(colCount);
+    });
+    scope.querySelectorAll("[data-task-list-row]").forEach((row) => {
+      row.classList.toggle("card-filtered-out", !cardMatches(row, state, wk));
     });
     const summary = bar.querySelector("[data-filter-summary]");
     if (summary) {

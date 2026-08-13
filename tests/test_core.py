@@ -144,6 +144,24 @@ class GameAndWatchTests(unittest.TestCase):
         self.assertEqual(written[0][headers.index("Profile")], "Preston")
         self.assertEqual(written[0][headers.index("Title")], "Portal")
 
+    def test_game_card_exposes_inline_rating(self) -> None:
+        template = app.templates.get_template("partials/media_card.html")
+        html = template.render(
+            section="games",
+            statuses=gnw.GAME_STATUSES,
+            status_labels=gnw.STATUS_LABELS,
+            item={
+                "title": "Portal", "profile": "Preston", "priority": 4,
+                "rating": 9, "cover_url": "", "link": None, "platform": "Steam",
+                "is_multiplayer": False, "price": "", "tags": [], "status": "completed",
+                "source": "steam", "external_id": "400",
+            },
+        )
+        self.assertIn("Your rating", html)
+        self.assertIn('name="rating"', html)
+        self.assertIn('value="9" selected', html)
+        self.assertIn('hx-post="/gnw/games/update"', html)
+
     def test_full_sheet_url_is_accepted(self) -> None:
         url = "https://docs.google.com/spreadsheets/d/abc_123-X/edit?gid=0"
         self.assertEqual(gnw._normalize_sheet_id(url), "abc_123-X")
@@ -295,6 +313,63 @@ class ConsolidatedTasksTests(unittest.TestCase):
         endpoints = {row["uuid"]: row["_endpoint_root"] for row in cards}
         self.assertEqual(endpoints, {"task-1": "/tasks", "rec-1": "/recurring"})
         self.assertTrue(response.context["consolidated"])
+
+    def test_compact_list_keeps_correct_endpoints_and_actions(self) -> None:
+        row = {
+            "uuid": "rec-1", "task": "Weekly Review", "priority": 3,
+            "status": "Not Started", "completed": 0, "due_date": "2026-08-15",
+            "completed_time": None, "recurring": 1, "recurring_interval": 7,
+            "recurring_days": None, "project": "Operations", "catagory": "Work",
+            "task_group": None, "sub_group": None, "_endpoint_root": "/recurring",
+        }
+        html = app.templates.get_template("partials/task_list.html").render(
+            rows=[row], statuses=db.STATUS_DISPLAY_ORDER, endpoint_root="/tasks",
+        )
+        self.assertIn('data-view-panel="list"', html)
+        self.assertIn('hx-post="/recurring/rec-1/status"', html)
+        self.assertIn('data-action-menu', html)
+        self.assertIn('>Delete</button>', html)
+
+
+class CommandPaletteTests(unittest.TestCase):
+    def test_blank_palette_contains_quick_actions(self) -> None:
+        request = Request({"type": "http", "method": "GET", "path": "/command-palette",
+                           "query_string": b"", "headers": []})
+        response = app.command_palette_results(request, "")
+        body = response.body.decode()
+        self.assertIn("New task", body)
+        self.assertIn("Add game", body)
+        self.assertIn("Go to", body)
+
+    def test_palette_groups_task_search_results(self) -> None:
+        request = Request({"type": "http", "method": "GET", "path": "/command-palette",
+                           "query_string": b"q=review", "headers": []})
+        task = {"uuid": "1", "task": "Weekly Review", "status": "Not Started",
+                "due_date": None, "catagory": "Work", "source": "task"}
+        with (
+            patch.object(db, "find_tasks_by_name", return_value=[task]),
+            patch.object(db, "search_disciplines", return_value=[]),
+            patch.object(gnw, "is_enabled", return_value=False),
+        ):
+            response = app.command_palette_results(request, "review")
+        body = response.body.decode()
+        self.assertIn("Weekly Review", body)
+        self.assertIn('/tasks/1/edit', body)
+
+    def test_quick_add_emits_success_before_refresh(self) -> None:
+        import asyncio
+
+        class FormRequest:
+            async def form(self):
+                return {"task": "Capture screenshots", "priority": "2"}
+
+        with (
+            patch.object(app, "_require_v2"),
+            patch.object(db, "create_task", return_value="new-uuid"),
+        ):
+            response = asyncio.run(app.tasks_quick_create(FormRequest()))
+        self.assertEqual(response.headers.get("hx-refresh"), "true")
+        self.assertIn("flashSuccess", response.headers.get("hx-trigger", ""))
 
 
 if __name__ == "__main__":

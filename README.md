@@ -10,7 +10,48 @@ is the first. Both write concurrently — Postgres/MVCC keeps things safe.
 
 ---
 
+## Screenshots
+
+Production screenshot filenames, viewport sizes, privacy checks, and capture
+states are defined in [`docs/screenshots/README.md`](docs/screenshots/README.md).
+The image markup below is intentionally commented out so the GitHub README
+never shows broken images before the deployed UI is captured.
+
+Recommended hero captures are **Home**, **Tasks Board**, **Tasks List**,
+**Calendar**, **Games with rating**, and the **Ctrl+K command palette**, plus
+one mobile Tasks image. Keeping those filenames stable means adding the images
+later requires only uncommenting the prepared Markdown block.
+
+<!-- Uncomment after the PNG files are added under docs/screenshots/.
+
+| Home dashboard | Tasks · Board |
+|---|---|
+| ![LuigiBot Home dashboard](docs/screenshots/home-dashboard.png) | ![Tasks Kanban board](docs/screenshots/tasks-board.png) |
+
+| Tasks · List | Calendar |
+|---|---|
+| ![Compact Tasks list](docs/screenshots/tasks-list.png) | ![Task calendar](docs/screenshots/calendar.png) |
+
+| Games and ratings | Global command palette |
+|---|---|
+| ![Games board with rating control](docs/screenshots/games.png) | ![Global search and command palette](docs/screenshots/command-palette.png) |
+
+![Mobile Tasks view](docs/screenshots/mobile-tasks.png)
+
+-->
+
+---
+
 ## UI approach
+
+**Application shell.** Authenticated pages use a responsive, grouped left
+sidebar rather than a crowded top-tab row. Desktop navigation is organized as
+**Focus** (Home, Tasks, Calendar), **Planning** (Projects, Discipline, Archive),
+**Media** (Games, Shows), and **System** (Admin). The sidebar collapse choice
+persists in `localStorage.luigi.sidebar.collapsed`; below 900 px it becomes an
+accessible temporary drawer with a backdrop and Escape-to-close behavior.
+Page headers, buttons, form controls, cards, metadata chips, and focus states
+share one restrained visual-token system in `static/css/app.css`.
 
 **Home dashboard** at `/home` — customizable widget grid summarizing what needs
 attention right now. Each widget has its own accent stripe and scrolls
@@ -120,6 +161,27 @@ The DB-level status enum stays in its canonical order
 (`db.STATUS_DISPLAY_ORDER`) so reordering the board never changes what the
 backend accepts.
 
+**Board/List views.** Tasks can switch between the visual Kanban and a compact
+table-style List without another server request. The selection persists under
+`localStorage.luigi.tasks.view`; both views share the same text, smart-list,
+priority, and category filters. List rows provide inline status changes plus
+the same complete, edit, snooze, archive, and delete operations as cards.
+
+**Drawers and overflow actions.** HTMX still targets the existing `#modal-body`
+contract, but edit/create/search content is presented as a responsive right-side
+drawer so the underlying board or list remains visible. Task and media cards
+keep their primary operation visible while secondary and destructive actions
+live under a consistent `•••` menu; outside clicks and completed HTMX swaps
+close open menus automatically.
+
+**Command palette and feedback.** `Ctrl+K` opens a keyboard-navigable global
+palette for page navigation, creation actions, and grouped search across tasks,
+disciplines, games, and shows. HTMX requests drive a thin global progress bar;
+drawers display skeleton content while loading; successful writes emit a
+consistent toast that survives an immediate refresh; error and Undo toasts
+remain independent. Motion is subtle and disabled automatically when the
+browser requests reduced motion.
+
 Other views:
 
 * **Projects** — named-project Gantt chart at `/projects`. Tasks have an
@@ -160,11 +222,7 @@ Other views:
 
 ### Future UI directions (noted for later)
 
-* **Option A — dense Linear/Height-style table** with filter chips and a side
-  drawer. Better once the task list grows and filtering matters more.
-* **Option B — Todoist-style two-pane** with a "Today" landing page mixing
-  tasks-due-today + disciplines-due-today.
-* **Option C — Projects "task-flow" web.** Potentially rework the
+* **Future Projects option — task-flow web.** Potentially rework the
   `/projects` tab into a free-flowing dependency graph, inspired by the
   Azure Machine Learning Designer canvas but time-aware:
   * **X-axis = timeline (dates)**, not "depth". Nodes snap to their
@@ -302,6 +360,8 @@ Unauthenticated:
 
 Authenticated (session cookie, or `?token=` / `Authorization: Bearer`):
 * `GET  /`                → redirects to `/home`
+* `GET  /command-palette?q=TEXT` → quick actions/navigation when blank, or
+  grouped task, discipline, game, and show search results for `Ctrl+K`
 * `GET  /home`            → widget dashboard (overdue, upcoming, open tasks,
   discipline today, discipline streaks, follow-ups, recent completions,
   weekly discipline chart, weekly tasks-completed chart, recent activity,
@@ -620,7 +680,9 @@ sheet id / credentials aren't set, `gnw.disabled_reason()` drives a friendly
   fallback when no result matches.
 * Each card: cover art, external link (Steam / TVMaze / AniList / YouTube),
   priority, rating, platform/genre, tags, and (for shows) `S…·E…/total`
-  progress. A per-card **status dropdown** writes straight to the sheet; an
+  progress. Game cards expose a prominent inline **Your rating** selector
+  (`0–10`) that writes directly to the Sheet. A per-card **status dropdown**
+  also writes straight to the sheet; an
   **Edit** button opens a modal for status, priority, rating, notes,
   platform, genre, tags, and (shows) season/episode/total.
 * **🎲 Surprise me** — priority-weighted random pick (priority 5 is 5× as

@@ -68,71 +68,43 @@
 
   <footer class="card-actions">
     <button
-      class="btn btn-tiny"
-      hx-get="{{ card_endpoint }}/{{ t.uuid }}/edit"
-      hx-target="#modal-body"
-      onclick="openModal()"
-    >Edit</button>
-
-    <button
-      class="btn btn-tiny"
+      class="btn btn-tiny {% if not t.completed %}btn-primary{% endif %}"
       hx-post="{{ card_endpoint }}/{{ t.uuid }}/complete"
       hx-target="#card-{{ t.uuid }}"
       hx-swap="outerHTML"
     >{% if t.completed %}Undo{% else %}Done{% endif %}</button>
 
-    {% if not t.completed %}
-    <details class="snooze-menu" data-snooze-menu>
-      <summary class="btn btn-tiny" title="Snooze / defer due date">Snooze ▾</summary>
-      <div class="snooze-menu-body">
+    <details class="action-menu" data-action-menu>
+      <summary class="btn btn-tiny btn-ghost" title="More actions" aria-label="More actions for {{ t.task }}">•••</summary>
+      <div class="action-menu-popover">
         <button
-          class="btn btn-tiny btn-ghost"
-          hx-post="{{ card_endpoint }}/{{ t.uuid }}/snooze"
-          hx-vals='{"days": "1"}'
-          hx-target="#card-{{ t.uuid }}"
-          hx-swap="outerHTML"
-        >+1 day</button>
-        <button
-          class="btn btn-tiny btn-ghost"
-          hx-post="{{ card_endpoint }}/{{ t.uuid }}/snooze"
-          hx-vals='{"days": "3"}'
-          hx-target="#card-{{ t.uuid }}"
-          hx-swap="outerHTML"
-        >+3 days</button>
-        <button
-          class="btn btn-tiny btn-ghost"
-          hx-post="{{ card_endpoint }}/{{ t.uuid }}/snooze"
-          hx-vals='{"days": "7"}'
-          hx-target="#card-{{ t.uuid }}"
-          hx-swap="outerHTML"
-        >+1 week</button>
-        <button
-          class="btn btn-tiny btn-ghost"
-          hx-post="{{ card_endpoint }}/{{ t.uuid }}/snooze"
-          hx-vals='{"days": "14"}'
-          hx-target="#card-{{ t.uuid }}"
-          hx-swap="outerHTML"
-        >+2 weeks</button>
+          type="button" class="action-menu-item"
+          hx-get="{{ card_endpoint }}/{{ t.uuid }}/edit"
+          hx-target="#modal-body" onclick="openModal()">Edit</button>
+
+        {% if not t.completed %}
+          <div class="action-menu-label">Snooze</div>
+          <div class="action-menu-grid">
+            {% for days, label in [(1,'1d'),(3,'3d'),(7,'1w'),(14,'2w')] %}
+              <button class="action-menu-chip"
+                hx-post="{{ card_endpoint }}/{{ t.uuid }}/snooze"
+                hx-vals='{"days":"{{ days }}"}'
+                hx-target="#card-{{ t.uuid }}" hx-swap="outerHTML">{{ label }}</button>
+            {% endfor %}
+          </div>
+        {% else %}
+          <button class="action-menu-item"
+            hx-post="{{ card_endpoint }}/{{ t.uuid }}/archive"
+            hx-swap="none" hx-confirm="Move this completed task to Archive?">Archive</button>
+        {% endif %}
+
+        <div class="action-menu-separator"></div>
+        <button class="action-menu-item is-danger"
+          hx-post="{{ card_endpoint }}/{{ t.uuid }}/delete"
+          hx-target="#card-{{ t.uuid }}" hx-swap="outerHTML"
+          hx-confirm="Delete this task?">Delete</button>
       </div>
     </details>
-    {% endif %}
-
-    {% if t.completed %}
-    <button
-      class="btn btn-tiny btn-ghost"
-      hx-post="{{ card_endpoint }}/{{ t.uuid }}/archive"
-      hx-swap="none"
-      hx-confirm="Move this completed task to the archive?"
-    >Archive</button>
-    {% endif %}
-
-    <button
-      class="btn btn-tiny btn-danger"
-      hx-post="{{ card_endpoint }}/{{ t.uuid }}/delete"
-      hx-target="#card-{{ t.uuid }}"
-      hx-swap="outerHTML"
-      hx-confirm="Delete this task?"
-    >Delete</button>
   </footer>
 </article>
 

@@ -9,30 +9,149 @@
   <script src="/static/js/vendor/Sortable.min.js?v={{ asset_version }}" defer></script>
   <script src="/static/js/app.js?v={{ asset_version }}" defer></script>
 </head>
-<body>
-  <header class="topbar">
-    <div class="brand">LuigiBot</div>
-    <nav class="tabs">
-      <a href="/home"        class="tab {% if active_nav == 'home' %}active{% endif %}">Home</a>
-      <a href="/tasks"       class="tab {% if active_nav == 'tasks' %}active{% endif %}">Tasks</a>
-      <a href="/calendar"    class="tab {% if active_nav == 'calendar' %}active{% endif %}">Calendar</a>
-      <a href="/projects"    class="tab {% if active_nav == 'projects' %}active{% endif %}">Projects</a>
-      <a href="/archive"     class="tab {% if active_nav == 'archive' %}active{% endif %}">Archive</a>
-      <a href="/discipline"  class="tab {% if active_nav == 'discipline' %}active{% endif %}">Discipline</a>
-      <a href="/games"       class="tab {% if active_nav == 'games' %}active{% endif %}">Games</a>
-      <a href="/shows"       class="tab {% if active_nav == 'shows' %}active{% endif %}">Shows</a>
-      <a href="/admin"       class="tab {% if active_nav == 'admin' %}active{% endif %}">Admin</a>
-    </nav>
-    <form method="post" action="/logout" class="logout">
-      <button type="submit" class="btn btn-ghost">Sign out</button>
-    </form>
-  </header>
+<body class="app-body">
+  <div class="route-progress" id="route-progress" aria-hidden="true"><span></span></div>
+  <div class="app-shell">
+    <aside class="sidebar" id="app-sidebar" aria-label="Primary navigation">
+      <div class="sidebar-brand">
+        <a href="/home" class="brand-link" title="LuigiBot Home">
+          <span class="brand-mark" aria-hidden="true">L</span>
+          <span class="brand-copy">
+            <strong>LuigiBot</strong>
+            <small>Command center</small>
+          </span>
+        </a>
+        <button type="button" class="sidebar-collapse" data-sidebar-toggle
+                aria-label="Collapse navigation" title="Collapse navigation">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+        </button>
+      </div>
 
-  <main>
-    {% block content %}{% endblock %}
-  </main>
+      <nav class="sidebar-nav">
+        <button type="button" class="nav-item command-launcher" data-command-open title="Search and commands">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+          <span>Search</span>
+          <kbd>Ctrl K</kbd>
+        </button>
+        <div class="nav-group">
+          <div class="nav-group-label">Focus</div>
+          <a href="/home" class="nav-item {% if active_nav == 'home' %}active{% endif %}"
+             {% if active_nav == 'home' %}aria-current="page"{% endif %} title="Home">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10"/><path d="M9 20v-6h6v6"/></svg>
+            <span>Home</span>
+          </a>
+          <a href="/tasks" class="nav-item {% if active_nav == 'tasks' %}active{% endif %}"
+             {% if active_nav == 'tasks' %}aria-current="page"{% endif %} title="Tasks">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="m8 12 2.5 2.5L16 9"/></svg>
+            <span>Tasks</span>
+          </a>
+          <a href="/calendar" class="nav-item {% if active_nav == 'calendar' %}active{% endif %}"
+             {% if active_nav == 'calendar' %}aria-current="page"{% endif %} title="Calendar">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/></svg>
+            <span>Calendar</span>
+          </a>
+        </div>
 
-  <!-- Modal target: HTMX loads edit/new forms into #modal-body -->
+        <div class="nav-group">
+          <div class="nav-group-label">Planning</div>
+          <a href="/projects" class="nav-item {% if active_nav == 'projects' %}active{% endif %}"
+             {% if active_nav == 'projects' %}aria-current="page"{% endif %} title="Projects">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg>
+            <span>Projects</span>
+          </a>
+          <a href="/discipline" class="nav-item {% if active_nav == 'discipline' %}active{% endif %}"
+             {% if active_nav == 'discipline' %}aria-current="page"{% endif %} title="Discipline">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5M4 19h16"/><path d="m7 15 4-4 3 2 5-6"/></svg>
+            <span>Discipline</span>
+          </a>
+          <a href="/archive" class="nav-item {% if active_nav == 'archive' %}active{% endif %}"
+             {% if active_nav == 'archive' %}aria-current="page"{% endif %} title="Archive">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v11h14V9M9 13h6"/></svg>
+            <span>Archive</span>
+          </a>
+        </div>
+
+        <div class="nav-group">
+          <div class="nav-group-label">Media</div>
+          <a href="/games" class="nav-item {% if active_nav == 'games' %}active{% endif %}"
+             {% if active_nav == 'games' %}aria-current="page"{% endif %} title="Games">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7h8a5 5 0 0 1 4.7 3.3l1.1 3.1A4 4 0 0 1 18 18.8l-3-2.8H9l-3 2.8a4 4 0 0 1-3.8-5.4l1.1-3.1A5 5 0 0 1 8 7Z"/><path d="M7 12h4M9 10v4M16 11h.01M18 13h.01"/></svg>
+            <span>Games</span>
+          </a>
+          <a href="/shows" class="nav-item {% if active_nav == 'shows' %}active{% endif %}"
+             {% if active_nav == 'shows' %}aria-current="page"{% endif %} title="Shows">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="15" rx="2"/><path d="m9 2 3 3 3-3M10 9l5 3-5 3Z"/></svg>
+            <span>Shows</span>
+          </a>
+        </div>
+
+        <div class="nav-group nav-group-system">
+          <div class="nav-group-label">System</div>
+          <a href="/admin" class="nav-item {% if active_nav == 'admin' %}active{% endif %}"
+             {% if active_nav == 'admin' %}aria-current="page"{% endif %} title="Admin">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>
+            <span>Admin</span>
+          </a>
+        </div>
+      </nav>
+
+      <div class="sidebar-footer">
+        <form method="post" action="/logout" class="logout">
+          <button type="submit" class="nav-item nav-signout" title="Sign out">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 17l5-5-5-5M15 12H3"/><path d="M14 3h5a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-5"/></svg>
+            <span>Sign out</span>
+          </button>
+        </form>
+      </div>
+    </aside>
+
+    <button type="button" class="sidebar-backdrop" data-sidebar-dismiss
+            aria-label="Close navigation"></button>
+
+    <div class="app-workspace">
+      <header class="mobile-topbar">
+        <button type="button" class="mobile-menu" data-sidebar-toggle aria-label="Open navigation">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+        </button>
+        <span class="mobile-page-title">{{ page_title }}</span>
+        <button type="button" class="mobile-menu" data-command-open aria-label="Search and commands">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+        </button>
+      </header>
+
+      <main class="app-main">
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+  </div>
+
+  <div id="command-palette" class="command-palette hidden" role="dialog"
+       aria-modal="true" aria-labelledby="command-palette-title">
+        <button type="button" class="command-backdrop" data-command-close
+          tabindex="-1" aria-label="Close search"></button>
+    <section class="command-panel">
+      <h2 id="command-palette-title" class="sr-only">Search and commands</h2>
+      <div class="command-search">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+        <input type="search" name="q" autocomplete="off" data-command-input
+          placeholder="Search or run a command…" aria-label="Search or run a command"
+          hx-get="/command-palette" hx-trigger="input changed delay:180ms, search"
+          hx-target="#command-results" hx-indicator="#command-loading">
+        <span id="command-loading" class="command-loading htmx-indicator" aria-label="Searching"></span>
+        <kbd>Esc</kbd>
+      </div>
+       <div id="command-results" class="command-results" role="region"
+         aria-label="Search results" aria-live="polite"></div>
+      <footer class="command-footer">
+        <span><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
+        <span><kbd>Enter</kbd> select</span>
+        <span><kbd>Ctrl K</kbd> open</span>
+      </footer>
+    </section>
+  </div>
+
+    <!-- Drawer target: HTMX loads edit/new forms into #modal-body. Existing
+      modal ids/functions remain for route and JavaScript compatibility. -->
   <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-backdrop" data-close-modal></div>
     <div class="modal-panel">
@@ -54,6 +173,12 @@
   <div id="error-toast" class="error-toast hidden" role="alert" aria-live="assertive">
     <span class="error-toast-label"></span>
     <button type="button" class="error-toast-close" data-error-dismiss aria-label="Dismiss">&times;</button>
+  </div>
+
+  <div id="success-toast" class="success-toast hidden" role="status" aria-live="polite">
+    <span class="success-toast-icon" aria-hidden="true">✓</span>
+    <span class="success-toast-label"></span>
+    <button type="button" class="success-toast-close" data-success-dismiss aria-label="Dismiss">&times;</button>
   </div>
 </body>
 </html>

@@ -8,7 +8,30 @@
     </div>
   {% endif %}
 
-  <div class="media-body">
+  <div class="media-body{% if section == 'games' %} media-body-game{% endif %}">
+    {% if section == 'games' %}
+      <label class="media-rating-box" title="Set your rating">
+        <span class="media-rating-label">Your rating</span>
+        <span class="media-rating-value">
+          <span aria-hidden="true">★</span>
+          <select
+            name="rating"
+            aria-label="Rating for {{ item.title }}"
+            hx-post="/gnw/games/update"
+            hx-trigger="change"
+            hx-swap="none"
+            hx-vals='{"profile": {{ item.profile|tojson }}, "title": {{ item.title|tojson }}}'
+          >
+            <option value="" {% if item.rating is none %}selected{% endif %}>—</option>
+            {% for score in range(10, -1, -1) %}
+              <option value="{{ score }}" {% if item.rating == score %}selected{% endif %}>{{ score }}</option>
+            {% endfor %}
+          </select>
+          <small>/10</small>
+        </span>
+      </label>
+    {% endif %}
+
     <h3 class="media-title" title="{{ item.title }}">
       {% if item.link %}
         <a href="{{ item.link }}" target="_blank" rel="noopener noreferrer">{{ item.title }}</a>
@@ -20,7 +43,7 @@
     <div class="media-meta">
       <span class="chip chip-muted" title="Profile">{{ item.profile }}</span>
       {% if item.priority %}<span class="chip" title="Priority">P{{ item.priority }}</span>{% endif %}
-      {% if item.rating is not none %}<span class="chip chip-streak" title="Rating">★ {{ item.rating }}/10</span>{% endif %}
+      {% if section != 'games' and item.rating is not none %}<span class="chip chip-streak" title="Rating">★ {{ item.rating }}/10</span>{% endif %}
       {% if section == 'games' %}
         {% if item.platform %}<span class="chip">{{ item.platform }}</span>{% endif %}
         {% if item.is_multiplayer %}<span class="chip chip-muted">MP</span>{% endif %}
@@ -50,18 +73,22 @@
         {% endfor %}
       </select>
 
-      <button
-        type="button"
-        class="btn btn-tiny"
-        hx-get="/gnw/{{ section }}/edit?profile={{ item.profile | urlencode }}&title={{ item.title | urlencode }}"
-        hx-target="#modal-body"
-        onclick="openModal()"
-      >Edit</button>
-      {% if section == 'games' and item.source == 'steam' and item.external_id %}
-      <button type="button" class="btn btn-tiny"
-        hx-get="/gnw/games/steam-stats?profile={{ item.profile|urlencode }}&title={{ item.title|urlencode }}&app_id={{ item.external_id|urlencode }}"
-        hx-target="#modal-body" onclick="openModal()">Steam stats</button>
-      {% endif %}
+      <details class="action-menu" data-action-menu>
+        <summary class="btn btn-tiny btn-ghost" title="More actions" aria-label="More actions for {{ item.title }}">•••</summary>
+        <div class="action-menu-popover">
+          <button type="button" class="action-menu-item"
+            hx-get="/gnw/{{ section }}/edit?profile={{ item.profile | urlencode }}&title={{ item.title | urlencode }}"
+            hx-target="#modal-body" onclick="openModal()">Edit details</button>
+          {% if section == 'games' and item.source == 'steam' and item.external_id %}
+            <button type="button" class="action-menu-item"
+              hx-get="/gnw/games/steam-stats?profile={{ item.profile|urlencode }}&title={{ item.title|urlencode }}&app_id={{ item.external_id|urlencode }}"
+              hx-target="#modal-body" onclick="openModal()">Steam stats</button>
+          {% endif %}
+          {% if item.link %}
+            <a class="action-menu-item" href="{{ item.link }}" target="_blank" rel="noopener noreferrer">Open source ↗</a>
+          {% endif %}
+        </div>
+      </details>
     </div>
   </div>
 </article>

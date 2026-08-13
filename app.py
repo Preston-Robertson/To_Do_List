@@ -273,6 +273,53 @@ def root():
     return RedirectResponse(url="/home", status_code=303)
 
 
+@app.get(
+    "/command-palette",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_auth)],
+)
+def command_palette_results(request: Request, q: str = ""):
+    """Global navigation/action search rendered into the Ctrl+K palette."""
+    query = (q or "").strip()
+    tasks: list[dict[str, Any]] = []
+    disciplines: list[dict[str, Any]] = []
+    games: list[dict[str, Any]] = []
+    shows: list[dict[str, Any]] = []
+    search_error = None
+    if query:
+        try:
+            tasks = db.find_tasks_by_name(query, include_completed=True, limit=8)
+            disciplines = db.search_disciplines(query, limit=5)
+        except Exception as exc:  # noqa: BLE001
+            search_error = f"Task search unavailable: {type(exc).__name__}: {exc}"
+        if gnw.is_enabled():
+            try:
+                needle = query.lower()
+                games = [
+                    item for item in gnw.list_items("games")
+                    if needle in item["title"].lower()
+                ][:5]
+                shows = [
+                    item for item in gnw.list_items("shows")
+                    if needle in item["title"].lower()
+                ][:5]
+            except Exception as exc:  # noqa: BLE001
+                if not search_error:
+                    search_error = f"Media search unavailable: {type(exc).__name__}: {exc}"
+    return templates.TemplateResponse(
+        "partials/command_results.html",
+        {
+            "request": request,
+            "query": query,
+            "tasks": tasks,
+            "disciplines": disciplines,
+            "games": games,
+            "shows": shows,
+            "search_error": search_error,
+        },
+    )
+
+
 # --------------------------------------------------------------------------- #
 # TASKS (Kanban)
 # --------------------------------------------------------------------------- #
@@ -312,6 +359,7 @@ def tasks_page(request: Request):
         {
             "request": request,
             "active_nav": "tasks",
+            "rows": rows,
             "columns": _kanban_columns(rows),
             "statuses": db.STATUS_DISPLAY_ORDER,
             "endpoint_root": "/tasks",
@@ -330,7 +378,11 @@ async def tasks_create(request: Request):
     return templates.TemplateResponse(
         "partials/task_card.html",
         {"request": request, "t": row, "endpoint_root": "/tasks"},
-        headers={"HX-Trigger": "closeModal,reloadBoard"},
+        headers={"HX-Trigger": _hx_trigger(
+            flashSuccess={"message": "Task created"},
+            closeModal=None,
+            reloadBoard=None,
+        )},
     )
 
 
@@ -353,7 +405,10 @@ async def tasks_quick_create(request: Request):
         db.create_task(payload)
     except (TypeError, ValueError) as exc:
         raise HTTPException(422, str(exc)) from exc
-    return Response(status_code=204, headers={"HX-Refresh": "true"})
+    return Response(status_code=204, headers={
+        "HX-Trigger": _hx_trigger(flashSuccess={"message": "Task added"}),
+        "HX-Refresh": "true",
+    })
 
 
 @app.get(
@@ -411,7 +466,11 @@ async def tasks_update(request: Request, row_uuid: str):
     return templates.TemplateResponse(
         "partials/task_card.html",
         {"request": request, "t": row, "endpoint_root": "/tasks"},
-        headers={"HX-Trigger": "closeModal,reloadBoard"},
+        headers={"HX-Trigger": _hx_trigger(
+            flashSuccess={"message": "Task saved"},
+            closeModal=None,
+            reloadBoard=None,
+        )},
     )
 
 
@@ -477,7 +536,10 @@ def tasks_archive(row_uuid: str):
     _require_v2()
     if not db.archive_task(row_uuid, True):
         raise HTTPException(404, "task not found")
-    return Response(status_code=204, headers={"HX-Refresh": "true"})
+    return Response(status_code=204, headers={
+        "HX-Trigger": _hx_trigger(flashSuccess={"message": "Task archived"}),
+        "HX-Refresh": "true",
+    })
 
 
 @app.post("/tasks/{row_uuid}/restore", dependencies=[Depends(require_auth)])
@@ -485,7 +547,10 @@ def tasks_restore(row_uuid: str):
     _require_v2()
     if not db.archive_task(row_uuid, False):
         raise HTTPException(404, "task not found")
-    return Response(status_code=204, headers={"HX-Refresh": "true"})
+    return Response(status_code=204, headers={
+        "HX-Trigger": _hx_trigger(flashSuccess={"message": "Task restored"}),
+        "HX-Refresh": "true",
+    })
 
 
 @app.post(
@@ -542,7 +607,11 @@ async def recurring_create(request: Request):
     return templates.TemplateResponse(
         "partials/task_card.html",
         {"request": request, "t": row, "endpoint_root": "/recurring"},
-        headers={"HX-Trigger": "closeModal,reloadBoard"},
+        headers={"HX-Trigger": _hx_trigger(
+            flashSuccess={"message": "Recurring task created"},
+            closeModal=None,
+            reloadBoard=None,
+        )},
     )
 
 
@@ -602,7 +671,11 @@ async def recurring_update(request: Request, row_uuid: str):
     return templates.TemplateResponse(
         "partials/task_card.html",
         {"request": request, "t": row, "endpoint_root": "/recurring"},
-        headers={"HX-Trigger": "closeModal,reloadBoard"},
+        headers={"HX-Trigger": _hx_trigger(
+            flashSuccess={"message": "Recurring task saved"},
+            closeModal=None,
+            reloadBoard=None,
+        )},
     )
 
 
@@ -669,7 +742,10 @@ def recurring_archive(row_uuid: str):
     _require_v2()
     if not db.archive_recurring(row_uuid, True):
         raise HTTPException(404, "recurring task not found")
-    return Response(status_code=204, headers={"HX-Refresh": "true"})
+    return Response(status_code=204, headers={
+        "HX-Trigger": _hx_trigger(flashSuccess={"message": "Recurring task archived"}),
+        "HX-Refresh": "true",
+    })
 
 
 @app.post("/recurring/{row_uuid}/restore", dependencies=[Depends(require_auth)])
@@ -677,7 +753,10 @@ def recurring_restore(row_uuid: str):
     _require_v2()
     if not db.archive_recurring(row_uuid, False):
         raise HTTPException(404, "recurring task not found")
-    return Response(status_code=204, headers={"HX-Refresh": "true"})
+    return Response(status_code=204, headers={
+        "HX-Trigger": _hx_trigger(flashSuccess={"message": "Recurring task restored"}),
+        "HX-Refresh": "true",
+    })
 
 
 @app.get("/archive", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
@@ -867,7 +946,11 @@ async def gnw_add_item(section: str, request: Request):
         raise HTTPException(422, f"Could not add item: {type(exc).__name__}: {exc}") from exc
     if not ok:
         raise HTTPException(409, message)
-    return Response(status_code=204, headers={"HX-Refresh": "true"})
+    kind = "Game" if section == "games" else "Show"
+    return Response(status_code=204, headers={
+        "HX-Trigger": _hx_trigger(flashSuccess={"message": f"{kind} added"}),
+        "HX-Refresh": "true",
+    })
 
 
 @app.get("/gnw/games/steam-stats", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
@@ -902,7 +985,10 @@ async def gnw_set_status(section: str, request: Request):
     if not ok:
         raise HTTPException(404, "item not found")
     # Full refresh so the card lands in its new column and counts update.
-    return Response(status_code=204, headers={"HX-Refresh": "true"})
+    return Response(status_code=204, headers={
+        "HX-Trigger": _hx_trigger(flashSuccess={"message": "Status updated"}),
+        "HX-Refresh": "true",
+    })
 
 
 @app.get(
@@ -943,11 +1029,16 @@ async def gnw_update(section: str, request: Request):
         if key in int_fields:
             raw = str(val).strip()
             val = int(raw) if raw.lstrip("-").isdigit() else None
+        if key == "rating" and val is not None and not 0 <= val <= 10:
+            raise HTTPException(422, "rating must be between 0 and 10")
         fields[key] = val
     ok = gnw.update_item(section, profile, title, fields)
     if not ok:
         raise HTTPException(404, "item not found")
-    return Response(status_code=204, headers={"HX-Refresh": "true"})
+    return Response(status_code=204, headers={
+        "HX-Trigger": _hx_trigger(flashSuccess={"message": "Media details saved"}),
+        "HX-Refresh": "true",
+    })
 
 
 @app.post(
@@ -1105,7 +1196,13 @@ async def discipline_create(request: Request):
     # Full-page reload is fine here — the heatmap grid depends on the discipline list.
     return Response(
         status_code=204,
-        headers={"HX-Trigger": "closeModal", "HX-Refresh": "true"},
+        headers={
+            "HX-Trigger": _hx_trigger(
+                flashSuccess={"message": "Discipline created"},
+                closeModal=None,
+            ),
+            "HX-Refresh": "true",
+        },
     )
 
 
@@ -1132,7 +1229,13 @@ async def discipline_update(request: Request, row_uuid: str):
     db.update_discipline(row_uuid, form)
     return Response(
         status_code=204,
-        headers={"HX-Trigger": "closeModal", "HX-Refresh": "true"},
+        headers={
+            "HX-Trigger": _hx_trigger(
+                flashSuccess={"message": "Discipline saved"},
+                closeModal=None,
+            ),
+            "HX-Refresh": "true",
+        },
     )
 
 
@@ -1140,7 +1243,10 @@ async def discipline_update(request: Request, row_uuid: str):
 def discipline_deactivate(row_uuid: str):
     _require_v2()
     db.deactivate_discipline(row_uuid)
-    return Response(status_code=204, headers={"HX-Refresh": "true"})
+    return Response(status_code=204, headers={
+        "HX-Trigger": _hx_trigger(flashSuccess={"message": "Discipline deactivated"}),
+        "HX-Refresh": "true",
+    })
 
 
 @app.post("/discipline/{row_uuid}/delete", dependencies=[Depends(require_auth)])
@@ -1298,7 +1404,13 @@ async def follow_ups_create(request: Request):
     _require_v2()
     form = dict(await request.form())
     db.create_follow_up(form)
-    return Response(status_code=204, headers={"HX-Trigger": "closeModal", "HX-Refresh": "true"})
+    return Response(status_code=204, headers={
+        "HX-Trigger": _hx_trigger(
+            flashSuccess={"message": "Follow-up rule created"},
+            closeModal=None,
+        ),
+        "HX-Refresh": "true",
+    })
 
 
 @app.get(
@@ -1322,7 +1434,13 @@ async def follow_ups_update(request: Request, row_uuid: str):
     _require_v2()
     form = dict(await request.form())
     db.update_follow_up(row_uuid, form)
-    return Response(status_code=204, headers={"HX-Trigger": "closeModal", "HX-Refresh": "true"})
+    return Response(status_code=204, headers={
+        "HX-Trigger": _hx_trigger(
+            flashSuccess={"message": "Follow-up rule saved"},
+            closeModal=None,
+        ),
+        "HX-Refresh": "true",
+    })
 
 
 @app.post("/follow-ups/{row_uuid}/delete", dependencies=[Depends(require_auth)])

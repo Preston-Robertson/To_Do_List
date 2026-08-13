@@ -1,0 +1,104 @@
+{# Compact alternate view for the consolidated Tasks page. Expects `rows`. #}
+<section class="task-list-view" data-view-panel="list" hidden>
+  <div class="task-list-table" role="table" aria-label="Tasks list">
+    <div class="task-list-header" role="row">
+      <span role="columnheader">Task</span>
+      <span role="columnheader">Project / category</span>
+      <span role="columnheader">Priority</span>
+      <span role="columnheader">Status</span>
+      <span role="columnheader">Due</span>
+      <span role="columnheader" class="task-list-actions-heading">Actions</span>
+    </div>
+
+    {% for t in rows %}
+      {% set row_endpoint = t._endpoint_root or endpoint_root %}
+      <article
+        class="task-list-row{% if t.completed %} is-completed{% endif %}"
+        role="row"
+        data-task-list-row
+        data-title="{{ (t.task or '')|lower }}"
+        data-project="{{ (t.project or '')|lower }}"
+        data-priority="{{ t.priority or 0 }}"
+        data-status="{{ t.status or 'Not Started' }}"
+        data-catagory="{{ (t.catagory or '')|lower }}"
+        data-task-group="{{ (t.task_group or '')|lower }}"
+        data-sub-group="{{ (t.sub_group or '')|lower }}"
+        data-due-date="{{ t.due_date or '' }}"
+        data-completed="{{ t.completed or 0 }}"
+        data-completed-time="{{ t.completed_time or '' }}"
+        data-reactivation-date="{{ reactivation_date(t) or '' }}"
+      >
+        <div class="task-list-name" role="cell">
+          <button type="button" class="task-list-title"
+            hx-get="{{ row_endpoint }}/{{ t.uuid }}/edit"
+            hx-target="#modal-body" onclick="openModal()">{{ t.task }}</button>
+          <div class="task-list-submeta">
+            {% if t.recurring %}<span class="chip chip-recurring">↻ Recurring</span>{% endif %}
+            {% if t.task_group %}<span>{{ t.task_group }}</span>{% endif %}
+            {% if t.sub_group %}<span>· {{ t.sub_group }}</span>{% endif %}
+          </div>
+        </div>
+
+        <div class="task-list-project" role="cell">
+          {% if t.project %}<strong>{{ t.project }}</strong>{% endif %}
+          {% if t.catagory %}<span>{{ t.catagory }}</span>{% endif %}
+          {% if not t.project and not t.catagory %}<span class="task-list-empty">—</span>{% endif %}
+        </div>
+
+        <div role="cell"><span class="card-priority p{{ t.priority or 0 }}">P{{ t.priority or 0 }}</span></div>
+
+        <div role="cell">
+          <select class="task-list-status" name="status"
+            aria-label="Status for {{ t.task }}"
+            hx-post="{{ row_endpoint }}/{{ t.uuid }}/status"
+            hx-trigger="change" hx-swap="none">
+            {% for status in statuses %}
+              <option value="{{ status }}" {% if status == t.status %}selected{% endif %}>{{ status }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="task-list-due" role="cell">
+          {% if t.due_date %}<span>{{ t.due_date[:10] }}</span>{% else %}<span class="task-list-empty">—</span>{% endif %}
+        </div>
+
+        <div class="task-list-actions" role="cell">
+          <button class="btn btn-tiny {% if not t.completed %}btn-primary{% endif %}"
+            hx-post="{{ row_endpoint }}/{{ t.uuid }}/complete"
+            hx-swap="none">{{ 'Undo' if t.completed else 'Done' }}</button>
+
+          <details class="action-menu" data-action-menu>
+            <summary class="btn btn-tiny btn-ghost" aria-label="More actions for {{ t.task }}" title="More actions">•••</summary>
+            <div class="action-menu-popover">
+              <button type="button" class="action-menu-item"
+                hx-get="{{ row_endpoint }}/{{ t.uuid }}/edit"
+                hx-target="#modal-body" onclick="openModal()">Edit</button>
+              {% if not t.completed %}
+                <div class="action-menu-label">Snooze</div>
+                <div class="action-menu-grid">
+                  {% for days, label in [(1,'1d'),(3,'3d'),(7,'1w'),(14,'2w')] %}
+                    <button class="action-menu-chip"
+                      hx-post="{{ row_endpoint }}/{{ t.uuid }}/snooze"
+                      hx-vals='{"days":"{{ days }}"}' hx-swap="none"
+                      hx-on::after-request="if(event.detail.successful) window.location.reload()">{{ label }}</button>
+                  {% endfor %}
+                </div>
+              {% else %}
+                <button class="action-menu-item"
+                  hx-post="{{ row_endpoint }}/{{ t.uuid }}/archive"
+                  hx-swap="none" hx-confirm="Move this task to Archive?">Archive</button>
+              {% endif %}
+              <div class="action-menu-separator"></div>
+              <button class="action-menu-item is-danger"
+                hx-post="{{ row_endpoint }}/{{ t.uuid }}/delete"
+                hx-target="closest .task-list-row" hx-swap="delete"
+                hx-confirm="Delete this task?">Delete</button>
+            </div>
+          </details>
+        </div>
+      </article>
+    {% else %}
+      <p class="empty">No tasks yet.</p>
+    {% endfor %}
+  </div>
+</section>

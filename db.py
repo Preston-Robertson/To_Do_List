@@ -1931,6 +1931,24 @@ def find_discipline_by_name(query: str) -> dict[str, Any] | None:
     return exact[0] if len(exact) == 1 else None
 
 
+def search_disciplines(query: str, limit: int = 6) -> list[dict[str, Any]]:
+    """Bounded active-discipline search for global navigation."""
+    pattern = f"%{(query or '').strip().lower()}%"
+    if pattern == "%%":
+        return []
+    with get_engine().connect() as conn:
+        return _rows(conn.execute(
+            text("""
+                SELECT uuid, task, catagory, frequency_per_week, current_streak
+                FROM discipline_list
+                WHERE active = 1 AND LOWER(task) LIKE :pattern
+                ORDER BY task ASC
+                LIMIT :limit
+            """),
+            {"pattern": pattern, "limit": max(1, min(int(limit), 20))},
+        ))
+
+
 def suggest_task_defaults(name: str, limit: int = 25) -> dict[str, Any]:
     """Look at past tasks with similar names and suggest field values a user
     would most likely want when creating a new task of that kind.

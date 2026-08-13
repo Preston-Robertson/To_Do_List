@@ -2,9 +2,52 @@
 {% block content %}
 <div class="kanban-page" data-tasks-scope="{{ endpoint_root }}">
   <section class="board-header board-header-tasks">
-    <h1>{{ page_title }}</h1>
+    <div class="page-heading">
+      <h1>{{ page_title }}</h1>
+      <span class="muted-hint">One-off and recurring work in one place</span>
+    </div>
+
+    <div class="board-header-actions">
+      <div class="view-switcher" role="group" aria-label="Task view">
+        <button type="button" class="view-switcher-btn active" data-task-view="board" aria-pressed="true">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="8" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="3" y="15" width="7" height="6" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/></svg>
+          Board
+        </button>
+        <button type="button" class="view-switcher-btn" data-task-view="list" aria-pressed="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r=".5"/><circle cx="3.5" cy="12" r=".5"/><circle cx="3.5" cy="18" r=".5"/></svg>
+          List
+        </button>
+      </div>
+      {% if active_nav == 'tasks' %}
+        <button
+          type="button"
+          class="btn btn-ghost"
+          title="Manage follow-up rules (auto-spawn a task when another is completed)"
+          hx-get="/follow-ups/panel"
+          hx-target="#modal-body"
+          onclick="openModal()"
+        >Follow-up rules</button>
+      {% endif %}
+      <button
+        class="btn btn-primary"
+        hx-get="{{ endpoint_root }}/new"
+        hx-target="#modal-body"
+        hx-trigger="click"
+        onclick="openModal()"
+      >+ Task</button>
+      {% if consolidated %}
+        <button
+          class="btn"
+          hx-get="/recurring/new"
+          hx-target="#modal-body"
+          hx-trigger="click"
+          onclick="openModal()"
+        >+ Recurring</button>
+      {% endif %}
+    </div>
 
     <form class="quick-add" hx-post="/tasks/quick" hx-swap="none">
+      <span class="toolbar-label">Quick add</span>
       <input type="text" name="task" required maxlength="240"
              placeholder="Quick add a task…" aria-label="Task name">
       <input type="date" name="due_date" aria-label="Due date" title="Due date">
@@ -79,38 +122,9 @@
 
       <span class="filter-summary" data-filter-summary aria-live="polite"></span>
     </div>
-
-    <div class="board-header-actions">
-      {% if active_nav == 'tasks' %}
-        <button
-          type="button"
-          class="btn btn-ghost"
-          title="Manage follow-up rules (auto-spawn a task when another is completed)"
-          hx-get="/follow-ups/panel"
-          hx-target="#modal-body"
-          onclick="openModal()"
-        >Follow-up rules</button>
-      {% endif %}
-      <button
-        class="btn btn-primary"
-        hx-get="{{ endpoint_root }}/new"
-        hx-target="#modal-body"
-        hx-trigger="click"
-        onclick="openModal()"
-      >+ Task</button>
-      {% if consolidated %}
-        <button
-          class="btn btn-primary"
-          hx-get="/recurring/new"
-          hx-target="#modal-body"
-          hx-trigger="click"
-          onclick="openModal()"
-        >+ Recurring</button>
-      {% endif %}
-    </div>
   </section>
 
-  <section class="kanban" id="kanban-board">
+  <section class="kanban" id="kanban-board" data-view-panel="board">
     {% for status in statuses %}
       <div class="kanban-column" data-status="{{ status }}">
         <header class="kanban-column-header">
@@ -129,5 +143,7 @@
       </div>
     {% endfor %}
   </section>
+
+  {% include "partials/task_list.html" %}
 </div>
 {% endblock %}

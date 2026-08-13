@@ -1,0 +1,118 @@
+{% if not query %}
+  <div class="command-section">
+    <div class="command-section-label">Create</div>
+    <button type="button" class="command-option" data-command-option
+      hx-get="/tasks/new" hx-target="#modal-body"
+      onclick="closeCommandPalette(); openModal()">
+      <span class="command-option-icon">＋</span>
+      <span><strong>New task</strong><small>Create a one-off task</small></span>
+    </button>
+    <button type="button" class="command-option" data-command-option
+      hx-get="/recurring/new" hx-target="#modal-body"
+      onclick="closeCommandPalette(); openModal()">
+      <span class="command-option-icon">↻</span>
+      <span><strong>New recurring task</strong><small>Add a scheduled task</small></span>
+    </button>
+    <button type="button" class="command-option" data-command-option
+      hx-get="/gnw/games/new" hx-target="#modal-body"
+      onclick="closeCommandPalette(); openModal()">
+      <span class="command-option-icon">G</span>
+      <span><strong>Add game</strong><small>Search Steam or add manually</small></span>
+    </button>
+    <button type="button" class="command-option" data-command-option
+      hx-get="/gnw/shows/new" hx-target="#modal-body"
+      onclick="closeCommandPalette(); openModal()">
+      <span class="command-option-icon">S</span>
+      <span><strong>Add show</strong><small>Search TV, anime, or playlists</small></span>
+    </button>
+  </div>
+
+  <div class="command-section">
+    <div class="command-section-label">Go to</div>
+    {% for href, label, detail in [
+      ('/home','Home','Today and dashboard'),
+      ('/tasks','Tasks','Board and compact list'),
+      ('/calendar','Calendar','Due-date month view'),
+      ('/projects','Projects','Project timeline'),
+      ('/discipline','Discipline','Habits and heatmaps'),
+      ('/games','Games','Game backlog'),
+      ('/shows','Shows','Show backlog'),
+      ('/admin','Admin','Settings and health')
+    ] %}
+      <a href="{{ href }}" class="command-option" data-command-option>
+        <span class="command-option-icon">→</span>
+        <span><strong>{{ label }}</strong><small>{{ detail }}</small></span>
+      </a>
+    {% endfor %}
+  </div>
+{% else %}
+  {% if search_error %}<p class="command-error">{{ search_error }}</p>{% endif %}
+
+  {% if tasks %}
+    <div class="command-section">
+      <div class="command-section-label">Tasks</div>
+      {% for item in tasks %}
+        {% set endpoint = '/recurring' if item.source == 'recurring' else '/tasks' %}
+        <button type="button" class="command-option" data-command-option
+          hx-get="{{ endpoint }}/{{ item.uuid }}/edit" hx-target="#modal-body"
+          onclick="closeCommandPalette(); openModal()">
+          <span class="command-option-icon">{{ '↻' if item.source == 'recurring' else '✓' }}</span>
+          <span><strong>{{ item.task }}</strong><small>{{ item.status }}{% if item.due_date %} · due {{ item.due_date[:10] }}{% endif %}</small></span>
+          {% if item.catagory %}<span class="command-option-meta">{{ item.catagory }}</span>{% endif %}
+        </button>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  {% if disciplines %}
+    <div class="command-section">
+      <div class="command-section-label">Discipline</div>
+      {% for item in disciplines %}
+        <button type="button" class="command-option" data-command-option
+          hx-get="/discipline/{{ item.uuid }}/edit" hx-target="#modal-body"
+          onclick="closeCommandPalette(); openModal()">
+          <span class="command-option-icon">◇</span>
+          <span><strong>{{ item.task }}</strong><small>{{ item.frequency_per_week }}/week{% if item.current_streak %} · {{ item.current_streak }} day streak{% endif %}</small></span>
+          {% if item.catagory %}<span class="command-option-meta">{{ item.catagory }}</span>{% endif %}
+        </button>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  {% if games %}
+    <div class="command-section">
+      <div class="command-section-label">Games</div>
+      {% for item in games %}
+        <button type="button" class="command-option" data-command-option
+          hx-get="/gnw/games/edit?profile={{ item.profile|urlencode }}&title={{ item.title|urlencode }}"
+          hx-target="#modal-body" onclick="closeCommandPalette(); openModal()">
+          <span class="command-option-icon">G</span>
+          <span><strong>{{ item.title }}</strong><small>{{ item.profile }} · {{ item.status }}</small></span>
+          {% if item.rating is not none %}<span class="command-option-meta">★ {{ item.rating }}/10</span>{% endif %}
+        </button>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  {% if shows %}
+    <div class="command-section">
+      <div class="command-section-label">Shows</div>
+      {% for item in shows %}
+        <button type="button" class="command-option" data-command-option
+          hx-get="/gnw/shows/edit?profile={{ item.profile|urlencode }}&title={{ item.title|urlencode }}"
+          hx-target="#modal-body" onclick="closeCommandPalette(); openModal()">
+          <span class="command-option-icon">S</span>
+          <span><strong>{{ item.title }}</strong><small>{{ item.profile }} · {{ item.status }}</small></span>
+          {% if item.rating is not none %}<span class="command-option-meta">★ {{ item.rating }}/10</span>{% endif %}
+        </button>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  {% if not tasks and not disciplines and not games and not shows %}
+    <div class="command-empty">
+      <strong>No matches for “{{ query }}”</strong>
+      <span>Try a task, discipline, game, or show title.</span>
+    </div>
+  {% endif %}
+{% endif %}
