@@ -358,7 +358,12 @@ def handle_mark_discipline_done(args: dict[str, Any]) -> dict[str, Any]:
             f"no unique active discipline matches {name!r} — "
             "call list_disciplines_pending to see exact names."
         )
-    db.mark_completion(task=row["task"], catagory=row["catagory"], day=day)
+    marked = db.mark_completion(task=row["task"], catagory=row["catagory"], day=day)
+    if not marked:
+        raise ValueError(
+            f"failed to record {row['task']!r} for {day} — the database accepted "
+            "the write but the completion isn't there."
+        )
     return {"task": row["task"], "day": day, "marked": True}
 
 

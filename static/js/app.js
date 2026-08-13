@@ -156,6 +156,68 @@
     restoreUndoToast();
   }
 
+  // ------------------- Error toast -------------------
+  // A single shared error toast for failed mutations. Driven by:
+  //   - the `flashError` HX-Trigger event (server-sent, e.g. a discipline
+  //     completion that didn't save),
+  //   - htmx `responseError` / `sendError` events (non-2xx or network drop),
+  //   - direct calls to window.showError(msg) from our own fetch() handlers.
+  let errorToastTimer = null;
+  window.showError = function (message) {
+    const toast = document.getElementById("error-toast");
+    if (!toast) {
+      // Last-resort fallback so a failure is never fully silent.
+      window.alert(message || "Something went wrong.");
+      return;
+    }
+    const label = toast.querySelector(".error-toast-label");
+    if (label) label.textContent = message || "Something went wrong. Please try again.";
+    toast.classList.remove("hidden");
+    if (errorToastTimer) clearTimeout(errorToastTimer);
+    // Errors linger longer than the undo toast so they can be read.
+    errorToastTimer = setTimeout(hideErrorToast, 9000);
+  };
+  function hideErrorToast() {
+    const toast = document.getElementById("error-toast");
+    if (toast) toast.classList.add("hidden");
+    if (errorToastTimer) { clearTimeout(errorToastTimer); errorToastTimer = null; }
+  }
+
+  document.addEventListener("click", (e) => {
+    if (e.target.closest("[data-error-dismiss]")) hideErrorToast();
+  });
+
+  // Server-sent explicit error (HX-Trigger: flashError { message }).
+  document.body.addEventListener("flashError", (e) => {
+    const d = e.detail || {};
+    window.showError(d.message || "The server reported an error.");
+  });
+
+  // Any HTMX request that comes back non-2xx. Prefer the server's plain-text
+  // body (our /discipline/toggle sends a human message), else a generic note.
+  document.body.addEventListener("htmx:responseError", (e) => {
+    const xhr = (e.detail && e.detail.xhr) || null;
+    let msg = "";
+    if (xhr) {
+      // Skip HTML error pages; only surface short plain-text bodies.
+      const ct = xhr.getResponseHeader("Content-Type") || "";
+      if (ct.indexOf("text/plain") !== -1 && xhr.responseText) {
+        msg = xhr.responseText.trim();
+      }
+    }
+    // If the response already fired a flashError trigger, that handler covers
+    // it — avoid a duplicate generic toast.
+    const hasTrigger = xhr && (xhr.getResponseHeader("HX-Trigger") || "").indexOf("flashError") !== -1;
+    if (!hasTrigger) {
+      window.showError(msg || `Request failed (${xhr ? xhr.status : "network"}). Nothing was saved.`);
+    }
+  });
+
+  // Network-level failure (server unreachable, connection dropped).
+  document.body.addEventListener("htmx:sendError", () => {
+    window.showError("Couldn't reach the server — check the connection. Nothing was saved.");
+  });
+
   // ------------------- At-risk discipline banner -------------------
   // Dismiss for the day: signature = "YYYY-MM-DD:<count>" so a new day OR a
   // changed count re-shows the banner even if the user dismissed yesterday's.
@@ -196,13 +258,32 @@
       fd.set("day", done.dataset.day || "");
       if (done.dataset.catagory) fd.set("catagory", done.dataset.catagory);
       fd.set("action", "mark");
+      const originalText = done.textContent;
       done.disabled = true;
       done.textContent = "…";
       fetch("/discipline/toggle", {
         method: "POST",
         body: fd,
         credentials: "same-origin",
-      }).then(() => window.location.reload());
+      })
+        .then(async (resp) => {
+          if (resp.ok) {
+            window.location.reload();
+            return;
+          }
+          // Surface the server's reason (plain text) instead of a silent
+          // reload that would make it look saved when it wasn't.
+          let msg = "";
+          try { msg = (await resp.text()).trim(); } catch {}
+          window.showError(msg || `Couldn't save (${resp.status}). Try again.`);
+          done.disabled = false;
+          done.textContent = originalText;
+        })
+        .catch(() => {
+          window.showError("Couldn't reach the server — nothing was saved.");
+          done.disabled = false;
+          done.textContent = originalText;
+        });
     }
   });
 

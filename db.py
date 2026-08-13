@@ -898,8 +898,21 @@ def list_completions_for_year(year: int) -> dict[str, set[str]]:
     return result
 
 
-def mark_completion(task: str, catagory: str | None, day: str) -> None:
-    """Record (task, day) as done. Idempotent.
+def completion_exists(task: str, day: str) -> bool:
+    """True if ``(task, day)`` is recorded in ``discipline_completions``."""
+    with get_engine().begin() as conn:
+        return conn.execute(
+            text(
+                "SELECT 1 FROM discipline_completions "
+                "WHERE task = :t AND completed_date = :d"
+            ),
+            {"t": task, "d": day},
+        ).first() is not None
+
+
+def mark_completion(task: str, catagory: str | None, day: str) -> bool:
+    """Record (task, day) as done. Idempotent. Returns True once the row is
+    confirmed present (whether we just inserted it or it already existed).
 
     Uses an existence-guarded INSERT rather than ``ON CONFLICT`` on purpose:
     ``discipline_completions`` is owned by LuigiBot, and the web app can't
@@ -907,7 +920,8 @@ def mark_completion(task: str, catagory: str | None, day: str) -> None:
     If it doesn't, an ``ON CONFLICT (task, completed_date)`` clause raises
     "no unique or exclusion constraint matching…" and the mark is silently
     lost. ``WHERE NOT EXISTS`` gives the same idempotency with no schema
-    assumption.
+    assumption. We re-read inside the same transaction so a write that never
+    landed is reported to the caller instead of being silently swallowed.
     """
     q = text("""
         INSERT INTO discipline_completions (task, catagory, completed_date, logged_at)
@@ -919,12 +933,28 @@ def mark_completion(task: str, catagory: str | None, day: str) -> None:
     """)
     with get_engine().begin() as conn:
         conn.execute(q, {"t": task, "c": catagory, "d": day, "ts": now_iso()})
+        return conn.execute(
+            text(
+                "SELECT 1 FROM discipline_completions "
+                "WHERE task = :t AND completed_date = :d"
+            ),
+            {"t": task, "d": day},
+        ).first() is not None
 
 
-def unmark_completion(task: str, day: str) -> None:
+def unmark_completion(task: str, day: str) -> bool:
+    """Remove a (task, day) completion. Returns True once the row is confirmed
+    gone (verified in the same transaction so a no-op delete is detectable)."""
     q = text("DELETE FROM discipline_completions WHERE task = :t AND completed_date = :d")
     with get_engine().begin() as conn:
         conn.execute(q, {"t": task, "d": day})
+        return conn.execute(
+            text(
+                "SELECT 1 FROM discipline_completions "
+                "WHERE task = :t AND completed_date = :d"
+            ),
+            {"t": task, "d": day},
+        ).first() is None
 
 
 def compute_streak(dates: Iterable[str]) -> int:

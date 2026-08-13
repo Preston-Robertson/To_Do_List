@@ -1660,6 +1660,43 @@ main { padding: 20px; }
   to   { width: 0%; }
 }
 
+/* Error toast: shown on failed HTMX/fetch mutations (e.g. a discipline
+   completion that didn't save). Red variant of the undo toast. */
+.error-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 210;
+  min-width: 280px;
+  max-width: min(560px, calc(100vw - 32px));
+  padding: 11px 12px;
+  background: var(--bg-elev-2);
+  color: var(--text);
+  border: 1px solid #7f1d1d;
+  border-left: 4px solid #ef4444;
+  border-radius: var(--radius-md);
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.55);
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: start;
+  gap: 10px;
+  font: 500 13px var(--font);
+  animation: undo-slide-in 180ms ease-out;
+}
+.error-toast.hidden { display: none; }
+.error-toast-label { line-height: 1.35; word-break: break-word; }
+.error-toast-close {
+  background: transparent;
+  border: 0;
+  color: var(--text-dim);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.error-toast-close:hover { color: var(--text); }
+
 /* --------------------------------------------------------------------------
    Weekly review widget (home)
    -------------------------------------------------------------------------- */

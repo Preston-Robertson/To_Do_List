@@ -661,8 +661,21 @@ def _gnw_board(request: Request, section: str, page_title: str):
     if not reason:
         profile = (request.query_params.get("profile") or "").strip()
         ctx["profile"] = profile
-        ctx["profiles"] = gnw.list_profiles()
-        ctx["columns"] = _gnw_columns(section, profile)
+        try:
+            # These hit Google over the network. Static checks in
+            # disabled_reason() can't catch a wrong Sheet ID, a sheet that
+            # isn't shared with the service account, the Sheets API being
+            # disabled, a revoked key, or a transient network error — surface
+            # any of those as a friendly notice instead of a raw 500.
+            ctx["profiles"] = gnw.list_profiles()
+            ctx["columns"] = _gnw_columns(section, profile)
+        except Exception as exc:  # noqa: BLE001
+            ctx["disabled_reason"] = (
+                f"Couldn't reach the Google Sheet ({type(exc).__name__}: {exc}). "
+                "Check that LUIGI_WEB_GNW_SHEET_ID is correct, the sheet is "
+                "shared with the service-account email, and the Google Sheets "
+                "API is enabled for that project."
+            )
     return templates.TemplateResponse("media_board.html", ctx)
 
 
@@ -950,7 +963,15 @@ def discipline_delete(row_uuid: str):
 
 @app.post("/discipline/toggle", dependencies=[Depends(require_auth)])
 async def discipline_toggle(request: Request):
-    """Mark or unmark a single (task, day) — HTMX target is the cell itself."""
+    """Mark or unmark a single (task, day) — HTMX target is the cell itself.
+
+    Every write is verified against the DB (see ``db.mark_completion`` /
+    ``db.unmark_completion``, which re-read inside the same transaction) so a
+    save that never landed is reported instead of silently swallowed. Any
+    failure returns HTTP 422 with a plain-text reason and an ``HX-Trigger:
+    flashError`` header — HTMX won't swap the cell (so it can't lie about being
+    saved) and the frontend shows a toast with the reason.
+    """
     _require_v2()
     form = dict(await request.form())
     task = form.get("task", "")
@@ -960,28 +981,36 @@ async def discipline_toggle(request: Request):
     if not task or not day:
         raise HTTPException(400, "task and day required")
 
-    if action == "mark":
-        db.mark_completion(task, catagory, day)
-        marked = True
-    elif action == "unmark":
-        db.unmark_completion(task, day)
-        marked = False
-    else:
-        # Default: probe current state and flip. We do a mark first, then delete
-        # if it was already present — but ON CONFLICT DO NOTHING makes mark safe,
-        # so a cleaner probe is to query completions for the day.
-        with db.get_engine().begin() as conn:
-            from sqlalchemy import text as _t
-            existing = conn.execute(
-                _t("SELECT 1 FROM discipline_completions WHERE task=:t AND completed_date=:d"),
-                {"t": task, "d": day},
-            ).first()
-        if existing:
-            db.unmark_completion(task, day)
-            marked = False
+    try:
+        if action == "mark":
+            want_marked = True
+            ok = db.mark_completion(task, catagory, day)
+        elif action == "unmark":
+            want_marked = False
+            ok = db.unmark_completion(task, day)
         else:
-            db.mark_completion(task, catagory, day)
-            marked = True
+            # Default: read current state and flip it.
+            if db.completion_exists(task, day):
+                want_marked = False
+                ok = db.unmark_completion(task, day)
+            else:
+                want_marked = True
+                ok = db.mark_completion(task, catagory, day)
+    except Exception as exc:  # noqa: BLE001
+        verb = "unmark" if action == "unmark" else "save"
+        return _discipline_toggle_error(
+            f"Couldn't {verb} “{task}” for {day}: {type(exc).__name__}: {exc}"
+        )
+
+    if not ok:
+        # The transaction committed but the row isn't in the state we asked for
+        # — surface it rather than showing a cell that claims it saved.
+        did = "record" if want_marked else "clear"
+        return _discipline_toggle_error(
+            f"“{task}” for {day} didn't {did} — the database accepted the write "
+            "but the change isn't there. Try again; if it persists, check the "
+            "discipline_completions table."
+        )
 
     return templates.TemplateResponse(
         "partials/discipline_cell.html",
@@ -990,9 +1019,21 @@ async def discipline_toggle(request: Request):
             "task": task,
             "catagory": catagory,
             "day": day,
-            "marked": marked,
+            "marked": want_marked,
             "today_iso": date.today().isoformat(),
         },
+    )
+
+
+def _discipline_toggle_error(message: str) -> Response:
+    """A non-swapping error response for the discipline toggle. 422 keeps HTMX
+    from applying the swap (so the cell/row stays truthful), and the
+    ``flashError`` trigger drives the frontend error toast."""
+    return Response(
+        content=message,
+        status_code=422,
+        media_type="text/plain; charset=utf-8",
+        headers={"HX-Trigger": _hx_trigger(flashError={"message": message})},
     )
 
 
