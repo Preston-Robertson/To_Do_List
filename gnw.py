@@ -1,7 +1,7 @@
 """Game'N'Watch integration for luigi-web.
 
-Reads and writes the same Google Sheet the Game'N'Watch Discord bot uses
-(https://github.com/Preston-Robertson/Game-N-Watch) so the web GUI can surface
+Reads and writes the same Google Sheet the Game'N'Watch Discord bot uses, so
+the web GUI can surface
 your games/shows backlog alongside tasks.
 
 Design:

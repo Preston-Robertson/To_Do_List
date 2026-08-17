@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="board-header finance-header">
+  <div class="page-heading">
+    <h1>Finance</h1>
+    <span class="muted-hint">Private planning with aliases only · {{ state.currency }}</span>
+  </div>
+  <form method="get" action="/finance" class="finance-month-form">
+    <input type="month" name="month" value="{{ state.month }}" aria-label="Report month" onchange="this.form.submit()">
+  </form>
+  <div class="board-header-actions">
+    <button class="btn btn-icon finance-notification-button" title="Finance notifications" aria-label="Finance notifications" hx-get="/finance/notifications" hx-target="#modal-body" onclick="openModal()">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>
+      {% if state.alerts %}<span>{{ state.alerts|length }}</span>{% endif %}
+    </button>
+    <button class="btn btn-primary" hx-get="/finance/transactions/new" hx-target="#modal-body" onclick="openModal()">+ Transaction</button>
+    <button class="btn" hx-get="/finance/accounts/new" hx-target="#modal-body" onclick="openModal()">+ Account</button>
+    <details class="action-menu" data-action-menu>
+      <summary class="btn btn-ghost">More</summary>
+      <div class="action-menu-popover">
+        <button class="action-menu-item" hx-get="/finance/budgets/new?month={{ state.month }}" hx-target="#modal-body" onclick="openModal()">Add budget</button>
+        <button class="action-menu-item" hx-get="/finance/holdings/new" hx-target="#modal-body" onclick="openModal()">Add holding</button>
+        <button class="action-menu-item" hx-get="/finance/recurring/new" hx-target="#modal-body" onclick="openModal()">Add recurring item</button>
+        <button class="action-menu-item" hx-get="/finance/import" hx-target="#modal-body" onclick="openModal()">Import CSV</button>
+        <button class="action-menu-item" hx-get="/finance/restore" hx-target="#modal-body" onclick="openModal()">Restore backup</button>
+        <a class="action-menu-item" href="/finance/export.csv?month={{ state.month }}" download>Export month CSV</a>
+        <a class="action-menu-item" href="/finance/backup" download>Download Finance backup</a>
+        <div class="action-menu-separator"></div>
+        <form hx-post="/finance/lock" hx-swap="none"><button class="action-menu-item is-danger" type="submit">Lock Finance</button></form>
+      </div>
+    </details>
+  </div>
+</section>
+
+<div class="finance-privacy-bar">
+  <strong>Privacy boundary:</strong> use aliases only. Do not enter names, account/card/routing numbers, addresses, emails, or phone numbers.
+</div>
+
+{% if state.alerts %}
+<section class="finance-alerts" aria-label="Finance alerts">
+  {% for alert in state.alerts %}
+    <div class="finance-alert is-{{ alert.level }}"><strong>{{ alert.title }}</strong><span>{{ alert.detail }}</span></div>
+  {% endfor %}
+</section>
+{% endif %}
+
+<section class="finance-metrics">
+  <article><span>Net worth</span><strong>{{ state.currency }} {{ state.net_worth }}</strong></article>
+  <article><span>Cash balance</span><strong>{{ state.currency }} {{ state.cash }}</strong></article>
+  <article class="is-positive"><span>Income · {{ state.month }}</span><strong>{{ state.currency }} {{ state.income }}</strong></article>
+  <article class="is-negative"><span>Spending · {{ state.month }}</span><strong>{{ state.currency }} {{ state.expense }}</strong></article>
+  <article><span>Investments</span><strong>{{ state.currency }} {{ state.holdings_value }}</strong></article>
+</section>
+
+<section class="finance-grid">
+  <article class="widget finance-accounts-panel">
+    <header class="widget-header"><h2>Accounts</h2><span class="widget-count">{{ state.accounts|length }}</span></header>
+    <div class="widget-body">
+      {% for account in state.accounts %}
+        <div class="finance-account-row">
+          <div><strong>{{ account.name }}</strong><span>{{ account.account_type|title }} · {{ account.currency }}{% if not account.active %} · Inactive{% endif %}</span></div>
+          <strong>{{ account.currency }} {{ account.balance }}</strong>
+          <button class="btn btn-tiny btn-ghost" hx-get="/finance/accounts/{{ account.id }}/edit" hx-target="#modal-body" onclick="openModal()">Edit</button>
+        </div>
+      {% else %}<p class="empty">Add an account alias to begin.</p>{% endfor %}
+    </div>
+  </article>
+
+  <article class="widget finance-budgets-panel">
+    <header class="widget-header"><h2>Budgets · {{ state.month }}</h2><span class="widget-count">{{ state.budgets|length }}</span></header>
+    <div class="widget-body">
+      {% for budget in state.budgets %}
+        <div class="finance-budget-row">
+          <div class="finance-budget-line"><strong>{{ budget.category }}</strong><span>{{ state.currency }} {{ budget.spent }} / {{ budget.limit }}</span></div>
+          <div class="finance-budget-track"><span style="width:{{ [budget.percent, 100]|min }}%" class="{% if budget.percent >= 100 %}is-over{% elif budget.percent >= 80 %}is-warning{% endif %}"></span></div>
+          <button class="finance-row-delete" hx-post="/finance/budgets/{{ budget.id }}/delete" hx-confirm="Delete this budget?" aria-label="Delete budget">×</button>
+        </div>
+      {% else %}<p class="empty">No budgets for this month.</p>{% endfor %}
+    </div>
+  </article>
+
+  <article class="widget widget-full finance-transactions-panel">
+    <header class="widget-header"><h2>Transactions · {{ state.month }}</h2><span class="widget-count">{{ state.transactions|length }}</span></header>
+    <div class="widget-body finance-table-wrap">
+      <table class="data-table finance-table">
+        <thead><tr><th>Date</th><th>Account</th><th>Category</th><th>Memo</th><th>Amount</th><th></th></tr></thead>
+        <tbody>
+          {% for item in state.transactions %}
+            <tr>
+              <td>{{ item.transaction_date }}</td><td>{{ item.account_name }}</td><td>{{ item.category }}</td><td>{{ item.memo or '—' }}</td>
+              <td class="finance-amount {% if item.amount_minor >= 0 %}is-positive{% else %}is-negative{% endif %}">{{ item.currency }} {{ item.amount }}</td>
+              <td><button class="btn btn-tiny btn-ghost" hx-post="/finance/transactions/{{ item.id }}/delete" hx-confirm="Delete this transaction?">Delete</button></td>
+            </tr>
+          {% else %}<tr><td colspan="6" class="empty">No transactions in this month.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+
+  <article class="widget finance-holdings-panel">
+    <header class="widget-header"><h2>Investments</h2><span class="widget-count">{{ state.holdings|length }}</span></header>
+    <div class="widget-body">
+      {% for holding in state.holdings %}
+        <div class="finance-holding-row">
+          <div><strong>{{ holding.symbol }}</strong><span>{{ holding.asset_name or holding.account_name }} · {{ holding.quantity }} units</span></div>
+          <div class="finance-holding-value"><strong>{{ holding.currency }} {{ holding.market_value }}</strong><span class="{% if holding.gain_minor >= 0 %}is-positive{% else %}is-negative{% endif %}">{{ holding.currency }} {{ holding.gain }}</span></div>
+          <button class="finance-row-delete" hx-post="/finance/holdings/{{ holding.id }}/delete" hx-confirm="Delete this holding?">×</button>
+        </div>
+      {% else %}<p class="empty">No investment holdings.</p>{% endfor %}
+    </div>
+  </article>
+
+  <article class="widget finance-recurring-panel">
+    <header class="widget-header"><h2>Recurring</h2><span class="widget-count">{{ state.recurring_items|length }}</span></header>
+    <div class="widget-body">
+      {% for item in state.recurring_items %}
+        <div class="finance-recurring-row"><div><strong>{{ item.name }}</strong><span>{{ item.cadence|title }} · next {{ item.next_due_date }}</span></div><strong>{{ item.currency }} {{ item.amount }}</strong><button class="finance-row-delete" hx-post="/finance/recurring/{{ item.id }}/delete" hx-confirm="Delete this recurring item?">×</button></div>
+      {% else %}<p class="empty">No recurring bills or contributions.</p>{% endfor %}
+    </div>
+  </article>
+
+  <article class="widget finance-reports-panel">
+    <header class="widget-header"><h2>Reports and snapshots</h2></header>
+    <div class="widget-body">
+      <form class="finance-inline-form" hx-post="/finance/reports" hx-swap="none">
+        <input name="name" placeholder="Report name" required maxlength="60"><select name="report_type"><option value="monthly">Monthly cash flow</option><option value="budgets">Budgets</option><option value="investments">Investments</option><option value="net_worth">Net worth</option></select><input type="hidden" name="month" value="{{ state.month }}"><button class="btn btn-tiny" type="submit">Save</button>
+      </form>
+      {% for report in reports %}<div class="finance-saved-report"><a href="/finance{% if report.parameters.month %}?month={{ report.parameters.month }}{% endif %}">{{ report.name }}</a><span>{{ report.report_type|replace('_',' ')|title }}</span><button class="finance-row-delete" hx-post="/finance/reports/{{ report.id }}/delete">×</button></div>{% else %}<p class="empty empty-sm">No saved reports.</p>{% endfor %}
+      <button class="btn btn-tiny" hx-post="/finance/snapshot" hx-swap="none">Save net worth snapshot</button>
+      {% if snapshots %}<div class="finance-snapshot-list">{% for snapshot in snapshots[:6] %}<span>{{ snapshot.snapshot_date }} · {{ state.currency }} {{ snapshot.total }}</span>{% endfor %}</div>{% endif %}
+    </div>
+  </article>
+
+  <article class="widget finance-audit-panel">
+    <header class="widget-header"><h2>Audit history</h2><span class="widget-count">{{ audit_events|length }}</span></header>
+    <div class="widget-body scroll-y">
+      {% for event in audit_events %}<div class="finance-audit-row"><span>{{ event.occurred_at }}</span><strong>{{ event.summary }}</strong><small>{{ event.action }} · {{ event.entity_type }}</small></div>{% else %}<p class="empty">No finance changes recorded.</p>{% endfor %}
+    </div>
+  </article>
+</section>
+{% endblock %}

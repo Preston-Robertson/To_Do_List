@@ -1,0 +1,15 @@
+<section class="finance-notifications">
+  <h2>Finance notifications</h2>
+  <p class="finance-form-privacy">Alert details stay inside the separately unlocked Finance session.</p>
+  <div class="finance-notification-list" aria-live="polite">
+    {% for alert in alerts %}
+      <div class="finance-alert is-{{ alert.level }}">
+        <strong>{{ alert.title }}</strong>
+        <span>{{ alert.detail }}</span>
+      </div>
+    {% else %}
+      <p class="empty">No budget, recurring item, or investment alerts.</p>
+    {% endfor %}
+  </div>
+  <div class="form-actions"><button type="button" class="btn btn-primary" data-close-modal>Done</button></div>
+</section>

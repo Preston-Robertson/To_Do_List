@@ -11,7 +11,7 @@
           {{ chat_provider }} · {{ chat_model }}
         </span>
       {% else %}
-        <span class="chat-badge chat-badge-warn" title="Set LUIGI_WEB_LLM_API_KEY to enable">
+        <span class="chat-badge chat-badge-warn" title="{{ chat_disabled_reason }}">
           not configured
         </span>
       {% endif %}
@@ -43,6 +43,11 @@
   </header>
 
   <div class="chat-body">
+    {% if not chat_enabled and chat_disabled_reason %}
+      <div class="chat-config-notice">
+        {{ chat_disabled_reason }} <a href="/admin">Open Admin settings</a>.
+      </div>
+    {% endif %}
     <div id="chat-log" class="chat-log" aria-live="polite">
       {# Messages are appended here by HTMX after each /chat POST. #}
     </div>
@@ -55,7 +60,7 @@
           hx-on::after-request="this.reset(); this.querySelector('textarea').focus(); document.getElementById('chat-log').scrollTop = document.getElementById('chat-log').scrollHeight;"
           {% if not chat_enabled %}onsubmit="return false;"{% endif %}>
       <textarea name="message" rows="1" required
-                placeholder="{% if chat_enabled %}Add a task, mark a discipline done, ask what's overdue…{% else %}Set LUIGI_WEB_LLM_API_KEY to enable the assistant{% endif %}"
+                placeholder="{% if chat_enabled %}Add a task, mark a discipline done, ask what's overdue…{% else %}Configure the Assistant in Admin{% endif %}"
                 {% if not chat_enabled %}disabled{% endif %}
                 onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();this.form.requestSubmit();}"></textarea>
       <div class="chat-composer-actions">

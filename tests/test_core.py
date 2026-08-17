@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import unittest
 from datetime import date
+from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 
 from starlette.requests import Request
@@ -158,6 +160,33 @@ class RecurringFormTests(unittest.TestCase):
 
 
 class DisciplineWorkflowTests(unittest.TestCase):
+    def test_mark_requires_post_commit_visibility(self) -> None:
+        class Result:
+            def first(self):
+                return (1,)
+
+        class Connection:
+            def execute(self, statement, params=None):
+                return Result()
+
+        class Transaction:
+            def __enter__(self):
+                return Connection()
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+        class Engine:
+            def begin(self):
+                return Transaction()
+
+        with (
+            patch.object(db, "get_engine", return_value=Engine()),
+            patch.object(db, "_try_refresh_discipline_streak"),
+            patch.object(db, "completion_exists", return_value=False),
+        ):
+            self.assertFalse(db.mark_completion("Gym", "Health", "2026-08-13"))
+
     def test_done_today_marks_canonical_task_by_uuid(self) -> None:
         import asyncio
 
@@ -173,14 +202,18 @@ class DisciplineWorkflowTests(unittest.TestCase):
             patch.object(app, "_require_v2"),
             patch.object(db, "get_discipline", return_value=discipline),
             patch.object(db, "mark_completion", return_value=True) as mark,
+            patch.object(db, "completion_exists", return_value=True),
+            patch.object(db, "computed_discipline_streak", return_value=5),
         ):
             response = asyncio.run(app.discipline_today("disc-1", FormRequest()))
         mark.assert_called_once_with(
             "MacroFactor Logging", "Health", date.today().isoformat()
         )
-        self.assertEqual(response.status_code, 204)
-        self.assertEqual(response.headers.get("hx-refresh"), "true")
-        self.assertIn("flashSuccess", response.headers.get("hx-trigger", ""))
+        self.assertEqual(response.status_code, 200)
+        payload = json.loads(response.body)
+        self.assertTrue(payload["marked"])
+        self.assertEqual(payload["streak"], 5)
+        self.assertEqual(payload["discipline_uuid"], "disc-1")
 
     def test_discipline_frequency_is_one_to_seven(self) -> None:
         self.assertEqual(db._discipline_frequency("7"), 7)
@@ -223,7 +256,7 @@ class GameAndWatchTests(unittest.TestCase):
             patch.object(gnw, "_invalidate"),
         ):
             ok, title = gnw.add_catalog_item(
-                "games", "Preston",
+                "games", "Example Profile",
                 {"title": "Portal", "source": "steam", "external_id": "400", "cover_url": "cover"},
                 status="backlog", priority=4,
             )
@@ -231,7 +264,7 @@ class GameAndWatchTests(unittest.TestCase):
         self.assertEqual(title, "Portal")
         written, cell_range = worksheet.update.call_args.args
         self.assertEqual(cell_range, "A2:G2")
-        self.assertEqual(written[0][headers.index("Profile")], "Preston")
+        self.assertEqual(written[0][headers.index("Profile")], "Example Profile")
         self.assertEqual(written[0][headers.index("Title")], "Portal")
 
     def test_game_card_exposes_inline_rating(self) -> None:
@@ -241,7 +274,7 @@ class GameAndWatchTests(unittest.TestCase):
             statuses=gnw.GAME_STATUSES,
             status_labels=gnw.STATUS_LABELS,
             item={
-                "title": "Portal", "profile": "Preston", "priority": 4,
+                "title": "Portal", "profile": "Example Profile", "priority": 4,
                 "rating": 9, "cover_url": "", "link": None, "platform": "Steam",
                 "is_multiplayer": False, "price": "", "tags": [], "status": "completed",
                 "source": "steam", "external_id": "400",
@@ -262,7 +295,7 @@ class GameAndWatchTests(unittest.TestCase):
             statuses=gnw.SHOW_STATUSES,
             status_labels=gnw.STATUS_LABELS,
             item={
-                "title": "The Expanse", "profile": "Preston", "priority": 4,
+                "title": "The Expanse", "profile": "Example Profile", "priority": 4,
                 "rating": 8, "cover_url": "", "link": None, "genre": "Sci-Fi",
                 "current_season": 3, "current_episode": 6, "total_episodes": 62,
                 "tags": [], "status": "watching", "source": "tvmaze",
@@ -282,10 +315,10 @@ class GameAndWatchTests(unittest.TestCase):
     def test_reordered_trimmed_headers_are_supported(self) -> None:
         headers = [" Title ", "Priority", " Profile ", "Status"]
         item = gnw._row_to_item(
-            "games", headers, ["Example", "5", "Preston", "playing"]
+            "games", headers, ["Example", "5", "Example Profile", "playing"]
         )
         self.assertEqual(item["title"], "Example")
-        self.assertEqual(item["profile"], "Preston")
+        self.assertEqual(item["profile"], "Example Profile")
         self.assertEqual(item["priority"], 5)
         self.assertEqual(item["status"], "playing")
 
@@ -343,6 +376,83 @@ class LlmTests(unittest.TestCase):
             )
         self.assertEqual(provider.calls, 2)
         self.assertIn("tool-call cap", result.reply)
+
+    def test_retired_github_models_endpoint_is_disabled_with_migration(self) -> None:
+        with patch.dict(os.environ, {
+            "LUIGI_WEB_LLM_PROVIDER": "openai",
+            "LUIGI_WEB_LLM_BASE_URL": "https://models.github.ai/inference",
+            "LUIGI_WEB_LLM_API_KEY": "github-token",
+        }, clear=True):
+            provider = llm.build_provider_from_env()
+        self.assertIsInstance(provider, llm.DisabledProvider)
+        self.assertIn("retired", provider.reason)
+        self.assertIn("copilot", provider.reason)
+
+    def test_copilot_sdk_exposes_only_custom_allow_list(self) -> None:
+        captured: dict[str, object] = {}
+
+        class FakeSession:
+            def __init__(self, options):
+                self.options = options
+
+            async def send_and_wait(self, prompt, timeout):
+                captured["prompt"] = prompt
+                invocation = SimpleNamespace(arguments={"limit": 2})
+                captured["tool_result"] = self.options["tools"][0].handler(invocation)
+                return SimpleNamespace(data=SimpleNamespace(content="Two tasks found."))
+
+            async def disconnect(self):
+                captured["disconnected"] = True
+
+        class FakeClient:
+            def __init__(self, **options):
+                captured["client"] = options
+
+            async def start(self):
+                captured["started"] = True
+
+            async def create_session(self, **options):
+                captured["session"] = options
+                return FakeSession(options)
+
+            async def stop(self):
+                captured["stopped"] = True
+
+        calls: list[dict[str, object]] = []
+        tool = llm.Tool(
+            name="list_open_tasks",
+            description="List open tasks",
+            parameters={"type": "object", "properties": {"limit": {"type": "integer"}}},
+            handler=lambda arguments: calls.append(arguments) or {"tasks": []},
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            provider = llm.CopilotSDKProvider(
+                github_token="github-token",
+                model="",
+                timeout=5,
+                base_directory=temp_dir,
+            )
+            with patch("copilot.CopilotClient", FakeClient):
+                result = llm.run_chat_with_tools(
+                    provider,
+                    [
+                        {"role": "system", "content": "Use task tools only."},
+                        {"role": "user", "content": "What is open?"},
+                    ],
+                    {tool.name: tool},
+                )
+
+        session = captured["session"]
+        self.assertEqual(captured["client"]["mode"], "empty")
+        self.assertEqual(session["available_tools"], ["custom:*"])
+        self.assertEqual(session["mcp_servers"], {})
+        self.assertFalse(session["enable_file_hooks"])
+        self.assertFalse(session["enable_host_git_operations"])
+        self.assertFalse(session["enable_skills"])
+        self.assertEqual(calls, [{"limit": 2}])
+        self.assertEqual(result.reply, "Two tasks found.")
+        self.assertEqual(result.tool_calls[0].name, "list_open_tasks")
+        self.assertTrue(result.tool_calls[0].ok)
 
 
 class GanttTests(unittest.TestCase):

@@ -12,6 +12,7 @@ Comparisons use ``secrets.compare_digest`` to avoid timing side-channels.
 from __future__ import annotations
 
 import os
+import hashlib
 import secrets
 from typing import Optional
 
@@ -19,6 +20,14 @@ from fastapi import Cookie, Header, HTTPException, Query, Request, status
 from fastapi.responses import RedirectResponse
 
 COOKIE_NAME = "luigi_session"
+FINANCE_COOKIE_NAME = "luigi_finance_session"
+CSRF_COOKIE_NAME = "luigi_csrf"
+
+
+def secure_cookies() -> bool:
+    return os.environ.get("LUIGI_WEB_SECURE_COOKIES", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
 
 
 def _expected_token() -> str:
@@ -32,6 +41,38 @@ def _token_matches(candidate: Optional[str]) -> bool:
     if not candidate:
         return False
     return secrets.compare_digest(candidate, _expected_token())
+
+
+def _expected_finance_token() -> str:
+    token = os.environ.get("LUIGI_WEB_FINANCE_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError("LUIGI_WEB_FINANCE_TOKEN is not set")
+    return token
+
+
+def _finance_session_value() -> str:
+    token = _expected_finance_token().encode("utf-8")
+    return hashlib.sha256(b"luigi-finance-session\0" + token).hexdigest()
+
+
+def finance_is_configured() -> bool:
+    return bool(os.environ.get("LUIGI_WEB_FINANCE_TOKEN", "").strip())
+
+
+def is_finance_authenticated(candidate: Optional[str]) -> bool:
+    if not candidate or not finance_is_configured():
+        return False
+    return secrets.compare_digest(candidate, _finance_session_value())
+
+
+def csrf_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def csrf_matches(cookie_value: Optional[str], header_value: Optional[str]) -> bool:
+    if not cookie_value or not header_value:
+        return False
+    return secrets.compare_digest(cookie_value, header_value)
 
 
 def is_authenticated(
@@ -78,8 +119,8 @@ def login_response(supplied_token: str) -> RedirectResponse:
         key=COOKIE_NAME,
         value=supplied_token,
         httponly=True,
-        samesite="lax",
-        # NOTE: not marking Secure — LAN-only, plain HTTP. Flip on if put behind TLS.
+        samesite="strict",
+        secure=secure_cookies(),
         max_age=60 * 60 * 24 * 30,
         path="/",
     )
@@ -89,4 +130,43 @@ def login_response(supplied_token: str) -> RedirectResponse:
 def logout_response() -> RedirectResponse:
     resp = RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
     resp.delete_cookie(COOKIE_NAME, path="/")
+    resp.delete_cookie(FINANCE_COOKIE_NAME, path="/")
     return resp
+
+
+def finance_unlock_response(supplied_token: str) -> RedirectResponse:
+    if not supplied_token or not secrets.compare_digest(
+        supplied_token, _expected_finance_token()
+    ):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="bad token")
+    response = RedirectResponse(url="/finance", status_code=status.HTTP_303_SEE_OTHER)
+    response.set_cookie(
+        key=FINANCE_COOKIE_NAME,
+        value=_finance_session_value(),
+        httponly=True,
+        samesite="strict",
+        secure=secure_cookies(),
+        max_age=60 * 60 * 8,
+        path="/",
+    )
+    return response
+
+
+def finance_lock_response() -> RedirectResponse:
+    response = RedirectResponse(url="/finance/unlock", status_code=status.HTTP_303_SEE_OTHER)
+    response.delete_cookie(FINANCE_COOKIE_NAME, path="/")
+    return response
+
+
+def require_finance_auth(
+    request: Request,
+    luigi_finance_session: Optional[str] = Cookie(default=None),
+):
+    if is_finance_authenticated(luigi_finance_session):
+        return True
+    if request.method == "GET" and "text/html" in request.headers.get("accept", ""):
+        raise HTTPException(
+            status_code=status.HTTP_303_SEE_OTHER,
+            headers={"Location": "/finance/unlock"},
+        )
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="finance is locked")

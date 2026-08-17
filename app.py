@@ -26,7 +26,17 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 import db
-from auth import login_response, logout_response, require_auth
+from auth import (
+    COOKIE_NAME,
+    CSRF_COOKIE_NAME,
+    csrf_matches,
+    csrf_token,
+    finance_is_configured,
+    login_response,
+    logout_response,
+    require_auth,
+    secure_cookies,
+)
 
 app = FastAPI(
     title="LuigiBot Web GUI",
@@ -36,6 +46,39 @@ app = FastAPI(
 )
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
+
+
+@app.middleware("http")
+async def csrf_middleware(request: Request, call_next):
+    """Double-submit CSRF protection for authenticated browser mutations."""
+    if (
+        request.method in {"POST", "PUT", "PATCH", "DELETE"}
+        and request.url.path not in {"/login", "/logout"}
+        and request.cookies.get(COOKIE_NAME)
+        and not request.headers.get("authorization", "").lower().startswith("bearer ")
+        and not csrf_matches(
+            request.cookies.get(CSRF_COOKIE_NAME),
+            request.headers.get("x-csrf-token"),
+        )
+    ):
+        return JSONResponse({"detail": "CSRF validation failed"}, status_code=403)
+
+    response = await call_next(request)
+    if request.url.path.startswith("/finance"):
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    if not request.cookies.get(CSRF_COOKIE_NAME):
+        response.set_cookie(
+            CSRF_COOKIE_NAME,
+            csrf_token(),
+            httponly=False,
+            samesite="strict",
+            secure=secure_cookies(),
+            max_age=60 * 60 * 24 * 30,
+            path="/",
+        )
+    return response
 
 # Repo root (used by the /admin update flow to run git/pip in the right place).
 REPO_DIR = Path(__file__).resolve().parent
@@ -50,7 +93,11 @@ _LLM_PROVIDER = llm_mod.build_provider_from_env()
 _LLM_TOOLS = chat_tools.build_registry()
 
 import env_file
+import finance
 import gnw
+from finance_routes import router as finance_router
+
+app.include_router(finance_router)
 
 
 def _asset_version() -> str:
@@ -140,6 +187,12 @@ def _startup_schema_check() -> None:
         _reactivate_recurring()
     except Exception as exc:  # pragma: no cover — surfaced via /healthz
         _STARTUP_SCHEMA["error"] = f"schema check failed: {exc}"
+    try:
+        finance.init_db()
+    except Exception:
+        # Finance is an isolated optional domain; its failure must not make
+        # LuigiBot task pages unavailable. Finance routes surface the error.
+        pass
 
 
 def _require_v2() -> None:
@@ -250,9 +303,10 @@ def login_submit(token: str = Form(...)):
 def _login_error_html() -> str:
     return (
         "<!doctype html><meta charset=utf-8><title>Login</title>"
+        "<link rel='icon' href='/static/icons/luigi-mark.svg' type='image/svg+xml'>"
         "<link rel='stylesheet' href='/static/css/app.css'>"
         "<main class='login-page'><form method='post' action='/login' class='login-form'>"
-        "<h1>LuigiBot Web GUI</h1>"
+        "<h1><img class='login-mark' src='/static/icons/luigi-mark.svg' alt=''> Luigi Web</h1>"
         "<p class='error'>Invalid token.</p>"
         "<label>Token <input type='password' name='token' autofocus required></label>"
         "<button type='submit'>Sign in</button></form></main>"
@@ -1320,13 +1374,20 @@ async def discipline_today(row_uuid: str, request: Request):
         return _discipline_toggle_error(
             f"“{task}” for {day} did not persist in the requested state."
         )
-    return Response(
-        status_code=204,
-        headers={
-            "HX-Trigger": _hx_trigger(flashSuccess={"message": message}),
-            "HX-Refresh": "true",
-        },
-    )
+    marked = db.completion_exists(task, day)
+    if marked != (action == "mark"):
+        return _discipline_toggle_error(
+            f"“{task}” for {day} changed during verification. Refresh and try again."
+        )
+    return JSONResponse({
+        "ok": True,
+        "discipline_uuid": row_uuid,
+        "task": task,
+        "day": day,
+        "marked": marked,
+        "streak": db.computed_discipline_streak(task),
+        "message": message,
+    })
 
 
 @app.post("/discipline/toggle", dependencies=[Depends(require_auth)])
@@ -1820,6 +1881,7 @@ def home_page(request: Request):
             "chat_enabled": not isinstance(_LLM_PROVIDER, llm_mod.DisabledProvider),
             "chat_provider": _LLM_PROVIDER.name,
             "chat_model": _LLM_PROVIDER.model,
+            "chat_disabled_reason": getattr(_LLM_PROVIDER, "reason", ""),
         },
     )
 
@@ -2038,7 +2100,7 @@ def admin_integrations(request: Request):
 
     def check_llm():
         if isinstance(_LLM_PROVIDER, llm_mod.DisabledProvider):
-            raise RuntimeError("not configured")
+            raise RuntimeError(_LLM_PROVIDER.reason)
         return f"{_LLM_PROVIDER.name} · {_LLM_PROVIDER.model}"
 
     def check_git():
@@ -2054,6 +2116,11 @@ def admin_integrations(request: Request):
             raise RuntimeError(reason)
         return f"writable: {path}"
 
+    def check_finance():
+        if not finance_is_configured():
+            raise RuntimeError("separate Finance token not configured")
+        return finance.storage_health()
+
     checks = [
         _integration_result("PostgreSQL", check_db),
         _integration_result("Discipline storage", check_discipline),
@@ -2065,6 +2132,7 @@ def admin_integrations(request: Request):
         _integration_result("LLM", check_llm),
         _integration_result("Git checkout", check_git),
         _integration_result("Environment file", check_env),
+        _integration_result("Finance storage", check_finance),
     ]
     return templates.TemplateResponse(
         "partials/admin_integrations.html",
@@ -2176,6 +2244,7 @@ _HOT_RELOADABLE = {
     "LUIGI_WEB_LLM_MODEL",
     "LUIGI_WEB_LLM_TIMEOUT",
     "LUIGI_WEB_LLM_MAX_TOOL_ITERATIONS",
+    "LUIGI_WEB_COPILOT_HOME",
     "LUIGI_WEB_STEAM_API_KEY",
     "LUIGI_WEB_STEAM_ID",
     "LUIGI_WEB_YOUTUBE_API_KEY",
@@ -2193,7 +2262,7 @@ def _hot_reload_env(changed: list[str], updates: dict[str, str]) -> tuple[list[s
         if key in _HOT_RELOADABLE:
             os.environ[key] = updates[key]
             hot.append(key)
-            if key.startswith("LUIGI_WEB_LLM_"):
+            if key.startswith("LUIGI_WEB_LLM_") or key == "LUIGI_WEB_COPILOT_HOME":
                 llm_touched = True
         else:
             cold.append(key)

@@ -1,0 +1,18 @@
+<article id="finance-unlock-panel" class="finance-unlock-panel">
+  <div class="finance-lock-icon" aria-hidden="true">
+    <svg viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+  </div>
+  <h1>Unlock Finance</h1>
+  <p>Finance uses a separate session and app-owned database. It is never sent to the assistant or included in global search.</p>
+  {% if not configured %}
+    <div class="finance-privacy-warning">Set <code>LUIGI_WEB_FINANCE_TOKEN</code> in Admin before using Finance.</div>
+  {% endif %}
+  {% if error %}<div class="admin-banner-err">{{ error }}</div>{% endif %}
+  <form hx-post="/finance/unlock" hx-target="#finance-unlock-panel" hx-swap="outerHTML" class="finance-unlock-form">
+    <label>Finance token
+      <input type="password" name="token" required autocomplete="current-password" {% if not configured %}disabled{% endif %}>
+    </label>
+    <button class="btn btn-primary" type="submit" {% if not configured %}disabled{% endif %}>Unlock Finance</button>
+  </form>
+  <p class="muted-hint">Use a token different from the main application token. Serve over HTTPS before adding real data.</p>
+</article>

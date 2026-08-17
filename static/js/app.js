@@ -4,6 +4,39 @@
 (function () {
   "use strict";
 
+  // ------------------- Same-origin CSRF -------------------
+  function readCookie(name) {
+    const prefix = `${encodeURIComponent(name)}=`;
+    for (const part of document.cookie.split(";")) {
+      const value = part.trim();
+      if (value.startsWith(prefix)) return decodeURIComponent(value.slice(prefix.length));
+    }
+    return "";
+  }
+
+  function csrfToken() { return readCookie("luigi_csrf"); }
+
+  document.body.addEventListener("htmx:configRequest", (event) => {
+    const token = csrfToken();
+    if (token) event.detail.headers["X-CSRF-Token"] = token;
+  });
+
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = function (input, init = {}) {
+    const requestUrl = new URL(
+      typeof input === "string" ? input : input.url,
+      window.location.href,
+    );
+    const method = String(init.method || (input instanceof Request ? input.method : "GET")).toUpperCase();
+    if (requestUrl.origin === window.location.origin && !["GET", "HEAD", "OPTIONS"].includes(method)) {
+      const headers = new Headers(init.headers || (input instanceof Request ? input.headers : undefined));
+      const token = csrfToken();
+      if (token) headers.set("X-CSRF-Token", token);
+      init = { ...init, headers };
+    }
+    return nativeFetch(input, init);
+  };
+
   // ------------------- Application sidebar -------------------
   // Desktop collapse state persists per browser. On narrow screens the same
   // controls open a temporary drawer and never overwrite the desktop choice.
@@ -552,6 +585,72 @@
         window.showError("Couldn't reach the server — nothing was saved.");
         btn.disabled = false;
         btn.textContent = originalText;
+      });
+  });
+
+  // ------------------- Discipline page "Done today" -------------------
+  // Unlike the legacy heatmap swap, this endpoint returns the state read from
+  // a fresh DB connection after COMMIT. Paint exactly that response so a toast
+  // can never claim success while the card still shows the old state.
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-discipline-today]");
+    if (!btn) return;
+    e.preventDefault();
+    const endpoint = btn.dataset.endpoint;
+    const action = btn.dataset.action || "mark";
+    if (!endpoint) return;
+    const card = btn.closest("[data-discipline-card]");
+    const originalText = btn.textContent;
+    const originalTitle = btn.title;
+    btn.disabled = true;
+    btn.setAttribute("aria-busy", "true");
+    btn.textContent = action === "mark" ? "Saving…" : "Clearing…";
+    const form = new FormData();
+    form.set("action", action);
+
+    fetch(endpoint, { method: "POST", body: form, credentials: "same-origin" })
+      .then(async (resp) => {
+        if (!resp.ok) {
+          let message = "";
+          try { message = (await resp.text()).trim(); } catch {}
+          throw new Error(message || `Couldn't save (${resp.status}).`);
+        }
+        const state = await resp.json();
+        const marked = state.marked === true;
+        btn.dataset.action = marked ? "unmark" : "mark";
+        btn.textContent = marked ? "✓ Done today" : "Done today";
+        btn.title = marked
+          ? "Remove today’s completion"
+          : "Mark this discipline complete today";
+        btn.setAttribute("aria-pressed", String(marked));
+        btn.classList.toggle("btn-primary", !marked);
+
+        if (card) {
+          const streak = card.querySelector("[data-discipline-streak]");
+          if (streak) streak.textContent = `🔥 ${Number(state.streak) || 0}`;
+          const todayCell = card.querySelector(`[data-day="${state.day || ""}"]`);
+          if (todayCell) {
+            todayCell.classList.toggle("is-marked", marked);
+            todayCell.setAttribute("aria-label", `${state.day} — ${marked ? "done" : "not done"}`);
+            todayCell.setAttribute("hx-vals", JSON.stringify({
+              discipline_uuid: state.discipline_uuid,
+              task: state.task,
+              catagory: todayCell.getAttribute("data-catagory") || "",
+              day: state.day,
+              action: marked ? "unmark" : "mark",
+            }));
+          }
+        }
+        window.showSuccess(state.message || "Discipline updated.");
+      })
+      .catch((error) => {
+        btn.textContent = originalText;
+        btn.title = originalTitle;
+        window.showError(error.message || "Couldn't save the discipline completion.");
+      })
+      .finally(() => {
+        btn.disabled = false;
+        btn.removeAttribute("aria-busy");
       });
   });
 

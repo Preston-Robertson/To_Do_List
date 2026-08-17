@@ -1222,6 +1222,26 @@ def _try_refresh_discipline_streak(task: str) -> None:
         )
 
 
+def computed_discipline_streak(task: str) -> int:
+    """Derive a discipline streak directly from committed completion rows."""
+    with get_engine().connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT completed_date FROM discipline_completions "
+                "WHERE task = :task"
+            ),
+            {"task": task},
+        ).all()
+    days = {
+        (row.completed_date.isoformat()
+         if hasattr(row.completed_date, "isoformat")
+         else str(row.completed_date))[:10]
+        for row in rows
+        if row.completed_date is not None
+    }
+    return compute_streak(days)
+
+
 def mark_completion(task: str, catagory: str | None, day: str) -> bool:
     """Record (task, day) as done. Idempotent. Returns True once the row is
     confirmed present (whether we just inserted it or it already existed).
@@ -1254,7 +1274,9 @@ def mark_completion(task: str, catagory: str | None, day: str) -> bool:
         ).first() is not None
     if present:
         _try_refresh_discipline_streak(task)
-    return present
+    # Re-read on a fresh connection after COMMIT. The UI must never claim the
+    # mark saved based only on transaction-local visibility.
+    return present and completion_exists(task, day)
 
 
 def unmark_completion(task: str, day: str) -> bool:
@@ -1272,7 +1294,8 @@ def unmark_completion(task: str, day: str) -> bool:
         ).first() is None
     if gone:
         _try_refresh_discipline_streak(task)
-    return gone
+    # Same post-commit verification as mark_completion().
+    return gone and not completion_exists(task, day)
 
 
 def compute_streak(dates: Iterable[str]) -> int:

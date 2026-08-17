@@ -6,6 +6,7 @@
 <button
   type="button"
   id="cell-{{ task | urlencode }}-{{ day }}"
+  data-day="{{ day }}"
   class="heatmap-cell{% if marked %} is-marked{% endif %}{% if future %} is-future{% endif %}"
   role="gridcell"
   aria-label="{{ day }} — {{ 'done' if marked else 'not done' }}"

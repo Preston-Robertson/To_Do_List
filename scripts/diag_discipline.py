@@ -88,7 +88,7 @@ def main() -> int:
     # file. Mirror those known defaults so this runs standalone; only the
     # password/token genuinely have to come from /etc/luigi-web.env.
     for key, default in (
-        ("LUIGI_WEB_PG_HOST", "10.0.0.202"),
+        ("LUIGI_WEB_PG_HOST", "<postgres-host>"),
         ("LUIGI_WEB_PG_PORT", "5432"),
         ("LUIGI_WEB_PG_DB", "luigi_todo"),
         ("LUIGI_WEB_PG_USER", "luigi_web"),

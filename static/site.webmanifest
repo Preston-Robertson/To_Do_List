@@ -1,0 +1,17 @@
+{
+  "name": "Luigi Web",
+  "short_name": "Luigi",
+  "description": "Private personal command center",
+  "start_url": "/home",
+  "display": "standalone",
+  "background_color": "#0b0d10",
+  "theme_color": "#12151a",
+  "icons": [
+    {
+      "src": "/static/icons/luigi-mark.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

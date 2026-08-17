@@ -9,6 +9,14 @@ gnw-credentials.json
 task-web-metadata.json
 task-web-metadata.json.tmp
 
+# Finance and local deployment data — sensitive, never commit
+finance.db
+finance.db-*
+*.finance.csv
+finance-export-*.csv
+finance-backup-*.json
+LOCAL_DEPLOYMENT.md
+
 # Python
 __pycache__/
 *.py[cod]

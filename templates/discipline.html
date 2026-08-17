@@ -26,22 +26,25 @@
 
 <section class="discipline-list">
   {% for d in disciplines %}
-    <article class="discipline{% if not d.active %} discipline-inactive{% endif %}">
+    <article class="discipline{% if not d.active %} discipline-inactive{% endif %}"
+         data-discipline-card data-discipline-uuid="{{ d.uuid }}">
       <header class="discipline-header">
         <div class="discipline-title">
           <h2>{{ d.task }}</h2>
           {% if d.catagory %}<span class="chip">{{ d.catagory }}</span>{% endif %}
           <span class="chip chip-muted">{{ d.frequency_per_week }}/wk</span>
-          <span class="chip chip-streak">🔥 {{ d._streak }}</span>
+          <span class="chip chip-streak" data-discipline-streak>🔥 {{ d._streak }}</span>
           {% if not d.active %}<span class="chip chip-muted">inactive</span>{% endif %}
         </div>
         <div class="discipline-actions">
           {% if d.active %}
             <button
+              type="button"
               class="btn discipline-today-btn{% if not d._today_done %} btn-primary{% endif %}"
-              hx-post="/discipline/{{ d.uuid }}/today"
-              hx-vals='{"action":"{{ 'unmark' if d._today_done else 'mark' }}"}'
-              hx-swap="none"
+              data-discipline-today
+              data-endpoint="/discipline/{{ d.uuid }}/today"
+              data-action="{{ 'unmark' if d._today_done else 'mark' }}"
+              aria-pressed="{{ 'true' if d._today_done else 'false' }}"
               title="{{ 'Remove today’s completion' if d._today_done else 'Mark this discipline complete today' }}"
             >{{ '✓ Done today' if d._today_done else 'Done today' }}</button>
           {% endif %}

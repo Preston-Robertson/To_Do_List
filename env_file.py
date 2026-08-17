@@ -52,22 +52,28 @@ class EnvKey:
 # Anything else in the .env file is left alone (comments, unrecognised keys).
 KNOWN_KEYS: tuple[EnvKey, ...] = (
     # Postgres --------------------------------------------------------------
-    EnvKey("LUIGI_WEB_PG_HOST",     "Postgres host",     "LuigiBot DB host (e.g. 10.0.0.202).",           "Postgres"),
+    EnvKey("LUIGI_WEB_PG_HOST",     "Postgres host",     "Hostname or address of the LuigiBot database.", "Postgres"),
     EnvKey("LUIGI_WEB_PG_PORT",     "Postgres port",     "Default 5432.",                                  "Postgres", input_type="number"),
     EnvKey("LUIGI_WEB_PG_DB",       "Postgres database", "Usually 'luigi_todo'.",                          "Postgres"),
     EnvKey("LUIGI_WEB_PG_USER",     "Postgres user",     "Role the GUI connects as (e.g. luigi_web).",     "Postgres"),
     EnvKey("LUIGI_WEB_PG_PASSWORD", "Postgres password", "Password for the DB role. Blank = keep current.", "Postgres", is_secret=True),
     # Web / auth ------------------------------------------------------------
     EnvKey("LUIGI_WEB_UI_TOKEN",    "UI token",          "Shared login token. Blank = keep current.",      "Web",      is_secret=True),
+    EnvKey("LUIGI_WEB_FINANCE_TOKEN", "Finance token",   "Separate token required to unlock Finance. Blank = keep current.", "Web", is_secret=True),
+    EnvKey("LUIGI_WEB_SECURE_COOKIES", "Secure cookies", "Set to 1 when the app is served over HTTPS.", "Web"),
     EnvKey("LUIGI_WEB_BIND",        "Bind address",      "Uvicorn bind address (default 0.0.0.0).",        "Web"),
     EnvKey("LUIGI_WEB_PORT",        "Bind port",         "Uvicorn port (default 8080).",                   "Web",      input_type="number"),
+    # Finance ---------------------------------------------------------------
+    EnvKey("LUIGI_WEB_FINANCE_DB", "Finance database", "App-owned SQLite path. Keep it outside the repository.", "Finance"),
+    EnvKey("LUIGI_WEB_FINANCE_BASE_CURRENCY", "Base currency", "ISO currency code used for reports (default USD).", "Finance"),
     # LLM chat --------------------------------------------------------------
-    EnvKey("LUIGI_WEB_LLM_PROVIDER",           "LLM provider",  "'openai' (any OpenAI-compatible) or 'disabled'.", "LLM"),
-    EnvKey("LUIGI_WEB_LLM_BASE_URL",           "LLM base URL",  "OpenAI-compatible /chat/completions endpoint.",   "LLM", input_type="url"),
-    EnvKey("LUIGI_WEB_LLM_API_KEY",            "LLM API key",   "Blank disables the chat panel. Blank on save = keep current.", "LLM", is_secret=True),
-    EnvKey("LUIGI_WEB_LLM_MODEL",              "LLM model",     "e.g. openai/gpt-4o-mini, llama3.1:8b.",           "LLM"),
+    EnvKey("LUIGI_WEB_LLM_PROVIDER",           "LLM provider",  "'copilot' (GitHub subscription), 'openai', or 'disabled'.", "LLM"),
+    EnvKey("LUIGI_WEB_LLM_BASE_URL",           "LLM base URL",  "Used only for an OpenAI-compatible /chat/completions endpoint.", "LLM", input_type="url"),
+    EnvKey("LUIGI_WEB_LLM_API_KEY",            "GitHub token / API key", "For Copilot, use a fine-grained GitHub token for an account with Copilot access. Blank on save = keep current.", "LLM", is_secret=True),
+    EnvKey("LUIGI_WEB_LLM_MODEL",              "LLM model",     "Blank lets Copilot choose; OpenAI-compatible providers require a model name.", "LLM"),
     EnvKey("LUIGI_WEB_LLM_TIMEOUT",            "LLM timeout",   "HTTP timeout in seconds (default 60).",           "LLM", input_type="number"),
     EnvKey("LUIGI_WEB_LLM_MAX_TOOL_ITERATIONS","LLM tool cap",  "Max tool round-trips per user turn (default 5).", "LLM", input_type="number"),
+    EnvKey("LUIGI_WEB_COPILOT_HOME",           "Copilot runtime data", "Writable directory for the bundled Copilot runtime (default: data/copilot).", "LLM"),
     # Game'N'Watch (Google Sheets) -----------------------------------------
     EnvKey("LUIGI_WEB_GNW_SHEET_ID",   "Game'N'Watch Sheet", "Paste the Google Sheet ID or its full URL. Blank disables the Games/Shows tabs.", "Game'N'Watch"),
     EnvKey("LUIGI_WEB_GNW_CREDS_FILE", "Service-account creds", "Path to the credentials.json. Leave BLANK to use the app-managed path you can paste into from the Game'N'Watch credentials panel above.", "Game'N'Watch"),

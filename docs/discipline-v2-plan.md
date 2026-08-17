@@ -2,8 +2,8 @@
 
 ## Source of truth and decision
 
-Discipline remains shared between this GUI and
-[LuigiBot](https://github.com/Preston-Robertson/LuigiBot). LuigiBot owns the
+Discipline remains shared between this GUI and the shared LuigiBot repository.
+LuigiBot owns the
 database schema and migrations in `bot_modules/db.py`; this web repository must
 not independently invent or deploy a competing Discipline schema.
 

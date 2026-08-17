@@ -1,0 +1,109 @@
+# Architecture
+
+## Overview
+
+Luigi Web is a FastAPI/Jinja2 application using server-rendered HTML, HTMX,
+and locally hosted browser assets. It combines several intentionally separate
+data domains behind one authenticated interface.
+
+| Domain | Storage owner | Adapter |
+|---|---|---|
+| Tasks, recurring tasks, Discipline, follow-up rules | LuigiBot PostgreSQL schema | `db.py` |
+| Finance | Luigi Web SQLite database | `finance.py` |
+| Games and shows | Game'N'Watch Google Sheet | `gnw.py` |
+| Chat history | Process memory | `llm.py` |
+| Web-only task metadata fallback | Gitignored JSON | `db.py` |
+
+## Shared LuigiBot schema
+
+LuigiBot owns schema creation and `schema_version`. Luigi Web requires schema
+version 2 and treats the following tables as shared contracts:
+
+- `tasks`
+- `recurring_tasks`
+- `discipline_list`
+- `discipline_completions`
+- `follow_up_tasks`
+
+The web app never inserts identity columns and scopes task-like mutations by
+UUID. Optional web-owned task columns are added idempotently when permissions
+allow; project/archive metadata falls back to a gitignored app file when they
+do not.
+
+The current Discipline schema links completions by task text. The coordinated
+UUID migration plan is in `discipline-v2-plan.md` and must be delivered with
+LuigiBot.
+
+## Finance boundary
+
+Finance is app-owned and deliberately separate from LuigiBot. Its SQLite file
+is configured by `LUIGI_WEB_FINANCE_DB` and initialized by `finance.init_db()`.
+
+Design constraints:
+
+- integer minor units for persisted money;
+- one configured ISO base currency until exchange-rate support is added;
+- user-selected display aliases only;
+- no account/routing/card/tax identifiers;
+- no LLM tools or global-search indexing;
+- separate finance unlock token;
+- in-memory CSV preview with duplicate detection and one-time commit tokens;
+- immutable audit events for finance mutations;
+- validated merge-style JSON backup and restore;
+- budget, recurring-item, and stale-holding notifications;
+- all Finance HTML, redirects, exports, and backups use no-store headers.
+
+Finance tables:
+
+- `finance_accounts`
+- `finance_transactions`
+- `finance_budgets`
+- `finance_holdings`
+- `finance_recurring_items`
+- `finance_net_worth_snapshots`
+- `finance_saved_reports`
+- `finance_audit_events`
+
+## Authentication and request security
+
+The main UI uses a shared token stored in an HttpOnly cookie. Finance requires
+a second token and cookie. Browser mutations include a same-origin CSRF token;
+Bearer API clients authenticate without cookie CSRF.
+
+Set `LUIGI_WEB_SECURE_COOKIES=1` behind HTTPS. Finance should not contain real
+data on plain HTTP.
+
+## Frontend
+
+- `templates/base.html` owns the responsive sidebar, command palette, drawers,
+  and toast surfaces.
+- `static/css/app.css` contains the visual system and responsive layouts.
+- `static/js/app.js` owns progressive enhancement, HTMX events, Board/List
+  switching, command navigation, and local preferences.
+- HTMX and SortableJS are served from `static/js/vendor`; no CDN is required.
+
+## Integrations
+
+Game'N'Watch uses a service account and header-addressed Google Sheet access.
+Catalog metadata comes from Steam, TVMaze, AniList, and optional YouTube.
+
+The optional Assistant uses either the official GitHub Copilot SDK or an
+OpenAI-compatible endpoint. The Copilot SDK runs in `mode="empty"` with only
+`custom:*` enabled; shell, filesystem, web, MCP, skills, and host instruction
+discovery are disabled. Its allow-listed tools can access task and Discipline
+helpers only. Finance is excluded by policy and code.
+
+## Runtime
+
+The provided systemd unit runs one Uvicorn worker because Undo snapshots, chat
+history, integration clients, and live configuration are process-local. All
+machine-specific values come from an environment file.
+
+## Validation
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+Frontend changes also require template compilation, unique-route validation,
+`git diff --check`, and desktop/mobile browser review.

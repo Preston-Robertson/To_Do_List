@@ -4,7 +4,7 @@ Uses the exact env vars documented in the spec. Refuses to proceed if
 schema_version isn't 2 or if the uuid column is missing/null.
 
 Usage (PowerShell):
-    $env:LUIGI_WEB_PG_HOST="10.0.0.202"
+    $env:LUIGI_WEB_PG_HOST="<postgres-host>"
     $env:LUIGI_WEB_PG_PORT="5432"
     $env:LUIGI_WEB_PG_DB="luigi_todo"
     $env:LUIGI_WEB_PG_USER="luigi_web"

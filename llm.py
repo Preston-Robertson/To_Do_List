@@ -22,11 +22,14 @@ Security posture:
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import os
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Iterable, Protocol
 
 import httpx
@@ -97,9 +100,8 @@ class LLMProvider(Protocol):
 class OpenAICompatProvider:
     """Works with any endpoint that speaks OpenAI's ``/chat/completions``.
 
-    Verified endpoints:
-      * GitHub Models  → https://models.github.ai/inference  (PAT with models:read)
-      * OpenAI         → https://api.openai.com/v1
+        Verified endpoints:
+            * OpenAI         → https://api.openai.com/v1
       * Ollama         → http://host:11434/v1                (any local model)
       * LM Studio      → http://host:1234/v1
       * xAI / DeepSeek → their documented base URLs
@@ -161,17 +163,184 @@ class OpenAICompatProvider:
             raise LLMError(f"Unexpected response shape: {json.dumps(data)[:500]}")
 
 
+class CopilotSDKProvider:
+    """GitHub Copilot subscription provider with no host-capability tools.
+
+    The SDK runs in ``mode='empty'`` and receives only this application's
+    custom tool allow-list. Copilot CLI shell, filesystem, web, MCP, skills,
+    memory, and instruction discovery are never exposed to the model.
+    """
+
+    name = "github-copilot"
+
+    def __init__(self, github_token: str, model: str, timeout: float,
+                 base_directory: str):
+        self.github_token = github_token
+        self.model = model or "auto"
+        self.timeout = timeout
+        self.base_directory = base_directory
+
+    def chat_completion(self, messages, tools=None):
+        raise LLMError("Copilot SDK must use its isolated agent runner")
+
+    @staticmethod
+    def _prompt(messages: list[Message]) -> tuple[str, str]:
+        system = next(
+            (str(message.get("content") or "") for message in messages
+             if message.get("role") == "system"),
+            "You are a concise assistant.",
+        )
+        transcript: list[str] = []
+        for message in messages:
+            role = message.get("role")
+            content = str(message.get("content") or "").strip()
+            if role in {"user", "assistant"} and content:
+                transcript.append(f"{str(role).title()}: {content}")
+        return system, "\n\n".join(transcript)
+
+    def _safe_error(self, exc: Exception) -> str:
+        detail = str(exc).replace(self.github_token, "[redacted]")[:500]
+        if "auth" in detail.lower() or "401" in detail or "403" in detail:
+            return (
+                "GitHub Copilot authentication failed. The configured token must "
+                "belong to a GitHub account with Copilot access."
+            )
+        return f"GitHub Copilot SDK failed: {detail or type(exc).__name__}"
+
+    async def _run_async(
+        self,
+        messages: list[Message],
+        tools: dict[str, Tool],
+    ) -> ChatResult:
+        try:
+            from copilot import CopilotClient
+            from copilot.rpc import PermissionDecisionApproveOnce, PermissionDecisionReject
+            from copilot.tools import Tool as CopilotTool
+        except ImportError as exc:
+            raise LLMError(
+                "GitHub Copilot SDK is not installed; reinstall requirements.txt"
+            ) from exc
+
+        Path(self.base_directory).mkdir(parents=True, exist_ok=True)
+        audit: list[ToolCallRecord] = []
+        audit_lock = threading.Lock()
+
+        def adapt_tool(tool: Tool):
+            def handler(invocation):
+                raw_arguments = getattr(invocation, "arguments", {}) or {}
+                if isinstance(raw_arguments, str):
+                    try:
+                        arguments = json.loads(raw_arguments)
+                    except json.JSONDecodeError:
+                        arguments = {}
+                else:
+                    arguments = dict(raw_arguments)
+                try:
+                    result = tool.handler(arguments)
+                    record = ToolCallRecord(
+                        name=tool.name, arguments=arguments, ok=True, result=result
+                    )
+                    response = {"ok": True, "result": result}
+                except Exception as exc:  # noqa: BLE001
+                    record = ToolCallRecord(
+                        name=tool.name,
+                        arguments=arguments,
+                        ok=False,
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
+                    response = {"ok": False, "error": record.error}
+                with audit_lock:
+                    audit.append(record)
+                return json.dumps(response, default=str)
+
+            return CopilotTool(
+                name=tool.name,
+                description=tool.description,
+                parameters=tool.parameters,
+                handler=handler,
+            )
+
+        allowed_names = set(tools)
+
+        def allow_custom_tools_only(request, invocation):
+            tool_name = str(getattr(request, "tool_name", "") or "")
+            if tool_name.split(":")[-1] in allowed_names:
+                return PermissionDecisionApproveOnce()
+            return PermissionDecisionReject(
+                feedback="Only LuigiBot's allow-listed task tools are available"
+            )
+
+        system_message, prompt = self._prompt(messages)
+        client = CopilotClient(
+            mode="empty",
+            github_token=self.github_token,
+            use_logged_in_user=False,
+            base_directory=self.base_directory,
+            log_level="error",
+        )
+        session = None
+        try:
+            await asyncio.wait_for(client.start(), timeout=self.timeout)
+            session = await client.create_session(
+                model=None if self.model == "auto" else self.model,
+                tools=[adapt_tool(tool) for tool in tools.values()],
+                available_tools=["custom:*"],
+                on_permission_request=allow_custom_tools_only,
+                system_message={"mode": "replace", "content": system_message},
+                enable_session_telemetry=False,
+                enable_session_store=False,
+                enable_config_discovery=False,
+                enable_file_hooks=False,
+                enable_host_git_operations=False,
+                enable_skills=False,
+                skip_custom_instructions=True,
+                mcp_servers={},
+            )
+            response = await session.send_and_wait(prompt, timeout=self.timeout)
+            data = getattr(response, "data", None)
+            reply = str(getattr(data, "content", "") or "").strip()
+            if not reply:
+                reply = "(no response)"
+            messages.append({"role": "assistant", "content": reply})
+            return ChatResult(
+                reply=reply,
+                tool_calls=audit,
+                provider=self.name,
+                model=self.model,
+            )
+        except LLMError:
+            raise
+        except Exception as exc:
+            raise LLMError(self._safe_error(exc)) from exc
+        finally:
+            if session is not None:
+                with contextlib.suppress(Exception, BaseExceptionGroup):
+                    await session.disconnect()
+            with contextlib.suppress(Exception, BaseExceptionGroup):
+                await client.stop()
+
+    def run_chat(
+        self,
+        messages: list[Message],
+        tools: dict[str, Tool],
+    ) -> ChatResult:
+        return asyncio.run(self._run_async(messages, tools))
+
+
 class DisabledProvider:
     """Placeholder returned when no LLM is configured. Raises on use so the
     UI shows a clear 'not configured' message instead of silently failing."""
     name = "disabled"
     model = ""
 
-    def chat_completion(self, messages, tools=None):
-        raise LLMError(
-            "LLM is not configured. Set LUIGI_WEB_LLM_API_KEY (and optionally "
-            "LUIGI_WEB_LLM_BASE_URL and LUIGI_WEB_LLM_MODEL) and restart."
+    def __init__(self, reason: str | None = None):
+        self.reason = reason or (
+            "LLM is not configured. Choose a provider and add its credentials "
+            "on the Admin page."
         )
+
+    def chat_completion(self, messages, tools=None):
+        raise LLMError(self.reason)
 
 
 class LLMError(RuntimeError):
@@ -188,27 +357,58 @@ def build_provider_from_env() -> LLMProvider:
     Env vars (all optional — if the API key is missing we return a disabled
     provider):
 
-        LUIGI_WEB_LLM_PROVIDER    "openai" (default) or "disabled"
-        LUIGI_WEB_LLM_BASE_URL    default: https://models.github.ai/inference
-        LUIGI_WEB_LLM_API_KEY     required to enable the panel
-        LUIGI_WEB_LLM_MODEL       default: openai/gpt-4o-mini
+        LUIGI_WEB_LLM_PROVIDER    "copilot", "openai", or "disabled"
+        LUIGI_WEB_LLM_BASE_URL    OpenAI-compatible base URL
+        LUIGI_WEB_LLM_API_KEY     GitHub token or provider API key
+        LUIGI_WEB_LLM_MODEL       Copilot model (blank = auto) or API model
         LUIGI_WEB_LLM_TIMEOUT     seconds (default 60)
     """
-    provider = os.environ.get("LUIGI_WEB_LLM_PROVIDER", "openai").strip().lower()
+    provider = os.environ.get("LUIGI_WEB_LLM_PROVIDER", "disabled").strip().lower()
     api_key = os.environ.get("LUIGI_WEB_LLM_API_KEY", "").strip()
-    if provider == "disabled" or not api_key:
+    if provider == "disabled":
         return DisabledProvider()
-
-    base_url = os.environ.get(
-        "LUIGI_WEB_LLM_BASE_URL",
-        "https://models.github.ai/inference",
-    ).strip()
-    model = os.environ.get("LUIGI_WEB_LLM_MODEL", "openai/gpt-4o-mini").strip()
     try:
         timeout = float(os.environ.get("LUIGI_WEB_LLM_TIMEOUT", "60"))
     except (TypeError, ValueError):
         timeout = 60.0
     timeout = min(max(timeout, 1.0), 600.0)
+
+    if provider == "copilot":
+        if not api_key:
+            return DisabledProvider(
+                "GitHub Copilot needs a fine-grained GitHub token in "
+                "LUIGI_WEB_LLM_API_KEY."
+            )
+        model = os.environ.get("LUIGI_WEB_LLM_MODEL", "").strip()
+        if model.startswith("openai/") or model.startswith("<"):
+            model = ""
+        base_directory = os.environ.get("LUIGI_WEB_COPILOT_HOME", "").strip()
+        if not base_directory:
+            base_directory = str(Path(__file__).resolve().parent / "data" / "copilot")
+        return CopilotSDKProvider(
+            github_token=api_key,
+            model=model,
+            timeout=timeout,
+            base_directory=base_directory,
+        )
+
+    if provider != "openai":
+        return DisabledProvider(
+            f"Unsupported LLM provider '{provider}'. Use copilot, openai, or disabled."
+        )
+    if not api_key:
+        return DisabledProvider("OpenAI-compatible provider API key is not configured.")
+    base_url = os.environ.get(
+        "LUIGI_WEB_LLM_BASE_URL", "https://api.openai.com/v1"
+    ).strip()
+    if base_url.rstrip("/").lower() == "https://models.github.ai/inference":
+        return DisabledProvider(
+            "GitHub Models was retired on July 30, 2026. Change "
+            "LUIGI_WEB_LLM_PROVIDER to 'copilot' to use a GitHub Copilot subscription."
+        )
+    model = os.environ.get("LUIGI_WEB_LLM_MODEL", "gpt-4o-mini").strip()
+    if base_url.startswith("https://api.openai.com/") and model.startswith("openai/"):
+        model = model.removeprefix("openai/")
     return OpenAICompatProvider(base_url=base_url, api_key=api_key,
                                 model=model, timeout=timeout)
 
@@ -240,10 +440,12 @@ def run_chat_with_tools(
     require on subsequent turns. The caller can persist the mutated list to
     keep future turns coherent.
     """
+    if isinstance(provider, CopilotSDKProvider):
+        return provider.run_chat(messages, tools)
     if isinstance(provider, DisabledProvider):
         # Preserve the disabled behavior instead of returning a mystery blank.
         return ChatResult(
-            reply="Chat is not configured. See the Admin page for setup notes.",
+            reply=provider.reason,
             provider=provider.name, model=provider.model,
         )
 
