@@ -10,10 +10,11 @@ import json
 import os
 import tempfile
 import unittest
-from datetime import date
+from datetime import date, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 
+from sqlalchemy import create_engine, text
 from starlette.requests import Request
 
 import app
@@ -57,6 +58,86 @@ class DatabaseHelperTests(unittest.TestCase):
             "recurring_interval": 30,
         }
         self.assertEqual(db.reactivation_date(row), "2026-08-14")
+
+    def test_monthly_position_reactivates_on_next_matching_date(self) -> None:
+        row = {
+            "completed": 1,
+            "recurring": 1,
+            "completed_time": "2026-08-03T10:00:00",
+            "recurring_month_ordinal": 1,
+            "recurring_month_weekday": 0,
+        }
+        self.assertEqual(db.reactivation_date(row), "2026-09-07")
+
+    def test_follow_up_payload_maps_rule_and_due_offset(self) -> None:
+        payload = db._follow_up_task_payload({
+            "follow_up_task": "Fold Laundry",
+            "subgroup": "Household",
+            "priority": 2,
+            "due_offset_days": 1,
+        })
+        self.assertEqual(payload["task"], "Fold Laundry")
+        self.assertEqual(payload["sub_group"], "Household")
+        self.assertEqual(
+            payload["due_date"], (date.today() + timedelta(days=1)).isoformat()
+        )
+        self.assertEqual(payload["recurring"], 0)
+
+    def test_completion_trigger_inserts_follow_up_task(self) -> None:
+        engine = create_engine("sqlite+pysqlite:///:memory:")
+        task_columns = ", ".join(f"{column} TEXT" for column in db._TASK_COLUMNS)
+        with engine.begin() as conn:
+            conn.execute(text(f"CREATE TABLE tasks ({task_columns})"))
+            conn.execute(text("""
+                CREATE TABLE follow_up_tasks (
+                    trigger_task TEXT, follow_up_task TEXT, catagory TEXT,
+                    task_group TEXT, subgroup TEXT, relevant_link TEXT,
+                    priority INTEGER, estimated_time REAL, due_offset_days INTEGER
+                )
+            """))
+            conn.execute(text("""
+                INSERT INTO follow_up_tasks
+                    (trigger_task, follow_up_task, priority, due_offset_days)
+                VALUES ('Do Laundry', 'Fold Laundry', 2, 0)
+            """))
+            created = db._spawn_follow_ups(conn, "do laundry")
+            spawned = conn.execute(text(
+                "SELECT uuid, task, status, due_date FROM tasks"
+            )).mappings().one()
+
+        self.assertEqual(created, [spawned["uuid"]])
+        self.assertEqual(spawned["task"], "Fold Laundry")
+        self.assertEqual(spawned["status"], "Not Started")
+        self.assertEqual(spawned["due_date"], date.today().isoformat())
+        engine.dispose()
+
+    def test_undo_removes_generated_follow_up_task(self) -> None:
+        engine = create_engine("sqlite+pysqlite:///:memory:")
+        task_columns = ", ".join(f"{column} TEXT" for column in db._TASK_COLUMNS)
+        snapshot = {column: None for column in db._TASK_COLUMNS}
+        snapshot.update({
+            "uuid": "source-task", "task": "Do Laundry",
+            "status": "Not Started", "completed": 0,
+        })
+        generated = {column: None for column in db._TASK_COLUMNS}
+        generated.update({
+            "uuid": "generated-task", "task": "Fold Laundry",
+            "status": "Not Started", "completed": 0,
+        })
+        with engine.begin() as conn:
+            conn.execute(text(f"CREATE TABLE tasks ({task_columns})"))
+            columns = ", ".join(generated)
+            bindings = ", ".join(f":{column}" for column in generated)
+            conn.execute(
+                text(f"INSERT INTO tasks ({columns}) VALUES ({bindings})"),
+                generated,
+            )
+        with patch.object(db, "get_engine", return_value=engine):
+            db.restore_task_row("tasks", snapshot, ["generated-task"])
+        with engine.connect() as conn:
+            rows = conn.execute(text("SELECT uuid, task FROM tasks")).all()
+        self.assertEqual(rows, [("source-task", "Do Laundry")])
+        engine.dispose()
 
     def test_streak_refresh_failure_does_not_fail_completion(self) -> None:
         class Result:
@@ -153,10 +234,28 @@ class DatabaseHelperTests(unittest.TestCase):
 
 class RecurringFormTests(unittest.TestCase):
     def test_enabled_recurrence_requires_a_schedule(self) -> None:
-        app._validate_recurring_form({"recurring": "1", "recurring_interval": "7"})
-        app._validate_recurring_form({"recurring": "1", "recurring_days": ["0", "4"]})
+        app._validate_recurring_form({
+            "recurring": "1", "recurring_schedule_type": "interval",
+            "recurring_interval": "7",
+        })
+        app._validate_recurring_form({
+            "recurring": "1", "recurring_schedule_type": "weekdays",
+            "recurring_days": ["0", "4"],
+        })
+        app._validate_recurring_form({
+            "recurring": "1", "recurring_schedule_type": "monthly",
+            "recurring_month_ordinal": "1", "recurring_month_weekday": "0",
+        })
+        with self.assertRaisesRegex(Exception, "Enter a repeat interval"):
+            app._validate_recurring_form({
+                "recurring": "1", "recurring_schedule_type": "interval",
+                "recurring_interval": "",
+            })
         with self.assertRaisesRegex(Exception, "Choose at least one weekday"):
-            app._validate_recurring_form({"recurring": "1", "recurring_interval": ""})
+            app._validate_recurring_form({
+                "recurring": "1", "recurring_schedule_type": "weekdays",
+                "recurring_days": [],
+            })
 
 
 class DisciplineWorkflowTests(unittest.TestCase):
@@ -282,7 +381,10 @@ class GameAndWatchTests(unittest.TestCase):
         )
         self.assertIn("Your rating", html)
         self.assertIn('name="rating"', html)
-        self.assertIn('value="9" selected', html)
+        self.assertIn('type="number"', html)
+        self.assertIn('min="0"', html)
+        self.assertIn('max="10"', html)
+        self.assertIn('value="9"', html)
         self.assertIn('hx-post="/gnw/games/update"', html)
         self.assertIn("media-status-trigger", html)
         self.assertIn("Move to", html)
@@ -304,7 +406,8 @@ class GameAndWatchTests(unittest.TestCase):
         )
         self.assertIn("Your rating", html)
         self.assertIn('name="rating"', html)
-        self.assertIn('value="8" selected', html)
+        self.assertIn('type="number"', html)
+        self.assertIn('value="8"', html)
         self.assertIn('hx-post="/gnw/shows/update"', html)
         self.assertIn("S3 · E6/62", html)
 
@@ -399,6 +502,68 @@ class LlmTests(unittest.TestCase):
         self.assertIsInstance(provider, llm.CopilotSDKProvider)
         self.assertIsNone(provider.github_token)
         self.assertEqual(provider.model, "auto")
+
+    def test_copilot_retries_rejected_token_with_service_login(self) -> None:
+        clients: list[dict[str, object]] = []
+
+        class FakeSession:
+            async def send_and_wait(self, prompt, timeout):
+                return SimpleNamespace(data=SimpleNamespace(content="Fallback ready."))
+
+            async def disconnect(self):
+                pass
+
+        class FakeClient:
+            def __init__(self, **options):
+                self.options = options
+                clients.append(options)
+
+            async def start(self):
+                if self.options["github_token"]:
+                    raise RuntimeError("401 authentication failed")
+
+            async def create_session(self, **options):
+                return FakeSession()
+
+            async def stop(self):
+                pass
+
+        provider = llm.CopilotSDKProvider(
+            github_token="rejected-token", model="", timeout=5,
+            base_directory=tempfile.gettempdir(),
+        )
+        with patch("copilot.CopilotClient", FakeClient):
+            result = provider.run_chat(
+                [{"role": "user", "content": "Hello"}], {}
+            )
+
+        self.assertEqual(result.reply, "Fallback ready.")
+        self.assertEqual([client["github_token"] for client in clients], [
+            "rejected-token", None,
+        ])
+        self.assertFalse(clients[0]["use_logged_in_user"])
+        self.assertTrue(clients[1]["use_logged_in_user"])
+
+    def test_copilot_auth_error_explains_both_failed_methods(self) -> None:
+        class FailingClient:
+            def __init__(self, **options):
+                pass
+
+            async def start(self):
+                raise RuntimeError("401 authentication failed")
+
+            async def stop(self):
+                pass
+
+        provider = llm.CopilotSDKProvider(
+            github_token="rejected-token", model="", timeout=5,
+            base_directory=tempfile.gettempdir(),
+        )
+        with patch("copilot.CopilotClient", FailingClient):
+            with self.assertRaisesRegex(
+                llm.LLMError, "service-login fallback also failed"
+            ):
+                provider.run_chat([{"role": "user", "content": "Hello"}], {})
 
     def test_copilot_sdk_exposes_only_custom_allow_list(self) -> None:
         captured: dict[str, object] = {}
@@ -531,11 +696,35 @@ class GanttTests(unittest.TestCase):
             patch.object(app, "_require_v2"),
             patch.object(app, "_reactivate_recurring"),
             patch.object(db, "list_calendar_rows", return_value=[]),
+            patch.object(db, "list_recurring", return_value=[]),
         ):
             response = app.calendar_page(request, "2026-08")
         self.assertEqual(response.context["month_label"], "August 2026")
         self.assertGreaterEqual(len(response.context["weeks"]), 5)
         self.assertTrue(all(len(week) == 7 for week in response.context["weeks"]))
+
+    def test_calendar_adds_projected_recurring_occurrences(self) -> None:
+        request = Request({"type": "http", "method": "GET", "path": "/calendar",
+                           "query_string": b"", "headers": []})
+        recurring = {
+            "uuid": "rent", "task": "Pay Rent", "priority": 9,
+            "status": "Not Started", "completed": 0, "recurring": 1,
+            "task_creation": "2026-01-01", "due_date": None,
+            "recurring_month_ordinal": 1, "recurring_month_weekday": 0,
+        }
+        with (
+            patch.object(app, "_require_v2"),
+            patch.object(app, "_reactivate_recurring"),
+            patch.object(db, "list_calendar_rows", return_value=[]),
+            patch.object(db, "list_recurring", return_value=[recurring]),
+        ):
+            response = app.calendar_page(request, "2026-08")
+        august_third = next(
+            day for week in response.context["weeks"] for day in week
+            if day["iso"] == "2026-08-03"
+        )
+        self.assertEqual([row["task"] for row in august_third["tasks"]], ["Pay Rent"])
+        self.assertTrue(august_third["tasks"][0]["_projected"])
 
 
 class ConsolidatedTasksTests(unittest.TestCase):
@@ -575,6 +764,24 @@ class ConsolidatedTasksTests(unittest.TestCase):
         self.assertIn('hx-post="/recurring/rec-1/status"', html)
         self.assertIn('data-action-menu', html)
         self.assertIn('>Delete</button>', html)
+
+    def test_task_data_attributes_normalize_boolean_completion(self) -> None:
+        row = {
+            "uuid": "done-1", "task": "Completed row", "priority": 1,
+            "status": "Completed", "completed": True, "due_date": None,
+            "completed_time": "2026-08-18T10:00:00", "recurring": 0,
+            "recurring_interval": None, "recurring_days": None,
+            "project": None, "catagory": None, "task_group": None,
+            "sub_group": None, "_endpoint_root": "/tasks",
+        }
+        card = app.templates.get_template("partials/task_card.html").render(
+            t=row, endpoint_root="/tasks",
+        )
+        compact = app.templates.get_template("partials/task_list.html").render(
+            rows=[row], statuses=db.STATUS_DISPLAY_ORDER, endpoint_root="/tasks",
+        )
+        self.assertIn('data-completed="1"', card)
+        self.assertIn('data-completed="1"', compact)
 
 
 class CommandPaletteTests(unittest.TestCase):

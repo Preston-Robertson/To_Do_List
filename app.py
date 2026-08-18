@@ -9,6 +9,7 @@ See ``auth.py`` for the auth model.
 from __future__ import annotations
 
 import os
+import logging
 import shlex
 import subprocess
 import sys
@@ -26,6 +27,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 import db
+import recurrence
 from auth import (
     COOKIE_NAME,
     CSRF_COOKIE_NAME,
@@ -44,6 +46,7 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None,
 )
+logger = logging.getLogger("luigi_web.app")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
@@ -126,6 +129,9 @@ templates.env.globals["reactivation_date"] = db.reactivation_date
 templates.env.globals["WEEKDAY_LABELS"] = db.WEEKDAY_LABELS
 templates.env.globals["recurring_days_list"] = db.recurring_days_list
 templates.env.globals["recurring_days_labels"] = db.recurring_days_labels
+templates.env.globals["recurrence_schedule_type"] = db.recurrence_schedule_type
+templates.env.globals["recurrence_schedule_label"] = db.recurrence_schedule_label
+templates.env.globals["MONTH_ORDINAL_OPTIONS"] = recurrence.MONTH_ORDINAL_OPTIONS
 templates.env.globals["has_web_column"] = db.has_web_column
 
 
@@ -151,6 +157,20 @@ def _validate_recurring_form(data: dict[str, Any]) -> None:
     }
     if not enabled:
         return
+    schedule_type = str(data.get("recurring_schedule_type") or "").strip().lower()
+    if schedule_type and schedule_type not in {"interval", "weekdays", "monthly"}:
+        raise HTTPException(422, "Choose a valid recurrence schedule")
+    if schedule_type == "monthly":
+        if recurrence.parse_monthly_schedule(
+            data.get("recurring_month_ordinal"),
+            data.get("recurring_month_weekday"),
+        ) is None:
+            raise HTTPException(422, "Choose a valid monthly position and weekday")
+        return
+    if schedule_type == "weekdays":
+        if not db.parse_recurring_days(data.get("recurring_days")):
+            raise HTTPException(422, "Choose at least one weekday")
+        return
     interval_raw = data.get("recurring_interval")
     if interval_raw not in (None, ""):
         try:
@@ -161,7 +181,7 @@ def _validate_recurring_form(data: dict[str, Any]) -> None:
     if interval_raw in (None, "") and not db.parse_recurring_days(data.get("recurring_days")):
         raise HTTPException(
             422,
-            "Choose at least one weekday or enter a repeat interval",
+            "Enter a repeat interval",
         )
 
 
@@ -206,8 +226,8 @@ def _reactivate_recurring() -> None:
     due. Swallows errors so a transient DB hiccup never blocks a page load."""
     try:
         db.reactivate_due_recurring()
-    except Exception:  # pragma: no cover — best-effort, never fatal to a GET
-        pass
+    except Exception as exc:  # pragma: no cover — best-effort, never fatal to a GET
+        logger.warning("Recurring task reactivation failed: %s", exc)
 
 
 # --------------------------------------------------------------------------- #
@@ -239,7 +259,12 @@ def _sweep_undo(now_ts: float | None = None) -> None:
             _UNDO_QUEUE.pop(k, None)
 
 
-def _stash_undo(table: str, snapshot: dict[str, Any], label: str) -> str:
+def _stash_undo(
+    table: str,
+    snapshot: dict[str, Any],
+    label: str,
+    generated_task_uuids: list[str] | None = None,
+) -> str:
     """Record a 'before' snapshot for a task-like mutation. Returns an
     opaque ``op_id`` the client uses to POST ``/undo/{op_id}`` within the
     TTL window."""
@@ -251,6 +276,7 @@ def _stash_undo(table: str, snapshot: dict[str, Any], label: str) -> str:
             "table": table,
             "snapshot": snapshot,
             "label": label,
+            "generated_task_uuids": list(generated_task_uuids or []),
             "expires_at": now + _UNDO_TTL_SECONDS,
         }
     return op_id
@@ -551,12 +577,14 @@ def tasks_toggle_complete(request: Request, row_uuid: str):
     before = db.get_task(row_uuid)
     if not before:
         raise HTTPException(404)
-    db.toggle_task_completed(row_uuid)
+    _, generated_task_uuids = db.toggle_task_completed(row_uuid)
     row = db.get_task(row_uuid)
     if not row:
         raise HTTPException(404)
     verb = "Completed" if int(row.get("completed") or 0) == 1 else "Reopened"
-    op_id = _stash_undo("tasks", before, f"{verb} ‘{before.get('task','')}’")
+    op_id = _stash_undo(
+        "tasks", before, f"{verb} ‘{before.get('task','')}’", generated_task_uuids
+    )
     trigger = _hx_trigger(
         showUndo={"op_id": op_id, "label": f"{verb} ‘{before.get('task','')}’",
                   "ttl_ms": _UNDO_TTL_SECONDS * 1000},
@@ -756,13 +784,15 @@ def recurring_toggle_complete(request: Request, row_uuid: str):
     before = db.get_recurring(row_uuid)
     if not before:
         raise HTTPException(404)
-    db.toggle_recurring_completed(row_uuid)
+    _, generated_task_uuids = db.toggle_recurring_completed(row_uuid)
     row = db.get_recurring(row_uuid)
     if not row:
         raise HTTPException(404)
     verb = "Completed" if int(row.get("completed") or 0) == 1 else "Reopened"
-    op_id = _stash_undo("recurring_tasks", before,
-                        f"{verb} ‘{before.get('task','')}’")
+    op_id = _stash_undo(
+        "recurring_tasks", before, f"{verb} ‘{before.get('task','')}’",
+        generated_task_uuids,
+    )
     trigger = _hx_trigger(
         showUndo={"op_id": op_id, "label": f"{verb} ‘{before.get('task','')}’",
                   "ttl_ms": _UNDO_TTL_SECONDS * 1000},
@@ -1130,7 +1160,11 @@ def undo(op_id: str):
         if table == "discipline_list":
             db.restore_discipline_row(entry["snapshot"])
         else:
-            db.restore_task_row(table, entry["snapshot"])
+            db.restore_task_row(
+                table,
+                entry["snapshot"],
+                entry.get("generated_task_uuids", []),
+            )
     except Exception as exc:
         raise HTTPException(500, f"undo failed: {exc}")
     return Response(
@@ -1512,7 +1546,12 @@ def follow_ups_panel(request: Request):
 def follow_ups_new_form(request: Request):
     return templates.TemplateResponse(
         "partials/follow_up_form.html",
-        {"request": request, "f": {}, "is_new": True},
+        {
+            "request": request,
+            "f": {},
+            "is_new": True,
+            "trigger_tasks": db.list_task_names(),
+        },
     )
 
 
@@ -1542,7 +1581,12 @@ def follow_ups_edit_form(request: Request, row_uuid: str):
         raise HTTPException(404)
     return templates.TemplateResponse(
         "partials/follow_up_form.html",
-        {"request": request, "f": row, "is_new": False},
+        {
+            "request": request,
+            "f": row,
+            "is_new": False,
+            "trigger_tasks": db.list_task_names(),
+        },
     )
 
 
@@ -1790,6 +1834,30 @@ def calendar_page(request: Request, month: str | None = None):
     grid_start = current - timedelta(days=(current.weekday() + 1) % 7)
     grid_end = month_end + timedelta(days=(5 - month_end.weekday()) % 7)
     rows = db.list_calendar_rows(grid_start, grid_end)
+    existing = {
+        (str(row.get("uuid") or ""), str(row.get("due_date") or "")[:10])
+        for row in rows
+    }
+    for rule in db.list_recurring():
+        for occurrence in recurrence.calendar_occurrence_dates(rule, grid_start, grid_end):
+            key = (str(rule.get("uuid") or ""), occurrence.isoformat())
+            if key in existing:
+                continue
+            projected = dict(rule)
+            projected.update({
+                "due_date": occurrence.isoformat(),
+                "completed": 0,
+                "status": "Not Started",
+                "source": "recurring",
+                "_projected": True,
+            })
+            rows.append(projected)
+            existing.add(key)
+    rows.sort(key=lambda row: (
+        str(row.get("due_date") or ""),
+        -int(row.get("priority") or 0),
+        str(row.get("task") or "").casefold(),
+    ))
     by_day: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         by_day.setdefault(str(row.get("due_date") or "")[:10], []).append(row)

@@ -25,6 +25,8 @@ from typing import Any, Iterable
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine, URL
 
+import recurrence as recurrence_rules
+
 
 # --------------------------------------------------------------------------- #
 # Engine
@@ -111,7 +113,7 @@ def _set_web_metadata(table: str, row_uuid: str, **values: Any) -> None:
         data = _read_web_metadata()
         row = data.setdefault(table, {}).setdefault(row_uuid, {})
         for key, value in values.items():
-            if value in (None, "", 0, False):
+            if value in (None, "") or (key == "archived" and not value):
                 row.pop(key, None)
             else:
                 row[key] = value
@@ -126,6 +128,11 @@ def _apply_web_metadata(table: str, row: dict[str, Any]) -> dict[str, Any]:
         row["project"] = fallback.get("project")
     if not has_web_column(table, "archived"):
         row["archived"] = int(bool(fallback.get("archived")))
+    for field in (
+        "recurring_days", "recurring_month_ordinal", "recurring_month_weekday"
+    ):
+        if not has_web_column(table, field):
+            row[field] = fallback.get(field)
     return row
 
 
@@ -151,6 +158,8 @@ def ensure_web_columns() -> None:
       set by the /recurring form when the user picks specific weekdays.
       LuigiBot ignores this until taught to read it. Added to both
       task-like tables so the shared column list stays symmetric.
+        * ``recurring_month_ordinal`` and ``recurring_month_weekday`` (INTEGER) —
+            an nth-weekday monthly rule such as first Monday or last Friday.
 
     The web-app's DB role is often *not* the owner of the LuigiBot tables,
     which makes ``ALTER TABLE`` return ``InsufficientPrivilege``. That's
@@ -161,6 +170,8 @@ def ensure_web_columns() -> None:
     """
     web_columns = {
         "recurring_days": "TEXT",
+        "recurring_month_ordinal": "INTEGER",
+        "recurring_month_weekday": "INTEGER",
         "project": "TEXT",
         "archived": "INTEGER DEFAULT 0",
     }
@@ -354,14 +365,45 @@ def recurring_days_labels(csv: Any) -> list[str]:
     return [WEEKDAY_LABELS[i] for i in recurring_days_list(csv)]
 
 
+def recurrence_schedule_type(row: dict[str, Any]) -> str:
+    """Infer the configured schedule mode for forms and display."""
+    if recurrence_rules.parse_monthly_schedule(
+        row.get("recurring_month_ordinal"), row.get("recurring_month_weekday")
+    ):
+        return "monthly"
+    if recurring_days_list(row.get("recurring_days")):
+        return "weekdays"
+    return "interval"
+
+
+def recurrence_schedule_label(row: dict[str, Any]) -> str | None:
+    """Return concise human-readable recurrence copy for a task card."""
+    monthly = recurrence_rules.parse_monthly_schedule(
+        row.get("recurring_month_ordinal"), row.get("recurring_month_weekday")
+    )
+    if monthly:
+        ordinal, weekday = monthly
+        ordinal_labels = dict(recurrence_rules.MONTH_ORDINAL_OPTIONS)
+        return f"{ordinal_labels[ordinal]} {WEEKDAY_LABELS[weekday]} monthly"
+    weekday_labels = recurring_days_labels(row.get("recurring_days"))
+    if weekday_labels:
+        return " · ".join(weekday_labels)
+    try:
+        interval = int(row.get("recurring_interval") or 0)
+    except (TypeError, ValueError):
+        return None
+    return f"every {interval}d after completion" if interval > 0 else None
+
+
 def reactivation_date(row: dict[str, Any]) -> str | None:
     """When a completed recurring row will next come due.
 
     Order of precedence (matches the /recurring form's "both allowed" rule):
 
-    1. ``recurring_days`` — the next selected weekday **strictly after**
+     1. Monthly position — e.g. the first Monday strictly after completion.
+     2. ``recurring_days`` — the next selected weekday **strictly after**
        ``completed_time``.
-    2. ``recurring_interval`` — ``completed_time + N days``.
+     3. ``recurring_interval`` — ``completed_time + N days``.
 
     Returns ``None`` if the row isn't a completed recurring task, if no
     schedule fields are set, or if ``completed_time`` can't be parsed.
@@ -379,6 +421,14 @@ def reactivation_date(row: dict[str, Any]) -> str | None:
         base = date.fromisoformat(str(completed_time)[:10])
     except (ValueError, TypeError):
         return None
+
+    monthly = recurrence_rules.parse_monthly_schedule(
+        row.get("recurring_month_ordinal"),
+        row.get("recurring_month_weekday"),
+    )
+    if monthly is not None:
+        candidate = recurrence_rules.next_monthly_occurrence(base, *monthly)
+        return candidate.isoformat() if candidate is not None else None
 
     days = recurring_days_list(row.get("recurring_days"))
     if days:
@@ -425,14 +475,16 @@ _TASK_COLUMNS = (
     "uuid", "task", "priority", "status", "due_date", "relevant_link",
     "catagory", "task_group", "sub_group", "task_creation", "start_time",
     "estimated_time", "logged_hours", "completed", "completed_time",
-    "recurring", "recurring_interval", "recurring_days", "project", "archived",
+    "recurring", "recurring_interval", "recurring_days",
+    "recurring_month_ordinal", "recurring_month_weekday", "project", "archived",
 )
 
 # fields the edit form is allowed to change (mirrors bot's edit_task)
 _TASK_EDITABLE = (
     "task", "priority", "due_date", "catagory", "task_group", "sub_group",
     "relevant_link", "status", "estimated_time",
-    "recurring", "recurring_interval", "recurring_days", "project",
+    "recurring", "recurring_interval", "recurring_days",
+    "recurring_month_ordinal", "recurring_month_weekday", "project",
 )
 
 
@@ -464,6 +516,15 @@ def _create_task_like(table: str, data: dict[str, Any], recurring_default: int) 
         recurring_val = _to_int_bool(data.get("recurring"))
     else:
         recurring_val = recurring_default
+    schedule_type = str(data.get("recurring_schedule_type") or "").strip().lower()
+    monthly = recurrence_rules.parse_monthly_schedule(
+        data.get("recurring_month_ordinal"), data.get("recurring_month_weekday")
+    )
+    if recurring_val and schedule_type == "monthly" and monthly is None:
+        raise ValueError("invalid monthly recurrence schedule")
+    interval_enabled = recurring_val and schedule_type not in {"weekdays", "monthly"}
+    weekdays_enabled = recurring_val and schedule_type != "monthly"
+    monthly_enabled = recurring_val and schedule_type == "monthly" and monthly is not None
     payload = {
         "uuid": row_uuid,
         "task": data.get("task", "").strip(),
@@ -483,7 +544,7 @@ def _create_task_like(table: str, data: dict[str, Any], recurring_default: int) 
         "recurring": recurring_val,
         "recurring_interval": (
             int(data["recurring_interval"])
-            if recurring_val and data.get("recurring_interval") not in (None, "")
+            if interval_enabled and data.get("recurring_interval") not in (None, "")
             else None
         ),
         # `recurring_days` is a web-GUI-only column (see ensure_web_columns).
@@ -491,10 +552,19 @@ def _create_task_like(table: str, data: dict[str, Any], recurring_default: int) 
         # null it out so LuigiBot's view stays consistent.
         "recurring_days": (
             parse_recurring_days(data.get("recurring_days"))
-            if recurring_val else None
+            if weekdays_enabled else None
         ),
+        "recurring_month_ordinal": monthly[0] if monthly_enabled else None,
+        "recurring_month_weekday": monthly[1] if monthly_enabled else None,
         "project": data.get("project") or None,
         "archived": 0,
+    }
+    schedule_fallback = {
+        field: payload.get(field)
+        for field in (
+            "recurring_days", "recurring_month_ordinal", "recurring_month_weekday"
+        )
+        if not has_web_column(table, field)
     }
     # Drop any columns the physical table doesn't have (e.g. a DB where the
     # web-owned ALTERs haven't been applied yet). _cols_for is authoritative.
@@ -507,6 +577,8 @@ def _create_task_like(table: str, data: dict[str, Any], recurring_default: int) 
         conn.execute(q, payload)
     if not has_web_column(table, "project") and data.get("project"):
         _set_web_metadata(table, row_uuid, project=str(data["project"]).strip())
+    if schedule_fallback:
+        _set_web_metadata(table, row_uuid, **schedule_fallback)
     return row_uuid
 
 
@@ -536,6 +608,8 @@ def _update_task_like(table: str, row_uuid: str, data: dict[str, Any]) -> None:
         elif field == "recurring_days":
             # May be a str (single checked box), list (multiple), or missing.
             val = parse_recurring_days(val)
+        elif field in {"recurring_month_ordinal", "recurring_month_weekday"}:
+            val = int(val) if val not in (None, "") else None
         elif field == "project":
             val = str(val).strip() or None
         elif isinstance(val, str) and val == "":
@@ -549,15 +623,44 @@ def _update_task_like(table: str, row_uuid: str, data: dict[str, Any]) -> None:
     if is_form_post and "recurring_days" not in data:
         updates["recurring_days"] = None
 
+    schedule_type = str(data.get("recurring_schedule_type") or "").strip().lower()
+    if schedule_type == "interval":
+        updates["recurring_days"] = None
+        updates["recurring_month_ordinal"] = None
+        updates["recurring_month_weekday"] = None
+    elif schedule_type == "weekdays":
+        updates["recurring_interval"] = None
+        updates["recurring_month_ordinal"] = None
+        updates["recurring_month_weekday"] = None
+    elif schedule_type == "monthly":
+        if recurrence_rules.parse_monthly_schedule(
+            updates.get("recurring_month_ordinal"),
+            updates.get("recurring_month_weekday"),
+        ) is None:
+            raise ValueError("invalid monthly recurrence schedule")
+        updates["recurring_interval"] = None
+        updates["recurring_days"] = None
+
     # Clear the interval + weekdays whenever recurring is being turned off in
     # the same update, so we don't leave orphan schedule values on a
     # non-recurring row.
     if updates.get("recurring") == 0:
         updates["recurring_interval"] = None
         updates["recurring_days"] = None
+        updates["recurring_month_ordinal"] = None
+        updates["recurring_month_weekday"] = None
 
     if "project" in updates and not has_web_column(table, "project"):
         _set_web_metadata(table, row_uuid, project=updates.pop("project"))
+
+    schedule_fallback: dict[str, Any] = {}
+    for field in (
+        "recurring_days", "recurring_month_ordinal", "recurring_month_weekday"
+    ):
+        if field in updates and not has_web_column(table, field):
+            schedule_fallback[field] = updates.pop(field)
+    if schedule_fallback:
+        _set_web_metadata(table, row_uuid, **schedule_fallback)
 
     # Drop any columns the physical table doesn't have. Same reason as in
     # _create_task_like: web-owned columns may not be present yet.
@@ -573,7 +676,67 @@ def _update_task_like(table: str, row_uuid: str, data: dict[str, Any]) -> None:
         conn.execute(q, updates)
 
 
-def _set_task_like_status(table: str, row_uuid: str, status: str) -> None:
+def _follow_up_task_payload(rule: dict[str, Any]) -> dict[str, Any]:
+    """Shape one follow-up rule into a new one-off task row."""
+    due_date = None
+    if rule.get("due_offset_days") not in (None, ""):
+        offset = int(rule["due_offset_days"])
+        if offset < 0:
+            raise ValueError("follow-up due offset cannot be negative")
+        due_date = (date.today() + timedelta(days=offset)).isoformat()
+    return {
+        "uuid": new_uuid(),
+        "task": str(rule.get("follow_up_task") or "").strip(),
+        "priority": int(rule.get("priority") or 0),
+        "status": "Not Started",
+        "due_date": due_date,
+        "relevant_link": rule.get("relevant_link") or None,
+        "catagory": rule.get("catagory") or None,
+        "task_group": rule.get("task_group") or None,
+        "sub_group": rule.get("subgroup") or None,
+        "task_creation": today_iso(),
+        "start_time": None,
+        "estimated_time": (
+            float(rule["estimated_time"])
+            if rule.get("estimated_time") not in (None, "") else None
+        ),
+        "logged_hours": 0.0,
+        "completed": 0,
+        "completed_time": None,
+        "recurring": 0,
+        "recurring_interval": None,
+        "recurring_days": None,
+        "recurring_month_ordinal": None,
+        "recurring_month_weekday": None,
+        "project": None,
+        "archived": 0,
+    }
+
+
+def _spawn_follow_ups(conn, trigger_task: str) -> list[str]:
+    """Insert matching follow-up tasks using the caller's transaction."""
+    rules = _rows(conn.execute(text("""
+        SELECT trigger_task, follow_up_task, catagory, task_group, subgroup,
+               relevant_link, priority, estimated_time, due_offset_days
+        FROM follow_up_tasks
+        WHERE LOWER(TRIM(trigger_task)) = LOWER(TRIM(:task))
+        ORDER BY priority DESC NULLS LAST, follow_up_task ASC
+    """), {"task": trigger_task}))
+    created: list[str] = []
+    allowed = set(_cols_for("tasks"))
+    for rule in rules:
+        payload = _follow_up_task_payload(rule)
+        if not payload["task"]:
+            continue
+        payload = {key: value for key, value in payload.items() if key in allowed}
+        columns = ", ".join(payload)
+        bindings = ", ".join(f":{key}" for key in payload)
+        conn.execute(text(f"INSERT INTO tasks ({columns}) VALUES ({bindings})"), payload)
+        created.append(payload["uuid"])
+    return created
+
+
+def _set_task_like_status(table: str, row_uuid: str, status: str) -> list[str]:
     if status not in STATUS_VALUES:
         raise ValueError(f"invalid status: {status}")
     # Dragging to/from the Completed column toggles the completed flag too so
@@ -586,17 +749,28 @@ def _set_task_like_status(table: str, row_uuid: str, status: str) -> None:
         WHERE uuid = :u
     """)
     with get_engine().begin() as conn:
+        current = conn.execute(
+            text(f"SELECT task, completed FROM {table} WHERE uuid = :u FOR UPDATE"),
+            {"u": row_uuid},
+        ).first()
+        if current is None:
+            return []
         conn.execute(q, {"s": status, "c": completed, "ct": completed_time, "u": row_uuid})
+        if completed and not int(current.completed or 0):
+            return _spawn_follow_ups(conn, str(current.task or ""))
+    return []
 
 
-def _toggle_task_like_completed(table: str, row_uuid: str) -> int:
-    """Flip the ``completed`` flag; return the new value."""
+def _toggle_task_like_completed(table: str, row_uuid: str) -> tuple[int, list[str]]:
+    """Flip completion and return ``(new_value, generated_task_uuids)``."""
     with get_engine().begin() as conn:
         cur = conn.execute(
-            text(f"SELECT completed FROM {table} WHERE uuid = :u FOR UPDATE"),
+            text(f"SELECT task, completed FROM {table} WHERE uuid = :u FOR UPDATE"),
             {"u": row_uuid},
-        ).scalar_one()
-        new_val = 0 if int(cur or 0) == 1 else 1
+        ).first()
+        if cur is None:
+            raise LookupError(f"{table} row not found")
+        new_val = 0 if int(cur.completed or 0) == 1 else 1
         conn.execute(
             text(f"""
                 UPDATE {table}
@@ -607,7 +781,8 @@ def _toggle_task_like_completed(table: str, row_uuid: str) -> int:
             """),
             {"c": new_val, "ct": now_iso() if new_val else None, "u": row_uuid},
         )
-    return new_val
+        created = _spawn_follow_ups(conn, str(cur.task or "")) if new_val else []
+    return new_val, created
 
 
 def _delete_task_like(table: str, row_uuid: str) -> None:
@@ -650,7 +825,11 @@ def list_archived() -> list[dict[str, Any]]:
     return rows
 
 
-def restore_task_row(table: str, snapshot: dict[str, Any]) -> None:
+def restore_task_row(
+    table: str,
+    snapshot: dict[str, Any],
+    generated_task_uuids: Iterable[str] = (),
+) -> None:
     """Idempotent 'put back' for a task-like row snapshot.
 
     Used by the in-memory undo queue in ``app.py`` to reverse a delete /
@@ -682,6 +861,11 @@ def restore_task_row(table: str, snapshot: dict[str, Any]) -> None:
             bind_list = ", ".join(f":{c}" for c in cols)
             conn.execute(
                 text(f"INSERT INTO {table} ({col_list}) VALUES ({bind_list})"), payload
+            )
+        for generated_uuid in generated_task_uuids:
+            conn.execute(
+                text("DELETE FROM tasks WHERE uuid = :u"),
+                {"u": str(generated_uuid)},
             )
 
 
@@ -733,11 +917,11 @@ def update_task(row_uuid: str, data: dict[str, Any]) -> None:
     _update_task_like("tasks", row_uuid, data)
 
 
-def set_task_status(row_uuid: str, status: str) -> None:
-    _set_task_like_status("tasks", row_uuid, status)
+def set_task_status(row_uuid: str, status: str) -> list[str]:
+    return _set_task_like_status("tasks", row_uuid, status)
 
 
-def toggle_task_completed(row_uuid: str) -> int:
+def toggle_task_completed(row_uuid: str) -> tuple[int, list[str]]:
     return _toggle_task_like_completed("tasks", row_uuid)
 
 
@@ -770,11 +954,11 @@ def update_recurring(row_uuid: str, data: dict[str, Any]) -> None:
     _update_task_like("recurring_tasks", row_uuid, data)
 
 
-def set_recurring_status(row_uuid: str, status: str) -> None:
-    _set_task_like_status("recurring_tasks", row_uuid, status)
+def set_recurring_status(row_uuid: str, status: str) -> list[str]:
+    return _set_task_like_status("recurring_tasks", row_uuid, status)
 
 
-def toggle_recurring_completed(row_uuid: str) -> int:
+def toggle_recurring_completed(row_uuid: str) -> tuple[int, list[str]]:
     return _toggle_task_like_completed("recurring_tasks", row_uuid)
 
 
@@ -788,6 +972,15 @@ def snooze_recurring(row_uuid: str, days: int) -> str | None:
 
 def archive_recurring(row_uuid: str, archived: bool = True) -> bool:
     return _set_task_like_archived("recurring_tasks", row_uuid, archived)
+
+
+def list_task_names() -> list[str]:
+    """All visible task names for completion-trigger suggestions."""
+    names = {
+        str(row.get("task") or "").strip()
+        for row in [*list_tasks(), *list_recurring()]
+    }
+    return sorted((name for name in names if name), key=str.casefold)
 
 
 def reactivate_due_recurring(today: date | None = None) -> int:

@@ -198,15 +198,28 @@ class CopilotSDKProvider:
                 transcript.append(f"{str(role).title()}: {content}")
         return system, "\n\n".join(transcript)
 
-    def _safe_error(self, exc: Exception) -> str:
+    @staticmethod
+    def _is_auth_error(exc: Exception) -> bool:
+        detail = str(exc).lower()
+        return "auth" in detail or "401" in detail or "403" in detail
+
+    def _safe_error(self, exc: Exception, *, using_token: bool | None = None) -> str:
         detail = str(exc)
         if self.github_token:
             detail = detail.replace(self.github_token, "[redacted]")
         detail = detail[:500]
-        if "auth" in detail.lower() or "401" in detail or "403" in detail:
+        if self._is_auth_error(exc):
+            token_used = bool(self.github_token) if using_token is None else using_token
+            if token_used:
+                return (
+                    "GitHub Copilot rejected the configured token. Replace "
+                    "LUIGI_WEB_LLM_API_KEY with a supported token for an account "
+                    "that has Copilot access, or clear it to use the service login."
+                )
             return (
-                "GitHub Copilot authentication failed. The configured token must "
-                "belong to a GitHub account with Copilot access."
+                "GitHub Copilot login is unavailable to the service account. "
+                "Authenticate that account with GitHub Copilot or configure a "
+                "supported LUIGI_WEB_LLM_API_KEY."
             )
         return f"GitHub Copilot SDK failed: {detail or type(exc).__name__}"
 
@@ -292,66 +305,82 @@ class CopilotSDKProvider:
 
         system_message, prompt = self._prompt(messages)
         runtime_env = _copilot_runtime_env(self.base_directory)
-        extract_dir = runtime_env["COPILOT_CLI_EXTRACT_DIR"]
-        previous_extract_dir = os.environ.get("COPILOT_CLI_EXTRACT_DIR")
-        os.environ["COPILOT_CLI_EXTRACT_DIR"] = extract_dir
+
+        def build_client(github_token: str | None):
+            extract_dir = runtime_env["COPILOT_CLI_EXTRACT_DIR"]
+            previous_extract_dir = os.environ.get("COPILOT_CLI_EXTRACT_DIR")
+            os.environ["COPILOT_CLI_EXTRACT_DIR"] = extract_dir
+            try:
+                return CopilotClient(
+                    mode="empty",
+                    github_token=github_token,
+                    use_logged_in_user=not bool(github_token),
+                    base_directory=self.base_directory,
+                    env=runtime_env,
+                    log_level="error",
+                )
+            finally:
+                if previous_extract_dir is None:
+                    os.environ.pop("COPILOT_CLI_EXTRACT_DIR", None)
+                else:
+                    os.environ["COPILOT_CLI_EXTRACT_DIR"] = previous_extract_dir
+
+        async def run_client(github_token: str | None) -> ChatResult:
+            client = build_client(github_token)
+            session = None
+            try:
+                await asyncio.wait_for(client.start(), timeout=self.timeout)
+                session = await client.create_session(
+                    model=None if self.model == "auto" else self.model,
+                    tools=[adapt_tool(tool) for tool in tools.values()],
+                    available_tools=["custom:*"],
+                    on_permission_request=allow_custom_tools_only,
+                    system_message={"mode": "replace", "content": system_message},
+                    enable_session_telemetry=False,
+                    enable_session_store=False,
+                    enable_config_discovery=False,
+                    enable_file_hooks=False,
+                    enable_host_git_operations=False,
+                    enable_skills=False,
+                    skip_custom_instructions=True,
+                    mcp_servers={},
+                )
+                response = await session.send_and_wait(prompt, timeout=self.timeout)
+                data = getattr(response, "data", None)
+                reply = str(getattr(data, "content", "") or "").strip()
+                if not reply:
+                    reply = "(no response)"
+                messages.append({"role": "assistant", "content": reply})
+                return ChatResult(
+                    reply=reply,
+                    tool_calls=audit,
+                    provider=self.name,
+                    model=self.model,
+                )
+            finally:
+                if session is not None:
+                    with contextlib.suppress(Exception, BaseExceptionGroup):
+                        await session.disconnect()
+                with contextlib.suppress(Exception, BaseExceptionGroup):
+                    await client.stop()
+
         try:
-            # The Python SDK resolves/downloads its checksum-verified CLI in
-            # the constructor. Point that one operation at writable app data;
-            # ProtectHome=true makes the SDK's ~/.cache default unavailable.
-            client = CopilotClient(
-                mode="empty",
-                github_token=self.github_token,
-                use_logged_in_user=not bool(self.github_token),
-                base_directory=self.base_directory,
-                env=runtime_env,
-                log_level="error",
-            )
-        finally:
-            if previous_extract_dir is None:
-                os.environ.pop("COPILOT_CLI_EXTRACT_DIR", None)
-            else:
-                os.environ["COPILOT_CLI_EXTRACT_DIR"] = previous_extract_dir
-        session = None
-        try:
-            await asyncio.wait_for(client.start(), timeout=self.timeout)
-            session = await client.create_session(
-                model=None if self.model == "auto" else self.model,
-                tools=[adapt_tool(tool) for tool in tools.values()],
-                available_tools=["custom:*"],
-                on_permission_request=allow_custom_tools_only,
-                system_message={"mode": "replace", "content": system_message},
-                enable_session_telemetry=False,
-                enable_session_store=False,
-                enable_config_discovery=False,
-                enable_file_hooks=False,
-                enable_host_git_operations=False,
-                enable_skills=False,
-                skip_custom_instructions=True,
-                mcp_servers={},
-            )
-            response = await session.send_and_wait(prompt, timeout=self.timeout)
-            data = getattr(response, "data", None)
-            reply = str(getattr(data, "content", "") or "").strip()
-            if not reply:
-                reply = "(no response)"
-            messages.append({"role": "assistant", "content": reply})
-            return ChatResult(
-                reply=reply,
-                tool_calls=audit,
-                provider=self.name,
-                model=self.model,
-            )
+            return await run_client(self.github_token)
         except LLMError:
             raise
         except Exception as exc:
+            if self.github_token and self._is_auth_error(exc) and not audit:
+                try:
+                    return await run_client(None)
+                except Exception as fallback_exc:
+                    fallback_message = self._safe_error(
+                        fallback_exc, using_token=False
+                    )
+                    raise LLMError(
+                        "GitHub Copilot rejected the configured token, and the "
+                        f"service-login fallback also failed. {fallback_message}"
+                    ) from fallback_exc
             raise LLMError(self._safe_error(exc)) from exc
-        finally:
-            if session is not None:
-                with contextlib.suppress(Exception, BaseExceptionGroup):
-                    await session.disconnect()
-            with contextlib.suppress(Exception, BaseExceptionGroup):
-                await client.stop()
 
     def run_chat(
         self,

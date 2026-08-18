@@ -248,6 +248,24 @@ class FinanceSecurityTests(unittest.TestCase):
         self.assertIn("SameSite=strict", cookie)
         self.assertTrue(auth.is_finance_authenticated(auth._finance_session_value()))
 
+    def test_unconfigured_finance_unlock_field_explains_host_boundary(self) -> None:
+        client = TestClient(app.app)
+        client.cookies.set(auth.COOKIE_NAME, "main-secret")
+        client.cookies.set(auth.CSRF_COOKIE_NAME, "csrf-value")
+        with patch.dict(os.environ, {"LUIGI_WEB_FINANCE_TOKEN": ""}):
+            page = client.get("/finance/unlock")
+            self.assertEqual(page.status_code, 200)
+            self.assertIn('name="token"', page.text)
+            self.assertNotIn('name="token" required autocomplete="current-password" disabled', page.text)
+
+            response = client.post(
+                "/finance/unlock",
+                data={"token": "candidate"},
+                headers={"X-CSRF-Token": "csrf-value", "HX-Request": "true"},
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("does not create or save one", response.text)
+
     def test_secure_cookie_flag_is_configurable(self) -> None:
         with patch.dict(os.environ, {"LUIGI_WEB_SECURE_COOKIES": "1"}):
             self.assertIn("Secure", auth.login_response("main-secret").headers["set-cookie"])

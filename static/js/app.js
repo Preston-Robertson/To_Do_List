@@ -1076,70 +1076,66 @@
     initDatePickers(e.target);
   });
 
-  // ------------------- Recurring toggle (task form) -------------------
-  // Show/hide the "Repeat every (days)" input based on the Recurring checkbox
-  // and wire preset chips (Daily / Weekly / Bi-weekly / Monthly). Unchecking
-  // clears the interval so the server stores NULL.
+  // ------------------- Recurrence schedule (task form) -------------------
   function initRecurringToggle(root) {
     const scope = root && root.querySelectorAll ? root : document;
     scope.querySelectorAll("[data-recurring-toggle]").forEach((cb) => {
       if (cb.dataset.recInit === "1") return;
       cb.dataset.recInit = "1";
       const form = cb.closest("form") || cb.closest("[data-recurring-row]").parentElement;
-      const row = cb.closest("[data-recurring-row]") || cb.parentElement;
-      const fields = row.querySelector("[data-recurring-fields]");
-      const input = row.querySelector("[data-recurring-interval]");
-      if (!fields || !input) return;
-
-      // Sibling weekday row lives outside the interval row so the fieldset
-      // can span the full width. It's optional — /tasks doesn't render it.
-      const daysRow = form ? form.querySelector("[data-recurring-days-row]") : null;
-      const dayInputs = daysRow
-        ? daysRow.querySelectorAll('input[name="recurring_days"]')
-        : [];
+      if (!form) return;
+      const schedule = form.querySelector("[data-recurring-schedule-type]");
+      const panels = form.querySelectorAll("[data-recurring-panel]");
+      const input = form.querySelector("[data-recurring-interval]");
+      const dayInputs = form.querySelectorAll('input[name="recurring_days"]');
+      if (!schedule || !input) return;
 
       const validateSchedule = () => {
+        input.setCustomValidity("");
+        if (dayInputs.length) dayInputs[0].setCustomValidity("");
+        if (!cb.checked) return;
+        if (schedule.value === "interval" && !String(input.value || "").trim()) {
+          input.setCustomValidity("Enter the number of days after completion.");
+        }
         const hasWeekday = Array.from(dayInputs).some((el) => el.checked);
-        const missing = cb.checked && !hasWeekday && !String(input.value || "").trim();
-        input.setCustomValidity(missing
-          ? "Choose at least one weekday or enter a repeat interval."
-          : "");
+        if (schedule.value === "weekdays" && !hasWeekday && dayInputs.length) {
+          dayInputs[0].setCustomValidity("Choose at least one weekday.");
+        }
       };
 
       const paintChips = () => {
         const v = String(input.value || "").trim();
-        row.querySelectorAll("[data-recurring-preset]").forEach((btn) => {
+        form.querySelectorAll("[data-recurring-preset]").forEach((btn) => {
           btn.classList.toggle("is-active", btn.getAttribute("data-recurring-preset") === v);
         });
       };
 
       const sync = () => {
-        if (cb.checked) {
-          fields.removeAttribute("hidden");
-          if (daysRow) daysRow.removeAttribute("hidden");
-        } else {
-          fields.setAttribute("hidden", "");
-          input.value = "";
-          if (daysRow) {
-            daysRow.setAttribute("hidden", "");
-            dayInputs.forEach((el) => { el.checked = false; });
-          }
-          paintChips();
-        }
+        schedule.disabled = !cb.checked;
+        panels.forEach((panel) => {
+          const visible = cb.checked && panel.dataset.recurringPanel === schedule.value;
+          panel.toggleAttribute("hidden", !visible);
+          panel.querySelectorAll("input, select").forEach((control) => {
+            control.disabled = !visible;
+          });
+        });
         validateSchedule();
       };
 
-      row.querySelectorAll("[data-recurring-preset]").forEach((btn) => {
+      form.querySelectorAll("[data-recurring-preset]").forEach((btn) => {
         btn.addEventListener("click", () => {
           input.value = btn.getAttribute("data-recurring-preset") || "";
-          if (!cb.checked) { cb.checked = true; sync(); }
+          cb.checked = true;
+          schedule.value = "interval";
+          sync();
           paintChips();
-          validateSchedule();
         });
       });
       input.addEventListener("input", () => { paintChips(); validateSchedule(); });
       dayInputs.forEach((el) => el.addEventListener("change", validateSchedule));
       cb.addEventListener("change", sync);
+      schedule.addEventListener("change", sync);
+      form.addEventListener("submit", validateSchedule);
       sync();
       paintChips();
     });
@@ -1221,7 +1217,8 @@
       return false;
     }
     const due = card.dataset.dueDate ? card.dataset.dueDate.slice(0, 10) : "";
-    const completed = card.dataset.completed === "1";
+    const completed = card.dataset.completed === "1"
+      || String(card.dataset.status || "").toLowerCase() === "completed";
     const completedTime = card.dataset.completedTime
       ? card.dataset.completedTime.slice(0, 10) : "";
     switch (state.smart) {

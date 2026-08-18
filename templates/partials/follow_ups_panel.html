@@ -6,11 +6,11 @@
 <section class="followups-panel">
   <header class="followups-panel-header">
     <div class="followups-panel-intro">
-      <h2>Follow-up rules</h2>
+      <h2>Completion triggers</h2>
       <p class="muted-hint">
-        When a task named the <strong>trigger</strong> is completed, a new
-        <strong>follow-up</strong> task is spawned automatically (with the
-        category, group, priority and due-offset below).
+        Completing the trigger creates the follow-up task with the configured
+        category, group, priority, and due offset. Use this for sequences such
+        as <strong>Do Laundry</strong> followed by <strong>Fold Laundry</strong>.
       </p>
     </div>
     <button
@@ -18,7 +18,7 @@
       hx-get="/follow-ups/new"
       hx-target="#modal-body"
       onclick="openModal()"
-    >+ New rule</button>
+    >+ New trigger</button>
   </header>
 
   <div class="table-wrap">

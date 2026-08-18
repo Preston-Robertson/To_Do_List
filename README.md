@@ -8,7 +8,8 @@ the shared LuigiBot repository.
 ## Highlights
 
 - **Tasks:** Kanban and compact list views, Quick Add, filters, snooze, Undo,
-  recurring schedules, projects, archive, and calendar.
+  completion triggers, interval/weekday/monthly-position recurrence, projects,
+  archive, and projected recurring occurrences on the calendar.
 - **Discipline:** daily completion controls, yearly heatmaps, streaks, weekly
   progress, and shared data with LuigiBot.
 - **Projects:** named-project timeline with scheduled and unscheduled work.
@@ -140,6 +141,9 @@ interactive installs can use an existing GitHub CLI login; headless services
 should set `LUIGI_WEB_LLM_API_KEY` to a supported fine-grained GitHub token.
 Legacy configurations that still name the retired GitHub Models endpoint are
 automatically routed through the Copilot SDK using their existing GitHub token.
+If that configured token is rejected before any task tool runs, Luigi Web
+retries once with the service account's existing Copilot login. Failures name
+which authentication methods were unavailable without exposing credentials.
 
 ## Future features
 

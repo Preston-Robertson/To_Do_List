@@ -8,16 +8,19 @@
   {% endif %}
   hx-swap="none"
 >
-  <h2>{{ 'New follow-up' if is_new else 'Edit follow-up' }}</h2>
+  <h2>{{ 'New completion trigger' if is_new else 'Edit completion trigger' }}</h2>
 
   <label>
-    Trigger task (name of the task that spawns this)
-    <input type="text" name="trigger_task" required value="{{ f.trigger_task or '' }}">
+    When this task is completed
+    <input type="text" name="trigger_task" list="trigger-task-options" required value="{{ f.trigger_task or '' }}" placeholder="Do Laundry">
+    <datalist id="trigger-task-options">
+      {% for task_name in trigger_tasks %}<option value="{{ task_name }}"></option>{% endfor %}
+    </datalist>
   </label>
 
   <label>
-    Follow-up task
-    <input type="text" name="follow_up_task" required value="{{ f.follow_up_task or '' }}">
+    Create this task
+    <input type="text" name="follow_up_task" required value="{{ f.follow_up_task or '' }}" placeholder="Fold Laundry">
   </label>
 
   <div class="form-row">
@@ -52,8 +55,8 @@
       <input type="number" step="0.25" min="0" name="estimated_time" value="{{ f.estimated_time or '' }}">
     </label>
     <label>
-      Due offset (days from trigger)
-      <input type="number" name="due_offset_days" value="{{ f.due_offset_days if f.due_offset_days is not none else '' }}">
+      Due after completion (days)
+      <input type="number" name="due_offset_days" min="0" value="{{ f.due_offset_days if f.due_offset_days is not none else '' }}" placeholder="0 = due today">
     </label>
   </div>
 

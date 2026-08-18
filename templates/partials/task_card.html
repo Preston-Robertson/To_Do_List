@@ -5,7 +5,7 @@
    with zero server round-trips. Keep them lowercase; the JS lowercases the
    user's search query for comparison. #}
 {% set _reactivates = reactivation_date(t) %}
-{% set _weekday_labels = recurring_days_labels(t.recurring_days) %}
+{% set _schedule_label = recurrence_schedule_label(t) %}
 {% set card_endpoint = t._endpoint_root or endpoint_root %}
 <article
   class="card{% if t.completed %} card-completed{% endif %}"
@@ -19,7 +19,7 @@
   data-task-group="{{ (t.task_group or '')|lower }}"
   data-sub-group="{{ (t.sub_group or '')|lower }}"
   data-due-date="{{ t.due_date or '' }}"
-  data-completed="{{ t.completed or 0 }}"
+  data-completed="{{ 1 if t.completed else 0 }}"
   data-completed-time="{{ t.completed_time or '' }}"
   data-recurring="{{ t.recurring or 0 }}"
   data-recurring-interval="{{ t.recurring_interval or '' }}"
@@ -39,18 +39,11 @@
     {% if t.sub_group %}<span class="chip chip-muted">{{ t.sub_group }}</span>{% endif %}
     {% if t.estimated_time %}<span class="chip chip-muted">~{{ t.estimated_time }}h</span>{% endif %}
     {% if t.recurring %}<span class="chip chip-recurring">↻ Recurring</span>{% endif %}
-    {% if _weekday_labels %}
-      {# Recurring schedule chip; visible whether or not the card is completed
-         so the user can see the plan at a glance. #}
+    {% if t.recurring and _schedule_label %}
       <span
         class="chip chip-recurring"
-        title="Recurs on these weekdays"
-      >{{ _weekday_labels|join(' · ') }}</span>
-    {% elif t.recurring and t.recurring_interval %}
-      <span
-        class="chip chip-recurring"
-        title="Recurring interval"
-      >every {{ t.recurring_interval }}d</span>
+        title="Recurrence schedule"
+      >{{ _schedule_label }}</span>
     {% endif %}
     {% if _reactivates %}
       {# Only rendered for completed recurring rows with a valid schedule;

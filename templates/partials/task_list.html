@@ -12,6 +12,7 @@
 
     {% for t in rows %}
       {% set row_endpoint = t._endpoint_root or endpoint_root %}
+      {% set schedule_label = recurrence_schedule_label(t) %}
       <article
         class="task-list-row{% if t.completed %} is-completed{% endif %}"
         role="row"
@@ -24,7 +25,7 @@
         data-task-group="{{ (t.task_group or '')|lower }}"
         data-sub-group="{{ (t.sub_group or '')|lower }}"
         data-due-date="{{ t.due_date or '' }}"
-        data-completed="{{ t.completed or 0 }}"
+        data-completed="{{ 1 if t.completed else 0 }}"
         data-completed-time="{{ t.completed_time or '' }}"
         data-reactivation-date="{{ reactivation_date(t) or '' }}"
       >
@@ -34,6 +35,7 @@
             hx-target="#modal-body" onclick="openModal()">{{ t.task }}</button>
           <div class="task-list-submeta">
             {% if t.recurring %}<span class="chip chip-recurring">↻ Recurring</span>{% endif %}
+            {% if t.recurring and schedule_label %}<span>{{ schedule_label }}</span>{% endif %}
             {% if t.task_group %}<span>{{ t.task_group }}</span>{% endif %}
             {% if t.sub_group %}<span>· {{ t.sub_group }}</span>{% endif %}
           </div>

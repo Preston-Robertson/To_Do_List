@@ -17,6 +17,7 @@ finance-export-*.csv
 finance-backup-*.json
 data/copilot/
 LOCAL_DEPLOYMENT.md
+LOCAL_FEATURE_REQUESTS.md
 
 # Python
 __pycache__/

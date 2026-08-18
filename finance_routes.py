@@ -73,12 +73,10 @@ def finance_unlock(request: Request, token: str = Form(...)):
             del response.headers["location"]
             response.headers["HX-Redirect"] = "/finance"
         return response
-    except (HTTPException, RuntimeError):
-        template_name = (
-            "partials/finance_unlock_panel.html"
-            if request.headers.get("HX-Request") == "true"
-            else "finance_unlock.html"
-        )
+    except (HTTPException, RuntimeError) as exc:
+        missing_host_token = isinstance(exc, RuntimeError)
+        is_htmx = request.headers.get("HX-Request") == "true"
+        template_name = "partials/finance_unlock_panel.html" if is_htmx else "finance_unlock.html"
         return templates.TemplateResponse(
             template_name,
             {
@@ -86,9 +84,14 @@ def finance_unlock(request: Request, token: str = Form(...)):
                 "active_nav": "finance",
                 "page_title": "Unlock Finance",
                 "configured": finance_is_configured(),
-                "error": "Finance could not be unlocked.",
+                "error": (
+                    "Finance is not configured on this host yet. This field "
+                    "unlocks an existing host token; it does not create or save one."
+                    if missing_host_token else
+                    "The Finance token is incorrect."
+                ),
             },
-            status_code=401,
+            status_code=200 if is_htmx else (503 if missing_host_token else 401),
         )
 
 
