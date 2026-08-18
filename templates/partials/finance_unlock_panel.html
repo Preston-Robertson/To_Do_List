@@ -5,7 +5,7 @@
   <h1>Unlock Finance</h1>
   <p>Finance uses a separate session and app-owned database. It is never sent to the assistant or included in global search.</p>
   {% if not configured %}
-    <div class="finance-privacy-warning">Set <code>LUIGI_WEB_FINANCE_TOKEN</code> in Admin before using Finance.</div>
+    <div class="finance-privacy-warning">Set <code>LUIGI_WEB_FINANCE_TOKEN</code> in the protected host configuration before using Finance. Authentication tokens cannot be changed in Admin.</div>
   {% endif %}
   {% if error %}<div class="admin-banner-err">{{ error }}</div>{% endif %}
   <form hx-post="/finance/unlock" hx-target="#finance-unlock-panel" hx-swap="outerHTML" class="finance-unlock-form">

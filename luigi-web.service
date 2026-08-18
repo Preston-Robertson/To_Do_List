@@ -8,8 +8,12 @@ Type=simple
 User=luigi-web
 Group=luigi-web
 WorkingDirectory=/opt/luigi-web
-# All host-specific values and secrets come from this protected file.
+# Non-authentication settings may be changed by the Admin environment editor.
 EnvironmentFile=/opt/luigi-web/luigi.env
+# Authentication secrets override any stale values in the editable file.
+# Keep this file root-owned, mode 0600, and outside ReadWritePaths.
+EnvironmentFile=/etc/luigi-web/credentials.env
+Environment=LUIGI_WEB_ENV_FILE=/opt/luigi-web/luigi.env
 # Skip pip cache — ProtectHome=true hides ~/.cache/pip anyway.
 Environment=PIP_NO_CACHE_DIR=1
 # Silence pip's version-check chatter in the journal.

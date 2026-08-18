@@ -165,6 +165,18 @@
       <span class="chip chip-muted"><code>{{ env_file_path }}</code></span>
     </header>
     <div class="widget-body">
+      {% if protected_env_keys_present %}
+        <div class="admin-banner-err">
+          <strong>Security migration required:</strong>
+          <code>{{ protected_env_keys_present|join(', ') }}</code>
+          {% if protected_env_keys_present|length == 1 %}is{% else %}are{% endif %}
+          still stored in this app-managed file. Move
+          {% if protected_env_keys_present|length == 1 %}it{% else %}them{% endif %}
+          to a root-owned systemd credential file, then remove
+          {% if protected_env_keys_present|length == 1 %}the line{% else %}those lines{% endif %}
+          from this file. Authentication tokens cannot be changed in Admin.
+        </div>
+      {% endif %}
       {% if env_read_error %}
         <div class="admin-banner-err">
           Cannot read env file: <code>{{ env_read_error }}</code>
@@ -203,6 +215,8 @@
         <p class="muted-hint">
           Secrets are masked. Leave a secret field blank to keep its current
           value — only type into it when you actually want to change it.
+          Authentication tokens are deliberately excluded and must be managed
+          in the protected host configuration.
         </p>
       {% endif %}
 

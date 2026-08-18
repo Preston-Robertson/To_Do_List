@@ -45,6 +45,14 @@ environment secrets are not exposed to the Copilot runtime.
 
 Use long, random, distinct values for the UI and Finance tokens.
 
+Authentication tokens are not editable through the web Admin page. A user who
+has the main UI session must not be able to replace the Finance credential and
+then unlock Finance. In production, load both tokens from a root-owned systemd
+environment file outside the service's writable paths. The supplied service
+example uses `/etc/luigi-web/credentials.env` with mode `0600`; it is loaded
+after the Admin-managed environment file so protected values take precedence.
+Creating or rotating either token requires host-administrator access.
+
 ## Storage and backups
 
 - Shared task data lives in the LuigiBot PostgreSQL database.

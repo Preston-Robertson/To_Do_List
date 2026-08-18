@@ -112,7 +112,25 @@ control. Core settings:
 | `LUIGI_WEB_YOUTUBE_API_KEY` | Optional playlist search |
 
 The authenticated Admin page can edit allow-listed settings and run read-only
-integration checks.
+integration checks. It deliberately cannot read or change
+`LUIGI_WEB_UI_TOKEN` or `LUIGI_WEB_FINANCE_TOKEN`: allowing the main session to
+replace either credential would defeat the Finance security boundary.
+
+For the systemd deployment, store authentication tokens in
+`/etc/luigi-web/credentials.env`, owned by `root:root` with mode `0600`:
+
+```text
+LUIGI_WEB_UI_TOKEN=<long-random-ui-token>
+LUIGI_WEB_FINANCE_TOKEN=<different-long-random-finance-token>
+```
+
+Generate each value independently with a password manager or with
+`python3 -c "import secrets; print(secrets.token_urlsafe(32))"`. The service
+example loads this protected file after the Admin-managed
+`/opt/luigi-web/luigi.env`, so protected values take precedence. After moving
+the current values, remove both token lines from the Admin-managed file, run
+`systemctl daemon-reload`, and restart the service. Token rotation is
+intentionally a host-administrator operation rather than a web action.
 
 GitHub Models was retired on July 30, 2026. Use
 `LUIGI_WEB_LLM_PROVIDER=copilot` to authenticate through the official GitHub

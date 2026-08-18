@@ -2030,6 +2030,9 @@ def admin_page(request: Request):
             "env_unwritable_reason": unwritable_reason,
             "env_read_error": env_read_error,
             "env_groups": env_file.grouped_view(current_env),
+            "protected_env_keys_present": sorted(
+                env_file.PROTECTED_KEYS.intersection(current_env)
+            ),
             "gnw": gnw.credentials_status(),
         },
     )
@@ -2238,7 +2241,6 @@ async def admin_env_save(request: Request):
 # Keys we can safely apply live by mutating os.environ + rebuilding singletons.
 # Anything not listed here still needs a systemctl restart to take effect.
 _HOT_RELOADABLE = {
-    "LUIGI_WEB_UI_TOKEN",           # auth.py reads os.environ per-request
     "LUIGI_WEB_LLM_PROVIDER",
     "LUIGI_WEB_LLM_BASE_URL",
     "LUIGI_WEB_LLM_API_KEY",

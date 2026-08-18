@@ -37,6 +37,11 @@ _KEY_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 # Full "KEY=..." line matcher (ignores leading spaces so `#` comments are safe).
 _LINE_RE = re.compile(r"^(?P<key>[A-Z_][A-Z0-9_]*)\s*=\s*(?P<val>.*)$")
 
+PROTECTED_KEYS = frozenset({
+    "LUIGI_WEB_UI_TOKEN",
+    "LUIGI_WEB_FINANCE_TOKEN",
+})
+
 
 @dataclass(frozen=True)
 class EnvKey:
@@ -57,9 +62,9 @@ KNOWN_KEYS: tuple[EnvKey, ...] = (
     EnvKey("LUIGI_WEB_PG_DB",       "Postgres database", "Usually 'luigi_todo'.",                          "Postgres"),
     EnvKey("LUIGI_WEB_PG_USER",     "Postgres user",     "Role the GUI connects as (e.g. luigi_web).",     "Postgres"),
     EnvKey("LUIGI_WEB_PG_PASSWORD", "Postgres password", "Password for the DB role. Blank = keep current.", "Postgres", is_secret=True),
-    # Web / auth ------------------------------------------------------------
-    EnvKey("LUIGI_WEB_UI_TOKEN",    "UI token",          "Shared login token. Blank = keep current.",      "Web",      is_secret=True),
-    EnvKey("LUIGI_WEB_FINANCE_TOKEN", "Finance token",   "Separate token required to unlock Finance. Blank = keep current.", "Web", is_secret=True),
+    # Web -------------------------------------------------------------------
+    # PROTECTED_KEYS are intentionally excluded. They define the security
+    # boundary for this editor and must be managed outside the app.
     EnvKey("LUIGI_WEB_SECURE_COOKIES", "Secure cookies", "Set to 1 when the app is served over HTTPS.", "Web"),
     EnvKey("LUIGI_WEB_BIND",        "Bind address",      "Uvicorn bind address (default 0.0.0.0).",        "Web"),
     EnvKey("LUIGI_WEB_PORT",        "Bind port",         "Uvicorn port (default 8080).",                   "Web",      input_type="number"),
