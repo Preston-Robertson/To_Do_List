@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#12151a">
   <title>{{ page_title }} · LuigiBot</title>
-  <link rel="icon" href="/static/icons/luigi-mark.svg" type="image/svg+xml">
+  <link rel="icon" href="/static/icons/luigi-mark.svg?v={{ asset_version }}" type="image/svg+xml">
   <link rel="manifest" href="/static/site.webmanifest">
   <link rel="stylesheet" href="/static/css/app.css?v={{ asset_version }}">
   <script src="/static/js/vendor/htmx.min.js?v={{ asset_version }}" defer></script>
@@ -18,7 +18,7 @@
     <aside class="sidebar" id="app-sidebar" aria-label="Primary navigation">
       <div class="sidebar-brand">
         <a href="/home" class="brand-link" title="LuigiBot Home">
-          <img class="brand-mark" src="/static/icons/luigi-mark.svg" alt="">
+          <img class="brand-mark" src="/static/icons/luigi-mark.svg?v={{ asset_version }}" alt="">
           <span class="brand-copy">
             <strong>LuigiBot</strong>
             <small>Command center</small>

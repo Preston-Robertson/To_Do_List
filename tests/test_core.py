@@ -377,16 +377,28 @@ class LlmTests(unittest.TestCase):
         self.assertEqual(provider.calls, 2)
         self.assertIn("tool-call cap", result.reply)
 
-    def test_retired_github_models_endpoint_is_disabled_with_migration(self) -> None:
+    def test_retired_github_models_endpoint_migrates_to_copilot(self) -> None:
         with patch.dict(os.environ, {
             "LUIGI_WEB_LLM_PROVIDER": "openai",
             "LUIGI_WEB_LLM_BASE_URL": "https://models.github.ai/inference",
             "LUIGI_WEB_LLM_API_KEY": "github-token",
+            "LUIGI_WEB_LLM_MODEL": "openai/gpt-4o-mini",
         }, clear=True):
             provider = llm.build_provider_from_env()
-        self.assertIsInstance(provider, llm.DisabledProvider)
-        self.assertIn("retired", provider.reason)
-        self.assertIn("copilot", provider.reason)
+        self.assertIsInstance(provider, llm.CopilotSDKProvider)
+        self.assertEqual(provider.github_token, "github-token")
+        self.assertEqual(provider.model, "auto")
+
+    def test_copilot_can_use_existing_cli_login_without_api_key(self) -> None:
+        with patch.dict(os.environ, {
+            "LUIGI_WEB_LLM_PROVIDER": "copilot",
+            "LUIGI_WEB_LLM_API_KEY": "",
+            "LUIGI_WEB_LLM_MODEL": "",
+        }, clear=True):
+            provider = llm.build_provider_from_env()
+        self.assertIsInstance(provider, llm.CopilotSDKProvider)
+        self.assertIsNone(provider.github_token)
+        self.assertEqual(provider.model, "auto")
 
     def test_copilot_sdk_exposes_only_custom_allow_list(self) -> None:
         captured: dict[str, object] = {}
@@ -399,6 +411,7 @@ class LlmTests(unittest.TestCase):
                 captured["prompt"] = prompt
                 invocation = SimpleNamespace(arguments={"limit": 2})
                 captured["tool_result"] = self.options["tools"][0].handler(invocation)
+                captured["blocked_tool_result"] = self.options["tools"][0].handler(invocation)
                 return SimpleNamespace(data=SimpleNamespace(content="Two tasks found."))
 
             async def disconnect(self):
@@ -432,7 +445,10 @@ class LlmTests(unittest.TestCase):
                 timeout=5,
                 base_directory=temp_dir,
             )
-            with patch("copilot.CopilotClient", FakeClient):
+            with (
+                patch("copilot.CopilotClient", FakeClient),
+                patch.dict(os.environ, {"LUIGI_WEB_LLM_MAX_TOOL_ITERATIONS": "1"}),
+            ):
                 result = llm.run_chat_with_tools(
                     provider,
                     [
@@ -444,15 +460,22 @@ class LlmTests(unittest.TestCase):
 
         session = captured["session"]
         self.assertEqual(captured["client"]["mode"], "empty")
+        self.assertFalse(captured["client"]["use_logged_in_user"])
+        child_env = captured["client"]["env"]
+        self.assertIn("COPILOT_CLI_EXTRACT_DIR", child_env)
+        self.assertNotIn("LUIGI_WEB_PG_PASSWORD", child_env)
+        self.assertNotIn("LUIGI_WEB_FINANCE_TOKEN", child_env)
         self.assertEqual(session["available_tools"], ["custom:*"])
         self.assertEqual(session["mcp_servers"], {})
         self.assertFalse(session["enable_file_hooks"])
         self.assertFalse(session["enable_host_git_operations"])
         self.assertFalse(session["enable_skills"])
         self.assertEqual(calls, [{"limit": 2}])
+        self.assertIn("tool-call cap reached", captured["blocked_tool_result"])
         self.assertEqual(result.reply, "Two tasks found.")
         self.assertEqual(result.tool_calls[0].name, "list_open_tasks")
         self.assertTrue(result.tool_calls[0].ok)
+        self.assertFalse(result.tool_calls[1].ok)
 
 
 class GanttTests(unittest.TestCase):

@@ -69,7 +69,7 @@ KNOWN_KEYS: tuple[EnvKey, ...] = (
     # LLM chat --------------------------------------------------------------
     EnvKey("LUIGI_WEB_LLM_PROVIDER",           "LLM provider",  "'copilot' (GitHub subscription), 'openai', or 'disabled'.", "LLM"),
     EnvKey("LUIGI_WEB_LLM_BASE_URL",           "LLM base URL",  "Used only for an OpenAI-compatible /chat/completions endpoint.", "LLM", input_type="url"),
-    EnvKey("LUIGI_WEB_LLM_API_KEY",            "GitHub token / API key", "For Copilot, use a fine-grained GitHub token for an account with Copilot access. Blank on save = keep current.", "LLM", is_secret=True),
+    EnvKey("LUIGI_WEB_LLM_API_KEY",            "GitHub token / API key", "For headless Copilot, use a fine-grained GitHub token for an account with Copilot access. Blank uses an existing CLI login or keeps the current secret on save.", "LLM", is_secret=True),
     EnvKey("LUIGI_WEB_LLM_MODEL",              "LLM model",     "Blank lets Copilot choose; OpenAI-compatible providers require a model name.", "LLM"),
     EnvKey("LUIGI_WEB_LLM_TIMEOUT",            "LLM timeout",   "HTTP timeout in seconds (default 60).",           "LLM", input_type="number"),
     EnvKey("LUIGI_WEB_LLM_MAX_TOOL_ITERATIONS","LLM tool cap",  "Max tool round-trips per user turn (default 5).", "LLM", input_type="number"),

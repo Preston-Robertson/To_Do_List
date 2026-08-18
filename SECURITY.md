@@ -22,9 +22,18 @@ is not retained as an uploaded file.
 
 ## LLM isolation
 
+Assistant prompts, chat history, and results from the allow-listed task tools
+are sent to the configured provider. With `LUIGI_WEB_LLM_PROVIDER=copilot`,
+that provider is GitHub Copilot and usage is governed by the authenticated
+account or organization policy.
+
 Finance routes and repository functions are not registered as LLM tools and are
 not included in global search or chat context. Do not add finance access to the
 assistant without an explicit, separately reviewed opt-in design.
+
+The Copilot SDK runs in empty mode with only Luigi Web's custom task tools.
+Shell, filesystem, web, MCP, skills, host instructions, and unrelated process
+environment secrets are not exposed to the Copilot runtime.
 
 ## Authentication
 

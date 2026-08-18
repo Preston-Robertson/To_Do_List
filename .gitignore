@@ -15,6 +15,7 @@ finance.db-*
 *.finance.csv
 finance-export-*.csv
 finance-backup-*.json
+data/copilot/
 LOCAL_DEPLOYMENT.md
 
 # Python

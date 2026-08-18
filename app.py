@@ -301,12 +301,13 @@ def login_submit(token: str = Form(...)):
 
 
 def _login_error_html() -> str:
+    asset_version = _asset_version()
     return (
         "<!doctype html><meta charset=utf-8><title>Login</title>"
-        "<link rel='icon' href='/static/icons/luigi-mark.svg' type='image/svg+xml'>"
+        f"<link rel='icon' href='/static/icons/luigi-mark.svg?v={asset_version}' type='image/svg+xml'>"
         "<link rel='stylesheet' href='/static/css/app.css'>"
         "<main class='login-page'><form method='post' action='/login' class='login-form'>"
-        "<h1><img class='login-mark' src='/static/icons/luigi-mark.svg' alt=''> Luigi Web</h1>"
+        f"<h1><img class='login-mark' src='/static/icons/luigi-mark.svg?v={asset_version}' alt=''> Luigi Web</h1>"
         "<p class='error'>Invalid token.</p>"
         "<label>Token <input type='password' name='token' autofocus required></label>"
         "<button type='submit'>Sign in</button></form></main>"

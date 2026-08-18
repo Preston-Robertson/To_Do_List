@@ -117,7 +117,11 @@ integration checks.
 GitHub Models was retired on July 30, 2026. Use
 `LUIGI_WEB_LLM_PROVIDER=copilot` to authenticate through the official GitHub
 Copilot SDK and consume the configured account's Copilot allowance. The SDK is
-run in empty mode and receives only Luigi Web's existing task tools.
+run in empty mode and receives only Luigi Web's existing task tools. Local
+interactive installs can use an existing GitHub CLI login; headless services
+should set `LUIGI_WEB_LLM_API_KEY` to a supported fine-grained GitHub token.
+Legacy configurations that still name the retired GitHub Models endpoint are
+automatically routed through the Copilot SDK using their existing GitHub token.
 
 ## Future features
 

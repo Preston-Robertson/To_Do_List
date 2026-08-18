@@ -173,7 +173,7 @@ class CopilotSDKProvider:
 
     name = "github-copilot"
 
-    def __init__(self, github_token: str, model: str, timeout: float,
+    def __init__(self, github_token: str | None, model: str, timeout: float,
                  base_directory: str):
         self.github_token = github_token
         self.model = model or "auto"
@@ -199,7 +199,10 @@ class CopilotSDKProvider:
         return system, "\n\n".join(transcript)
 
     def _safe_error(self, exc: Exception) -> str:
-        detail = str(exc).replace(self.github_token, "[redacted]")[:500]
+        detail = str(exc)
+        if self.github_token:
+            detail = detail.replace(self.github_token, "[redacted]")
+        detail = detail[:500]
         if "auth" in detail.lower() or "401" in detail or "403" in detail:
             return (
                 "GitHub Copilot authentication failed. The configured token must "
@@ -224,9 +227,13 @@ class CopilotSDKProvider:
         Path(self.base_directory).mkdir(parents=True, exist_ok=True)
         audit: list[ToolCallRecord] = []
         audit_lock = threading.Lock()
+        tool_call_limit = _max_tool_iterations()
+        tool_calls_started = 0
+        cap_recorded = False
 
         def adapt_tool(tool: Tool):
             def handler(invocation):
+                nonlocal tool_calls_started, cap_recorded
                 raw_arguments = getattr(invocation, "arguments", {}) or {}
                 if isinstance(raw_arguments, str):
                     try:
@@ -235,6 +242,19 @@ class CopilotSDKProvider:
                         arguments = {}
                 else:
                     arguments = dict(raw_arguments)
+                with audit_lock:
+                    if tool_calls_started >= tool_call_limit:
+                        error = f"tool-call cap reached ({tool_call_limit})"
+                        if not cap_recorded:
+                            audit.append(ToolCallRecord(
+                                name=tool.name,
+                                arguments=arguments,
+                                ok=False,
+                                error=error,
+                            ))
+                            cap_recorded = True
+                        return json.dumps({"ok": False, "error": error})
+                    tool_calls_started += 1
                 try:
                     result = tool.handler(arguments)
                     record = ToolCallRecord(
@@ -271,13 +291,27 @@ class CopilotSDKProvider:
             )
 
         system_message, prompt = self._prompt(messages)
-        client = CopilotClient(
-            mode="empty",
-            github_token=self.github_token,
-            use_logged_in_user=False,
-            base_directory=self.base_directory,
-            log_level="error",
-        )
+        runtime_env = _copilot_runtime_env(self.base_directory)
+        extract_dir = runtime_env["COPILOT_CLI_EXTRACT_DIR"]
+        previous_extract_dir = os.environ.get("COPILOT_CLI_EXTRACT_DIR")
+        os.environ["COPILOT_CLI_EXTRACT_DIR"] = extract_dir
+        try:
+            # The Python SDK resolves/downloads its checksum-verified CLI in
+            # the constructor. Point that one operation at writable app data;
+            # ProtectHome=true makes the SDK's ~/.cache default unavailable.
+            client = CopilotClient(
+                mode="empty",
+                github_token=self.github_token,
+                use_logged_in_user=not bool(self.github_token),
+                base_directory=self.base_directory,
+                env=runtime_env,
+                log_level="error",
+            )
+        finally:
+            if previous_extract_dir is None:
+                os.environ.pop("COPILOT_CLI_EXTRACT_DIR", None)
+            else:
+                os.environ["COPILOT_CLI_EXTRACT_DIR"] = previous_extract_dir
         session = None
         try:
             await asyncio.wait_for(client.start(), timeout=self.timeout)
@@ -373,12 +407,12 @@ def build_provider_from_env() -> LLMProvider:
         timeout = 60.0
     timeout = min(max(timeout, 1.0), 600.0)
 
-    if provider == "copilot":
-        if not api_key:
-            return DisabledProvider(
-                "GitHub Copilot needs a fine-grained GitHub token in "
-                "LUIGI_WEB_LLM_API_KEY."
-            )
+    configured_base_url = os.environ.get("LUIGI_WEB_LLM_BASE_URL", "").strip()
+    retired_github_models = (
+        configured_base_url.rstrip("/").lower()
+        == "https://models.github.ai/inference"
+    )
+    if provider == "copilot" or retired_github_models:
         model = os.environ.get("LUIGI_WEB_LLM_MODEL", "").strip()
         if model.startswith("openai/") or model.startswith("<"):
             model = ""
@@ -386,7 +420,7 @@ def build_provider_from_env() -> LLMProvider:
         if not base_directory:
             base_directory = str(Path(__file__).resolve().parent / "data" / "copilot")
         return CopilotSDKProvider(
-            github_token=api_key,
+            github_token=api_key or None,
             model=model,
             timeout=timeout,
             base_directory=base_directory,
@@ -398,14 +432,7 @@ def build_provider_from_env() -> LLMProvider:
         )
     if not api_key:
         return DisabledProvider("OpenAI-compatible provider API key is not configured.")
-    base_url = os.environ.get(
-        "LUIGI_WEB_LLM_BASE_URL", "https://api.openai.com/v1"
-    ).strip()
-    if base_url.rstrip("/").lower() == "https://models.github.ai/inference":
-        return DisabledProvider(
-            "GitHub Models was retired on July 30, 2026. Change "
-            "LUIGI_WEB_LLM_PROVIDER to 'copilot' to use a GitHub Copilot subscription."
-        )
+    base_url = configured_base_url or "https://api.openai.com/v1"
     model = os.environ.get("LUIGI_WEB_LLM_MODEL", "gpt-4o-mini").strip()
     if base_url.startswith("https://api.openai.com/") and model.startswith("openai/"):
         model = model.removeprefix("openai/")
@@ -518,6 +545,26 @@ _HISTORY: dict[str, list[Message]] = {}
 _HISTORY_MAX = 64           # keep only the most-recent N messages per session
 _HISTORY_SESSIONS_MAX = 64  # evict oldest session when this many exist
 _HISTORY_LOCK = threading.RLock()
+
+_COPILOT_ENV_ALLOW_LIST = {
+    "ALL_PROXY", "APPDATA", "COMSPEC", "GH_CONFIG_DIR", "GH_HOST",
+    "GITHUB_CONFIG_DIR", "HOME", "HTTPS_PROXY", "HTTP_PROXY", "LANG",
+    "LC_ALL", "LOCALAPPDATA", "NO_PROXY", "PATH", "PATHEXT",
+    "SSL_CERT_DIR", "SSL_CERT_FILE", "SYSTEMROOT", "TEMP", "TMP",
+    "USERPROFILE", "WINDIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
+}
+
+
+def _copilot_runtime_env(base_directory: str) -> dict[str, str]:
+    runtime_env = {
+        key: value
+        for key, value in os.environ.items()
+        if key.upper() in _COPILOT_ENV_ALLOW_LIST and value
+    }
+    runtime_env["COPILOT_CLI_EXTRACT_DIR"] = str(
+        Path(base_directory) / "runtime"
+    )
+    return runtime_env
 
 
 def get_history(session_id: str) -> list[Message]:

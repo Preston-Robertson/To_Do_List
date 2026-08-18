@@ -5,14 +5,14 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#12151a">
   <title>Sign in · LuigiBot</title>
-  <link rel="icon" href="/static/icons/luigi-mark.svg" type="image/svg+xml">
+  <link rel="icon" href="/static/icons/luigi-mark.svg?v={{ asset_version }}" type="image/svg+xml">
   <link rel="manifest" href="/static/site.webmanifest">
   <link rel="stylesheet" href="/static/css/app.css">
 </head>
 <body class="login-page">
   <main>
     <form method="post" action="/login" class="login-form">
-      <h1><img class="login-mark" src="/static/icons/luigi-mark.svg" alt=""> Luigi Web</h1>
+      <h1><img class="login-mark" src="/static/icons/luigi-mark.svg?v={{ asset_version }}" alt=""> Luigi Web</h1>
       {% if error %}<p class="error">{{ error }}</p>{% endif %}
       <label>
         Token

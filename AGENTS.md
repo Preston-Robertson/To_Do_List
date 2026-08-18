@@ -55,6 +55,7 @@ web-only features, including Finance.
 - `db.py`: LuigiBot shared-schema adapter.
 - `finance.py`: app-owned finance repository, imports, reports, and audit log.
 - `gnw.py`: Game'N'Watch Google Sheets and public catalog integrations.
+- `llm.py`: OpenAI-compatible and isolated GitHub Copilot providers.
 - `env_file.py`: allow-listed Admin environment editor.
 - `templates/`: server-rendered pages and HTMX partials.
 - `static/`: local CSS, JavaScript, icons, and vendored browser libraries.
