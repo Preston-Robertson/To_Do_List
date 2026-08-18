@@ -8,11 +8,15 @@ data domains behind one authenticated interface.
 
 | Domain | Storage owner | Adapter |
 |---|---|---|
-| Tasks, recurring tasks, Discipline, follow-up rules | LuigiBot PostgreSQL schema | `db.py` |
-| Finance | Luigi Web SQLite database | `finance.py` |
-| Games and shows | Game'N'Watch Google Sheet | `gnw.py` |
-| Chat history | Process memory | `llm.py` |
-| Web-only task metadata fallback | Gitignored JSON | `db.py` |
+| Tasks, recurring tasks, Discipline, follow-up rules | LuigiBot PostgreSQL schema | `luigi_web/db.py` |
+| Finance | Luigi Web SQLite database | `luigi_web/finance.py` |
+| Games and shows | Game'N'Watch Google Sheet | `luigi_web/gnw.py` |
+| Chat history | Process memory | `luigi_web/llm.py` |
+| Web-only task metadata fallback | Gitignored JSON | `luigi_web/db.py` |
+
+Production code lives in the `luigi_web/` package. Root `app.py` is a small
+compatibility entry point so existing `uvicorn app:app` development commands
+and systemd deployments continue to work without a coordinated cutover.
 
 ## Shared LuigiBot schema
 

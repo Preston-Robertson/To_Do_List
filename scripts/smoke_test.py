@@ -9,7 +9,7 @@ Usage (PowerShell):
     $env:LUIGI_WEB_PG_DB="luigi_todo"
     $env:LUIGI_WEB_PG_USER="luigi_web"
     $env:LUIGI_WEB_PG_PASSWORD="<paste-only-here-do-not-commit>"
-    python scripts\smoke_test.py
+    python scripts\\smoke_test.py
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sqlalchemy import text  # noqa: E402
 
-import db  # noqa: E402
+from luigi_web import db  # noqa: E402
 
 
 def main() -> int:

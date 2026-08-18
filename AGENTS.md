@@ -50,13 +50,17 @@ web-only features, including Finance.
 
 ## Architecture
 
-- `app.py`: routes and view-model shaping.
-- `auth.py`: main session, finance unlock, and CSRF helpers.
-- `db.py`: LuigiBot shared-schema adapter.
-- `finance.py`: app-owned finance repository, imports, reports, and audit log.
-- `gnw.py`: Game'N'Watch Google Sheets and public catalog integrations.
-- `llm.py`: OpenAI-compatible and isolated GitHub Copilot providers.
-- `env_file.py`: allow-listed Admin environment editor.
+- `app.py`: compatibility entry point for existing `uvicorn app:app` deployments.
+- `luigi_web/application.py`: routes, startup, and view-model shaping.
+- `luigi_web/auth.py`: main session, finance unlock, and CSRF helpers.
+- `luigi_web/db.py`: LuigiBot shared-schema adapter.
+- `luigi_web/finance.py`: app-owned Finance repository, imports, reports, and audit log.
+- `luigi_web/finance_routes.py`: separately authenticated Finance HTTP routes.
+- `luigi_web/gnw.py`: Game'N'Watch Google Sheets and public catalog integrations.
+- `luigi_web/llm.py`: OpenAI-compatible and isolated GitHub Copilot providers.
+- `luigi_web/env_file.py`: allow-listed Admin environment editor.
+- `luigi_web/recurrence.py`: dependency-free recurrence and calendar projection math.
+- `luigi_web/paths.py`: repository-root filesystem anchors shared after packaging.
 - `templates/`: server-rendered pages and HTMX partials.
 - `static/`: local CSS, JavaScript, icons, and vendored browser libraries.
 - `tests/`: offline regression tests using synthetic data only.

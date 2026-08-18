@@ -32,6 +32,8 @@ from typing import Any
 
 import httpx
 
+from .paths import GNW_CREDENTIALS_PATH, PROJECT_ROOT
+
 # gspread + google-auth are optional. Import lazily-tolerant so the whole app
 # doesn't fail to boot on a box where they aren't installed yet.
 try:  # pragma: no cover - import shape depends on the environment
@@ -111,8 +113,8 @@ _CACHE_TTL = 20.0  # seconds
 # ReadWritePaths (=/opt/luigi-web) — meaning the app can WRITE it from the
 # Admin page without any host-side file juggling. /etc is read-only to the
 # service (ProtectSystem=strict), so we deliberately don't default there.
-_REPO_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_CREDS_PATH = os.path.join(_REPO_DIR, "gnw-credentials.json")
+_REPO_DIR = str(PROJECT_ROOT)
+DEFAULT_CREDS_PATH = str(GNW_CREDENTIALS_PATH)
 
 _SHEET_URL_ID_RE = re.compile(r"/spreadsheets/d/([A-Za-z0-9_-]+)")
 

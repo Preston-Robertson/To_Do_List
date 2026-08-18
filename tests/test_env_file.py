@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import env_file
+from luigi_web import env_file
 
 
 class EnvFileSecurityTests(unittest.TestCase):

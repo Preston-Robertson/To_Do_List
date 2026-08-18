@@ -108,7 +108,7 @@ def main() -> int:
         return 1
 
     from sqlalchemy import text  # noqa: E402
-    import db  # noqa: E402
+    from luigi_web import db  # noqa: E402
 
     engine = db.get_engine()
 

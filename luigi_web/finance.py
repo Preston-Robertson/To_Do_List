@@ -22,6 +22,8 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any, Iterator
 
+from .paths import DATA_DIR
+
 _DB_LOCK = threading.RLock()
 _IMPORT_LOCK = threading.Lock()
 _IMPORT_TTL_SECONDS = 15 * 60
@@ -38,7 +40,7 @@ def db_path() -> Path:
     configured = os.environ.get("LUIGI_WEB_FINANCE_DB", "").strip()
     if configured:
         return Path(configured).expanduser().resolve()
-    return (Path(__file__).resolve().parent / "data" / "finance.db").resolve()
+    return (DATA_DIR / "finance.db").resolve()
 
 
 def base_currency() -> str:

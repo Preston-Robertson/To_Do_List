@@ -10,10 +10,8 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 
-import app
-import auth
-import chat_tools
-import finance
+from luigi_web import application as app
+from luigi_web import auth, chat_tools, finance
 
 
 class FinanceRepositoryTests(unittest.TestCase):

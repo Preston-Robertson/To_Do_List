@@ -34,6 +34,8 @@ from typing import Any, Callable, Iterable, Protocol
 
 import httpx
 
+from .paths import COPILOT_DATA_DIR
+
 
 # --------------------------------------------------------------------------- #
 # Public types
@@ -447,7 +449,7 @@ def build_provider_from_env() -> LLMProvider:
             model = ""
         base_directory = os.environ.get("LUIGI_WEB_COPILOT_HOME", "").strip()
         if not base_directory:
-            base_directory = str(Path(__file__).resolve().parent / "data" / "copilot")
+            base_directory = str(COPILOT_DATA_DIR)
         return CopilotSDKProvider(
             github_token=api_key or None,
             model=model,

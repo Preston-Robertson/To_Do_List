@@ -25,7 +25,8 @@ from typing import Any, Iterable
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine, URL
 
-import recurrence as recurrence_rules
+from . import recurrence as recurrence_rules
+from .paths import TASK_METADATA_PATH
 
 
 # --------------------------------------------------------------------------- #
@@ -86,7 +87,7 @@ _TABLES_MISSING_COLUMNS: dict[str, set[str]] = {}
 # Tables the web app is willing to run ALTERs against. Used both for the
 # startup migration and by restore_task_row's safety check.
 _TASK_LIKE_TABLES = ("tasks", "recurring_tasks")
-_WEB_META_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "task-web-metadata.json")
+_WEB_META_PATH = str(TASK_METADATA_PATH)
 _WEB_META_LOCK = threading.Lock()
 
 

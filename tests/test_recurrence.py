@@ -4,7 +4,7 @@ from __future__ import annotations
 import unittest
 from datetime import date
 
-import recurrence
+from luigi_web import recurrence
 
 
 class MonthlyRecurrenceTests(unittest.TestCase):

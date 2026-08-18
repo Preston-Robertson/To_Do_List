@@ -171,6 +171,10 @@ Run the offline regression suite:
 python -m unittest discover -s tests -v
 ```
 
+Application code lives in the `luigi_web/` package. Root `app.py` intentionally
+remains as the stable `uvicorn app:app` compatibility entry point used by local
+development and the supplied systemd service.
+
 The tests use synthetic data only and do not require live PostgreSQL, Google,
 Steam, bank, or LLM credentials.
 

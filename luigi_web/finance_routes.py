@@ -14,8 +14,8 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
-import finance
-from auth import (
+from . import finance
+from .auth import (
     finance_is_configured,
     finance_lock_response,
     finance_unlock_response,
@@ -23,8 +23,10 @@ from auth import (
     require_finance_auth,
 )
 
+from .paths import TEMPLATES_DIR
+
 router = APIRouter()
-templates = Jinja2Templates(directory="templates")
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 _AUTH = [Depends(require_auth), Depends(require_finance_auth)]
 
 

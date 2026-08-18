@@ -1,0 +1,2480 @@
+"""LuigiBot to-do web GUI — FastAPI app.
+
+Server-rendered HTML + HTMX partials. Kanban board for tasks/recurring,
+GitHub-style heatmap for discipline, plain table for follow-ups.
+
+All routes except ``/healthz`` and the login pages require the shared token.
+See ``auth.py`` for the auth model.
+"""
+from __future__ import annotations
+
+import os
+import logging
+import shlex
+import subprocess
+import sys
+import signal
+import threading
+import time
+import calendar as calendar_mod
+from datetime import date, timedelta
+from pathlib import Path
+from typing import Any
+
+from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+
+from . import db
+from . import recurrence
+from .auth import (
+    COOKIE_NAME,
+    CSRF_COOKIE_NAME,
+    csrf_matches,
+    csrf_token,
+    finance_is_configured,
+    login_response,
+    logout_response,
+    require_auth,
+    secure_cookies,
+)
+
+app = FastAPI(
+    title="LuigiBot Web GUI",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
+logger = logging.getLogger("luigi_web.app")
+from .paths import PROJECT_ROOT, STATIC_DIR, TEMPLATES_DIR
+
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+
+@app.middleware("http")
+async def csrf_middleware(request: Request, call_next):
+    """Double-submit CSRF protection for authenticated browser mutations."""
+    if (
+        request.method in {"POST", "PUT", "PATCH", "DELETE"}
+        and request.url.path not in {"/login", "/logout"}
+        and request.cookies.get(COOKIE_NAME)
+        and not request.headers.get("authorization", "").lower().startswith("bearer ")
+        and not csrf_matches(
+            request.cookies.get(CSRF_COOKIE_NAME),
+            request.headers.get("x-csrf-token"),
+        )
+    ):
+        return JSONResponse({"detail": "CSRF validation failed"}, status_code=403)
+
+    response = await call_next(request)
+    if request.url.path.startswith("/finance"):
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    if not request.cookies.get(CSRF_COOKIE_NAME):
+        response.set_cookie(
+            CSRF_COOKIE_NAME,
+            csrf_token(),
+            httponly=False,
+            samesite="strict",
+            secure=secure_cookies(),
+            max_age=60 * 60 * 24 * 30,
+            path="/",
+        )
+    return response
+
+# Repo root (used by the /admin update flow to run git/pip in the right place).
+REPO_DIR = PROJECT_ROOT
+
+# LLM chat: build the provider + tool registry once at import. Provider is
+# either a real OpenAI-compat client or a DisabledProvider that shows a
+# friendly 'not configured' message on use. The registry is the *only* code
+# path the LLM can reach — see chat_tools.py for the security contract.
+from . import chat_tools
+from . import llm as llm_mod
+_LLM_PROVIDER = llm_mod.build_provider_from_env()
+_LLM_TOOLS = chat_tools.build_registry()
+
+from . import env_file
+from . import finance
+from . import gnw
+from .finance_routes import router as finance_router
+
+app.include_router(finance_router)
+
+
+def _asset_version() -> str:
+    """Highest mtime among static assets — appended to <link>/<script> URLs
+    so browsers stop serving stale CSS/JS after a code push. Recomputed on
+    import (fine — every restart bumps the query string)."""
+    static_dir = STATIC_DIR
+    latest = 0.0
+    if static_dir.exists():
+        for p in static_dir.rglob("*"):
+            if p.is_file():
+                try:
+                    m = p.stat().st_mtime
+                    if m > latest:
+                        latest = m
+                except OSError:
+                    pass
+    return str(int(latest)) if latest else "0"
+
+
+templates.env.globals["asset_version"] = _asset_version()
+# Exposed to templates so task_card.html can render the next reactivation date
+# on completed recurring cards without duplicating the interval math.
+templates.env.globals["reactivation_date"] = db.reactivation_date
+# Weekday helpers for the recurring form + card chip.
+templates.env.globals["WEEKDAY_LABELS"] = db.WEEKDAY_LABELS
+templates.env.globals["recurring_days_list"] = db.recurring_days_list
+templates.env.globals["recurring_days_labels"] = db.recurring_days_labels
+templates.env.globals["recurrence_schedule_type"] = db.recurrence_schedule_type
+templates.env.globals["recurrence_schedule_label"] = db.recurrence_schedule_label
+templates.env.globals["MONTH_ORDINAL_OPTIONS"] = recurrence.MONTH_ORDINAL_OPTIONS
+templates.env.globals["has_web_column"] = db.has_web_column
+
+
+async def _form_dict(request: Request) -> dict[str, Any]:
+    """Read a form into a dict, preserving multi-value ``recurring_days``.
+
+    ``dict(await request.form())`` collapses repeated keys to just the last
+    value, which would silently drop every weekday except the last-checked
+    one. The DB layer's ``parse_recurring_days`` accepts either a list or a
+    CSV string, so we hand it the raw list.
+    """
+    form = await request.form()
+    data = dict(form)
+    if "recurring_days" in form:
+        data["recurring_days"] = form.getlist("recurring_days")
+    return data
+
+
+def _validate_recurring_form(data: dict[str, Any]) -> None:
+    """Reject an enabled recurring row that can never reactivate."""
+    enabled = str(data.get("recurring") or "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+    if not enabled:
+        return
+    schedule_type = str(data.get("recurring_schedule_type") or "").strip().lower()
+    if schedule_type and schedule_type not in {"interval", "weekdays", "monthly"}:
+        raise HTTPException(422, "Choose a valid recurrence schedule")
+    if schedule_type == "monthly":
+        if recurrence.parse_monthly_schedule(
+            data.get("recurring_month_ordinal"),
+            data.get("recurring_month_weekday"),
+        ) is None:
+            raise HTTPException(422, "Choose a valid monthly position and weekday")
+        return
+    if schedule_type == "weekdays":
+        if not db.parse_recurring_days(data.get("recurring_days")):
+            raise HTTPException(422, "Choose at least one weekday")
+        return
+    interval_raw = data.get("recurring_interval")
+    if interval_raw not in (None, ""):
+        try:
+            if int(interval_raw) < 1:
+                raise ValueError
+        except (TypeError, ValueError):
+            raise HTTPException(422, "Repeat interval must be a positive number of days")
+    if interval_raw in (None, "") and not db.parse_recurring_days(data.get("recurring_days")):
+        raise HTTPException(
+            422,
+            "Enter a repeat interval",
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Startup — refuse to serve if the DB schema isn't v2
+# --------------------------------------------------------------------------- #
+_STARTUP_SCHEMA: dict[str, Any] = {"version": None, "error": None}
+
+
+@app.on_event("startup")
+def _startup_schema_check() -> None:
+    try:
+        v = db.check_schema_version()
+        _STARTUP_SCHEMA["version"] = v
+        if v < 2:
+            _STARTUP_SCHEMA["error"] = f"schema_version={v}; luigi-web requires 2"
+            return
+        # Idempotent: adds the web-app-owned `recurring_days` column if
+        # missing. Runs after the version check so we don't touch a
+        # pre-v2 DB by mistake.
+        db.ensure_web_columns()
+        # Catch up any recurring tasks that came due while the app was down.
+        _reactivate_recurring()
+    except Exception as exc:  # pragma: no cover — surfaced via /healthz
+        _STARTUP_SCHEMA["error"] = f"schema check failed: {exc}"
+    try:
+        finance.init_db()
+    except Exception:
+        # Finance is an isolated optional domain; its failure must not make
+        # LuigiBot task pages unavailable. Finance routes surface the error.
+        pass
+
+
+def _require_v2() -> None:
+    if _STARTUP_SCHEMA["error"]:
+        raise HTTPException(status_code=503, detail=_STARTUP_SCHEMA["error"])
+
+
+def _reactivate_recurring() -> None:
+    """Bring due recurring tasks back to their boards. Safe to call on every
+    read path — it's idempotent and only writes when something is actually
+    due. Swallows errors so a transient DB hiccup never blocks a page load."""
+    try:
+        db.reactivate_due_recurring()
+    except Exception as exc:  # pragma: no cover — best-effort, never fatal to a GET
+        logger.warning("Recurring task reactivation failed: %s", exc)
+
+
+# --------------------------------------------------------------------------- #
+# Undo queue — in-memory only. Restart clears it, which is fine: undo is a
+# "did I just fat-finger" affordance, not durable history. The queue is small
+# and keyed by an opaque op_id so a browser reload after a delete can still
+# find its snapshot as long as the process is still running.
+# --------------------------------------------------------------------------- #
+import json as _json
+import secrets as _secrets
+from datetime import datetime as _dt
+
+_UNDO_TTL_SECONDS = 12
+_UNDO_MAX_ENTRIES = 64
+_UNDO_LOCK = threading.Lock()
+_UNDO_QUEUE: dict[str, dict[str, Any]] = {}
+
+
+def _sweep_undo(now_ts: float | None = None) -> None:
+    """Drop expired snapshots. Also caps the queue size so a burst can't grow
+    unbounded. Caller holds ``_UNDO_LOCK``."""
+    ts = now_ts if now_ts is not None else time.monotonic()
+    expired = [k for k, v in _UNDO_QUEUE.items() if v["expires_at"] <= ts]
+    for k in expired:
+        _UNDO_QUEUE.pop(k, None)
+    if len(_UNDO_QUEUE) > _UNDO_MAX_ENTRIES:
+        # Drop oldest first (dict is insertion-ordered).
+        for k in list(_UNDO_QUEUE.keys())[: len(_UNDO_QUEUE) - _UNDO_MAX_ENTRIES]:
+            _UNDO_QUEUE.pop(k, None)
+
+
+def _stash_undo(
+    table: str,
+    snapshot: dict[str, Any],
+    label: str,
+    generated_task_uuids: list[str] | None = None,
+) -> str:
+    """Record a 'before' snapshot for a task-like mutation. Returns an
+    opaque ``op_id`` the client uses to POST ``/undo/{op_id}`` within the
+    TTL window."""
+    op_id = _secrets.token_urlsafe(8)
+    now = time.monotonic()
+    with _UNDO_LOCK:
+        _sweep_undo(now)
+        _UNDO_QUEUE[op_id] = {
+            "table": table,
+            "snapshot": snapshot,
+            "label": label,
+            "generated_task_uuids": list(generated_task_uuids or []),
+            "expires_at": now + _UNDO_TTL_SECONDS,
+        }
+    return op_id
+
+
+def _pop_undo(op_id: str) -> dict[str, Any] | None:
+    with _UNDO_LOCK:
+        _sweep_undo()
+        return _UNDO_QUEUE.pop(op_id, None)
+
+
+def _hx_trigger(**events: Any) -> str:
+    """Encode an ``HX-Trigger`` header value. Pass keyword args where each
+    value is either ``None`` (event with no detail) or a JSON-serializable
+    dict / value used as the event ``detail``. Insertion order is preserved,
+    which matters because HTMX fires events in that order — the ``showUndo``
+    handler must run before any ``reloadBoard`` that would nav away."""
+    return _json.dumps(events, default=str)
+
+
+# --------------------------------------------------------------------------- #
+# Public routes
+# --------------------------------------------------------------------------- #
+
+@app.get("/healthz")
+def healthz():
+    return {
+        "status": "ok" if not _STARTUP_SCHEMA["error"] else "degraded",
+        "schema_version": _STARTUP_SCHEMA["version"],
+        "error": _STARTUP_SCHEMA["error"],
+    }
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_form(request: Request):
+    return templates.TemplateResponse("login.html", {"request": request, "error": None})
+
+
+@app.post("/login")
+def login_submit(token: str = Form(...)):
+    try:
+        return login_response(token)
+    except HTTPException:
+        # Re-render the form with an error, keeping the status generic.
+        return HTMLResponse(
+            content=_login_error_html(), status_code=401
+        )
+
+
+def _login_error_html() -> str:
+    asset_version = _asset_version()
+    return (
+        "<!doctype html><meta charset=utf-8><title>Login</title>"
+        f"<link rel='icon' href='/static/icons/luigi-mark.svg?v={asset_version}' type='image/svg+xml'>"
+        "<link rel='stylesheet' href='/static/css/app.css'>"
+        "<main class='login-page'><form method='post' action='/login' class='login-form'>"
+        f"<h1><img class='login-mark' src='/static/icons/luigi-mark.svg?v={asset_version}' alt=''> Luigi Web</h1>"
+        "<p class='error'>Invalid token.</p>"
+        "<label>Token <input type='password' name='token' autofocus required></label>"
+        "<button type='submit'>Sign in</button></form></main>"
+    )
+
+
+@app.post("/logout")
+def logout():
+    return logout_response()
+
+
+# --------------------------------------------------------------------------- #
+# Root
+# --------------------------------------------------------------------------- #
+
+@app.get("/", dependencies=[Depends(require_auth)])
+def root():
+    return RedirectResponse(url="/home", status_code=303)
+
+
+@app.get(
+    "/command-palette",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_auth)],
+)
+def command_palette_results(request: Request, q: str = ""):
+    """Global navigation/action search rendered into the Ctrl+K palette."""
+    query = (q or "").strip()
+    tasks: list[dict[str, Any]] = []
+    disciplines: list[dict[str, Any]] = []
+    games: list[dict[str, Any]] = []
+    shows: list[dict[str, Any]] = []
+    search_error = None
+    if query:
+        try:
+            tasks = db.find_tasks_by_name(query, include_completed=True, limit=8)
+            disciplines = db.search_disciplines(query, limit=5)
+        except Exception as exc:  # noqa: BLE001
+            search_error = f"Task search unavailable: {type(exc).__name__}: {exc}"
+        if gnw.is_enabled():
+            try:
+                needle = query.lower()
+                games = [
+                    item for item in gnw.list_items("games")
+                    if needle in item["title"].lower()
+                ][:5]
+                shows = [
+                    item for item in gnw.list_items("shows")
+                    if needle in item["title"].lower()
+                ][:5]
+            except Exception as exc:  # noqa: BLE001
+                if not search_error:
+                    search_error = f"Media search unavailable: {type(exc).__name__}: {exc}"
+    return templates.TemplateResponse(
+        "partials/command_results.html",
+        {
+            "request": request,
+            "query": query,
+            "tasks": tasks,
+            "disciplines": disciplines,
+            "games": games,
+            "shows": shows,
+            "search_error": search_error,
+        },
+    )
+
+
+# --------------------------------------------------------------------------- #
+# TASKS (Kanban)
+# --------------------------------------------------------------------------- #
+
+def _kanban_columns(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Bucket task-like rows by status, preserving the fixed enum order."""
+    columns = {s: [] for s in db.STATUS_VALUES}
+    for row in rows:
+        status = row.get("status") or "Not Started"
+        columns.setdefault(status, []).append(row)
+    return columns
+
+
+@app.get("/tasks", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def tasks_page(request: Request):
+    _require_v2()
+    _reactivate_recurring()
+    rows = db.list_tasks()
+    for row in rows:
+        row["_endpoint_root"] = "/tasks"
+        row["_source"] = "task"
+    recurring_rows = db.list_recurring()
+    for row in recurring_rows:
+        row["_endpoint_root"] = "/recurring"
+        row["_source"] = "recurring"
+    rows.extend(recurring_rows)
+    rows.sort(
+        key=lambda row: (
+            int(row.get("completed") or 0),
+            -int(row.get("priority") or 0),
+            row.get("due_date") or "9999-12-31",
+            (row.get("task") or "").lower(),
+        )
+    )
+    return templates.TemplateResponse(
+        "tasks.html",
+        {
+            "request": request,
+            "active_nav": "tasks",
+            "rows": rows,
+            "columns": _kanban_columns(rows),
+            "statuses": db.STATUS_DISPLAY_ORDER,
+            "endpoint_root": "/tasks",
+            "page_title": "Tasks",
+            "consolidated": True,
+        },
+    )
+
+
+@app.post("/tasks", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+async def tasks_create(request: Request):
+    _require_v2()
+    form = dict(await request.form())
+    row_uuid = db.create_task(form)
+    row = db.get_task(row_uuid)
+    return templates.TemplateResponse(
+        "partials/task_card.html",
+        {"request": request, "t": row, "endpoint_root": "/tasks"},
+        headers={"HX-Trigger": _hx_trigger(
+            flashSuccess={"message": "Task created"},
+            closeModal=None,
+            reloadBoard=None,
+        )},
+    )
+
+
+@app.post("/tasks/quick", dependencies=[Depends(require_auth)])
+async def tasks_quick_create(request: Request):
+    """Small header form for the common one-off task creation path."""
+    _require_v2()
+    form = dict(await request.form())
+    task = str(form.get("task") or "").strip()
+    if not task:
+        raise HTTPException(422, "Task name is required")
+    payload = {
+        "task": task,
+        "priority": form.get("priority") or 0,
+        "due_date": form.get("due_date") or None,
+        "project": form.get("project") or None,
+        "status": "Not Started",
+    }
+    try:
+        db.create_task(payload)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return Response(status_code=204, headers={
+        "HX-Trigger": _hx_trigger(flashSuccess={"message": "Task added"}),
+        "HX-Refresh": "true",
+    })
+
+
+@app.get(
+    "/tasks/{row_uuid}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_auth)],
+)
+def tasks_edit_form(request: Request, row_uuid: str):
+    _require_v2()
+    row = db.get_task(row_uuid)
+    if not row:
+        raise HTTPException(404)
+    return templates.TemplateResponse(
+        "partials/task_form.html",
+        {
+            "request": request,
+            "t": row,
+            "statuses": db.STATUS_VALUES,
+            "endpoint_root": "/tasks",
+            "is_new": False,
+        },
+    )
+
+
+@app.get(
+    "/tasks/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_auth)],
+)
+def tasks_new_form(request: Request):
+    return templates.TemplateResponse(
+        "partials/task_form.html",
+        {
+            "request": request,
+            "t": {},
+            "statuses": db.STATUS_VALUES,
+            "endpoint_root": "/tasks",
+            "is_new": True,
+        },
+    )
+
+
+@app.post(
+    "/tasks/{row_uuid}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def tasks_update(request: Request, row_uuid: str):
+    _require_v2()
+    form = dict(await request.form())
+    db.update_task(row_uuid, form)
+    row = db.get_task(row_uuid)
+    if not row:
+        raise HTTPException(404)
+    return templates.TemplateResponse(
+        "partials/task_card.html",
+        {"request": request, "t": row, "endpoint_root": "/tasks"},
+        headers={"HX-Trigger": _hx_trigger(
+            flashSuccess={"message": "Task saved"},
+            closeModal=None,
+            reloadBoard=None,
+        )},
+    )
+
+
+@app.post("/tasks/{row_uuid}/status", dependencies=[Depends(require_auth)])
+async def tasks_set_status(request: Request, row_uuid: str):
+    _require_v2()
+    form = dict(await request.form())
+    new_status = form.get("status", "")
+    try:
+        db.set_task_status(row_uuid, new_status)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return Response(status_code=204)
+
+
+@app.post(
+    "/tasks/{row_uuid}/complete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_auth)],
+)
+def tasks_toggle_complete(request: Request, row_uuid: str):
+    _require_v2()
+    before = db.get_task(row_uuid)
+    if not before:
+        raise HTTPException(404)
+    _, generated_task_uuids = db.toggle_task_completed(row_uuid)
+    row = db.get_task(row_uuid)
+    if not row:
+        raise HTTPException(404)
+    verb = "Completed" if int(row.get("completed") or 0) == 1 else "Reopened"
+    op_id = _stash_undo(
+        "tasks", before, f"{verb} ‘{before.get('task','')}’", generated_task_uuids
+    )
+    trigger = _hx_trigger(
+        showUndo={"op_id": op_id, "label": f"{verb} ‘{before.get('task','')}’",
+                  "ttl_ms": _UNDO_TTL_SECONDS * 1000},
+        reloadBoard=None,
+    )
+    return templates.TemplateResponse(
+        "partials/task_card.html",
+        {"request": request, "t": row, "endpoint_root": "/tasks"},
+        headers={"HX-Trigger": trigger},
+    )
+
+
+@app.post("/tasks/{row_uuid}/delete", dependencies=[Depends(require_auth)])
+def tasks_delete(row_uuid: str):
+    _require_v2()
+    before = db.get_task(row_uuid)
+    if not before:
+        raise HTTPException(404)
+    db.delete_task(row_uuid)
+    op_id = _stash_undo("tasks", before, f"Deleted ‘{before.get('task','')}’")
+    trigger = _hx_trigger(
+        showUndo={"op_id": op_id, "label": f"Deleted ‘{before.get('task','')}’",
+                  "ttl_ms": _UNDO_TTL_SECONDS * 1000},
+        closeModal=None,
+    )
+    # HTMX swaps the card with an empty response, removing it from the DOM.
+    return Response(status_code=200, content="", headers={"HX-Trigger": trigger})
+
+
+@app.post("/tasks/{row_uuid}/archive", dependencies=[Depends(require_auth)])
+def tasks_archive(row_uuid: str):
+    _require_v2()
+    if not db.archive_task(row_uuid, True):
+        raise HTTPException(404, "task not found")
+    return Response(status_code=204, headers={
+        "HX-Trigger": _hx_trigger(flashSuccess={"message": "Task archived"}),
+        "HX-Refresh": "true",
+    })
+
+
+@app.post("/tasks/{row_uuid}/restore", dependencies=[Depends(require_auth)])
+def tasks_restore(row_uuid: str):
+    _require_v2()
+    if not db.archive_task(row_uuid, False):
+        raise HTTPException(404, "task not found")
+    return Response(status_code=204, headers={
+        "HX-Trigger": _hx_trigger(flashSuccess={"message": "Task restored"}),
+        "HX-Refresh": "true",
+    })
+
+
+@app.post(
+    "/tasks/{row_uuid}/snooze",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def tasks_snooze(request: Request, row_uuid: str):
+    _require_v2()
+    before = db.get_task(row_uuid)
+    if not before:
+        raise HTTPException(404)
+    form = dict(await request.form())
+    try:
+        days = int(form.get("days", "1"))
+    except ValueError:
+        raise HTTPException(400, "days must be an integer")
+    if not db.snooze_task(row_uuid, days):
+        raise HTTPException(404)
+    row = db.get_task(row_uuid)
+    if not row:
+        raise HTTPException(404)
+    op_id = _stash_undo("tasks", before, f"Snoozed ‘{before.get('task','')}’ {days}d")
+    trigger = _hx_trigger(
+        showUndo={"op_id": op_id,
+                  "label": f"Snoozed ‘{before.get('task','')}’ by {days}d",
+                  "ttl_ms": _UNDO_TTL_SECONDS * 1000},
+    )
+    return templates.TemplateResponse(
+        "partials/task_card.html",
+        {"request": request, "t": row, "endpoint_root": "/tasks"},
+        headers={"HX-Trigger": trigger},
+    )
+
+
+# --------------------------------------------------------------------------- #
+# RECURRING TASKS (Kanban, same shape as tasks)
+# --------------------------------------------------------------------------- #
+
+@app.get("/recurring", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def recurring_page(request: Request):
+    """Legacy bookmark: recurring tasks now live on the Tasks board."""
+    _require_v2()
+    return RedirectResponse(url="/tasks", status_code=303)
+
+
+@app.post("/recurring", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+async def recurring_create(request: Request):
+    _require_v2()
+    form = await _form_dict(request)
+    _validate_recurring_form(form)
+    row_uuid = db.create_recurring(form)
+    row = db.get_recurring(row_uuid)
+    return templates.TemplateResponse(
+        "partials/task_card.html",
+        {"request": request, "t": row, "endpoint_root": "/recurring"},
+        headers={"HX-Trigger": _hx_trigger(
+            flashSuccess={"message": "Recurring task created"},
+            closeModal=None,
+            reloadBoard=None,
+        )},
+    )
+
+
+@app.get(
+    "/recurring/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_auth)],
+)
+def recurring_new_form(request: Request):
+    return templates.TemplateResponse(
+        "partials/task_form.html",
+        {
+            "request": request,
+            "t": {},
+            "statuses": db.STATUS_VALUES,
+            "endpoint_root": "/recurring",
+            "is_new": True,
+        },
+    )
+
+
+@app.get(
+    "/recurring/{row_uuid}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_auth)],
+)
+def recurring_edit_form(request: Request, row_uuid: str):
+    _require_v2()
+    row = db.get_recurring(row_uuid)
+    if not row:
+        raise HTTPException(404)
+    return templates.TemplateResponse(
+        "partials/task_form.html",
+        {
+            "request": request,
+            "t": row,
+            "statuses": db.STATUS_VALUES,
+            "endpoint_root": "/recurring",
+            "is_new": False,
+        },
+    )
+
+
+@app.post(
+    "/recurring/{row_uuid}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def recurring_update(request: Request, row_uuid: str):
+    _require_v2()
+    form = await _form_dict(request)
+    _validate_recurring_form(form)
+    db.update_recurring(row_uuid, form)
+    row = db.get_recurring(row_uuid)
+    if not row:
+        raise HTTPException(404)
+    return templates.TemplateResponse(
+        "partials/task_card.html",
+        {"request": request, "t": row, "endpoint_root": "/recurring"},
+        headers={"HX-Trigger": _hx_trigger(
+            flashSuccess={"message": "Recurring task saved"},
+            closeModal=None,
+            reloadBoard=None,
+        )},
+    )
+
+
+@app.post("/recurring/{row_uuid}/status", dependencies=[Depends(require_auth)])
+async def recurring_set_status(request: Request, row_uuid: str):
+    _require_v2()
+    form = dict(await request.form())
+    new_status = form.get("status", "")
+    try:
+        db.set_recurring_status(row_uuid, new_status)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return Response(status_code=204)
+
+
+@app.post(
+    "/recurring/{row_uuid}/complete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_auth)],
+)
+def recurring_toggle_complete(request: Request, row_uuid: str):
+    _require_v2()
+    before = db.get_recurring(row_uuid)
+    if not before:
+        raise HTTPException(404)
+    _, generated_task_uuids = db.toggle_recurring_completed(row_uuid)
+    row = db.get_recurring(row_uuid)
+    if not row:
+        raise HTTPException(404)
+    verb = "Completed" if int(row.get("completed") or 0) == 1 else "Reopened"
+    op_id = _stash_undo(
+        "recurring_tasks", before, f"{verb} ‘{before.get('task','')}’",
+        generated_task_uuids,
+    )
+    trigger = _hx_trigger(
+        showUndo={"op_id": op_id, "label": f"{verb} ‘{before.get('task','')}’",
+                  "ttl_ms": _UNDO_TTL_SECONDS * 1000},
+        reloadBoard=None,
+    )
+    return templates.TemplateResponse(
+        "partials/task_card.html",
+        {"request": request, "t": row, "endpoint_root": "/recurring"},
+        headers={"HX-Trigger": trigger},
+    )
+
+
+@app.post("/recurring/{row_uuid}/delete", dependencies=[Depends(require_auth)])
+def recurring_delete(row_uuid: str):
+    _require_v2()
+    before = db.get_recurring(row_uuid)
+    if not before:
+        raise HTTPException(404)
+    db.delete_recurring(row_uuid)
+    op_id = _stash_undo("recurring_tasks", before,
+                        f"Deleted ‘{before.get('task','')}’")
+    trigger = _hx_trigger(
+        showUndo={"op_id": op_id, "label": f"Deleted ‘{before.get('task','')}’",
+                  "ttl_ms": _UNDO_TTL_SECONDS * 1000},
+        closeModal=None,
+    )
+    return Response(status_code=200, content="", headers={"HX-Trigger": trigger})
+
+
+@app.post("/recurring/{row_uuid}/archive", dependencies=[Depends(require_auth)])
+def recurring_archive(row_uuid: str):
+    _require_v2()
+    if not db.archive_recurring(row_uuid, True):
+        raise HTTPException(404, "recurring task not found")
+    return Response(status_code=204, headers={
+        "HX-Trigger": _hx_trigger(flashSuccess={"message": "Recurring task archived"}),
+        "HX-Refresh": "true",
+    })
+
+
+@app.post("/recurring/{row_uuid}/restore", dependencies=[Depends(require_auth)])
+def recurring_restore(row_uuid: str):
+    _require_v2()
+    if not db.archive_recurring(row_uuid, False):
+        raise HTTPException(404, "recurring task not found")
+    return Response(status_code=204, headers={
+        "HX-Trigger": _hx_trigger(flashSuccess={"message": "Recurring task restored"}),
+        "HX-Refresh": "true",
+    })
+
+
+@app.get("/archive", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def archive_page(request: Request):
+    _require_v2()
+    return templates.TemplateResponse(
+        "archive.html",
+        {
+            "request": request,
+            "active_nav": "archive",
+            "page_title": "Archive",
+            "rows": db.list_archived(),
+            "archive_enabled": True,
+        },
+    )
+
+
+@app.post(
+    "/recurring/{row_uuid}/snooze",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def recurring_snooze(request: Request, row_uuid: str):
+    _require_v2()
+    before = db.get_recurring(row_uuid)
+    if not before:
+        raise HTTPException(404)
+    form = dict(await request.form())
+    try:
+        days = int(form.get("days", "1"))
+    except ValueError:
+        raise HTTPException(400, "days must be an integer")
+    if not db.snooze_recurring(row_uuid, days):
+        raise HTTPException(404)
+    row = db.get_recurring(row_uuid)
+    if not row:
+        raise HTTPException(404)
+    op_id = _stash_undo("recurring_tasks", before,
+                        f"Snoozed ‘{before.get('task','')}’ {days}d")
+    trigger = _hx_trigger(
+        showUndo={"op_id": op_id,
+                  "label": f"Snoozed ‘{before.get('task','')}’ by {days}d",
+                  "ttl_ms": _UNDO_TTL_SECONDS * 1000},
+    )
+    return templates.TemplateResponse(
+        "partials/task_card.html",
+        {"request": request, "t": row, "endpoint_root": "/recurring"},
+        headers={"HX-Trigger": trigger},
+    )
+
+
+# --------------------------------------------------------------------------- #
+# GAME'N'WATCH — Games & Shows boards backed by the bot's Google Sheet
+# --------------------------------------------------------------------------- #
+
+def _gnw_section(section: str) -> str:
+    if section not in ("games", "shows"):
+        raise HTTPException(404, "unknown section")
+    return section
+
+
+def _gnw_columns(section: str, profile: str | None):
+    """Bucket items by status into the section's fixed status order."""
+    items = gnw.list_items(section, profile or None)
+    columns: dict[str, list[dict[str, Any]]] = {s: [] for s in gnw.statuses_for(section)}
+    for it in items:
+        columns.setdefault(it["status"], []).append(it)
+    return columns
+
+
+def _gnw_board(request: Request, section: str, page_title: str):
+    reason = gnw.disabled_reason()
+    ctx: dict[str, Any] = {
+        "request": request,
+        "active_nav": section,
+        "page_title": page_title,
+        "section": section,
+        "disabled_reason": reason,
+        "profiles": [],
+        "profile": "",
+        "columns": {},
+        "statuses": gnw.statuses_for(section),
+        "status_labels": gnw.STATUS_LABELS,
+    }
+    if not reason:
+        profile = (request.query_params.get("profile") or "").strip()
+        ctx["profile"] = profile
+        try:
+            # These hit Google over the network. Static checks in
+            # disabled_reason() can't catch a wrong Sheet ID, a sheet that
+            # isn't shared with the service account, the Sheets API being
+            # disabled, a revoked key, or a transient network error — surface
+            # any of those as a friendly notice instead of a raw 500.
+            ctx["profiles"] = gnw.list_profiles()
+            ctx["columns"] = _gnw_columns(section, profile)
+        except Exception as exc:  # noqa: BLE001
+            # gnw now raises RuntimeError with a precise, self-contained reason
+            # (bad credentials file vs. Google API/network failure), so surface
+            # it verbatim rather than wrapping it in a second generic guess.
+            ctx["disabled_reason"] = str(exc) or f"{type(exc).__name__}"
+    return templates.TemplateResponse("media_board.html", ctx)
+
+
+@app.get("/games", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def games_page(request: Request):
+    return _gnw_board(request, "games", "Games")
+
+
+@app.get("/shows", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def shows_page(request: Request):
+    return _gnw_board(request, "shows", "Shows")
+
+
+@app.get("/gnw/{section}/new", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def gnw_new_form(section: str, request: Request):
+    _gnw_section(section)
+    try:
+        profiles = gnw.list_profiles()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(503, str(exc)) from exc
+    return templates.TemplateResponse(
+        "partials/media_new.html",
+        {
+            "request": request,
+            "section": section,
+            "profiles": profiles,
+            "statuses": gnw.statuses_for(section),
+            "status_labels": gnw.STATUS_LABELS,
+        },
+    )
+
+
+@app.post("/gnw/{section}/search", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+async def gnw_search(section: str, request: Request):
+    _gnw_section(section)
+    form = dict(await request.form())
+    query = str(form.get("query") or "").strip()
+    if not query:
+        raise HTTPException(422, "Search text is required")
+    try:
+        results = gnw.search_catalog(section, query)
+        error = None
+    except Exception as exc:  # noqa: BLE001
+        results = []
+        error = f"{type(exc).__name__}: {exc}"
+    return templates.TemplateResponse(
+        "partials/media_search_results.html",
+        {
+            "request": request,
+            "section": section,
+            "query": query,
+            "profile": str(form.get("profile") or ""),
+            "status": str(form.get("status") or "backlog"),
+            "priority": str(form.get("priority") or "3"),
+            "results": results,
+            "error": error,
+        },
+    )
+
+
+@app.post("/gnw/{section}/add", dependencies=[Depends(require_auth)])
+async def gnw_add_item(section: str, request: Request):
+    _gnw_section(section)
+    form = dict(await request.form())
+    profile = str(form.get("profile") or "").strip()
+    status = str(form.get("status") or "backlog")
+    try:
+        priority = int(form.get("priority") or 3)
+    except (TypeError, ValueError):
+        raise HTTPException(422, "priority must be a number")
+    source = str(form.get("source") or "manual")
+    external_id = str(form.get("external_id") or "")
+    try:
+        if source == "manual":
+            ok, message = gnw.add_manual_item(
+                section, profile, str(form.get("title") or ""),
+                status=status, priority=priority,
+            )
+        else:
+            metadata = gnw.catalog_lookup(section, source, external_id)
+            if not metadata:
+                raise RuntimeError("The selected catalog result is no longer available")
+            ok, message = gnw.add_catalog_item(
+                section, profile, metadata, status=status, priority=priority,
+            )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(422, f"Could not add item: {type(exc).__name__}: {exc}") from exc
+    if not ok:
+        raise HTTPException(409, message)
+    kind = "Game" if section == "games" else "Show"
+    return Response(status_code=204, headers={
+        "HX-Trigger": _hx_trigger(flashSuccess={"message": f"{kind} added"}),
+        "HX-Refresh": "true",
+    })
+
+
+@app.get("/gnw/games/steam-stats", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def gnw_steam_stats(request: Request, profile: str, title: str, app_id: str):
+    try:
+        stats = gnw.steam_stats(app_id)
+        # Keep the existing sheet's Hours Played field useful to the bot too.
+        gnw.update_item("games", profile, title, {"hours_played": stats["hours_played"]})
+        error = None
+    except Exception as exc:  # noqa: BLE001
+        stats = None
+        error = f"{type(exc).__name__}: {exc}"
+    return templates.TemplateResponse(
+        "partials/steam_stats.html",
+        {"request": request, "stats": stats, "error": error, "profile": profile, "title": title},
+    )
+
+
+@app.post("/gnw/{section}/status", dependencies=[Depends(require_auth)])
+async def gnw_set_status(section: str, request: Request):
+    _gnw_section(section)
+    form = dict(await request.form())
+    profile = (form.get("profile") or "").strip()
+    title = (form.get("title") or "").strip()
+    status = (form.get("status") or "").strip()
+    if not profile or not title:
+        raise HTTPException(400, "profile and title required")
+    try:
+        ok = gnw.set_status(section, profile, title, status)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    if not ok:
+        raise HTTPException(404, "item not found")
+    # Full refresh so the card lands in its new column and counts update.
+    return Response(status_code=204, headers={
+        "HX-Trigger": _hx_trigger(flashSuccess={"message": "Status updated"}),
+        "HX-Refresh": "true",
+    })
+
+
+@app.get(
+    "/gnw/{section}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_auth)],
+)
+def gnw_edit_form(section: str, request: Request, profile: str, title: str):
+    _gnw_section(section)
+    item = gnw.get_item(section, profile, title)
+    if not item:
+        raise HTTPException(404, "item not found")
+    return templates.TemplateResponse(
+        "partials/media_form.html",
+        {"request": request, "section": section, "item": item,
+         "statuses": gnw.statuses_for(section), "status_labels": gnw.STATUS_LABELS},
+    )
+
+
+@app.post(
+    "/gnw/{section}/update",
+    dependencies=[Depends(require_auth)],
+)
+async def gnw_update(section: str, request: Request):
+    _gnw_section(section)
+    form = dict(await request.form())
+    profile = (form.get("profile") or "").strip()
+    title = (form.get("title") or "").strip()
+    if not profile or not title:
+        raise HTTPException(400, "profile and title required")
+    editable = gnw.GAME_EDITABLE if section == "games" else gnw.SHOW_EDITABLE
+    int_fields = {"priority", "rating", "current_episode", "current_season", "total_episodes"}
+    fields: dict[str, Any] = {}
+    for key in editable:
+        if key not in form:
+            continue
+        val = form[key]
+        if key in int_fields:
+            raw = str(val).strip()
+            val = int(raw) if raw.lstrip("-").isdigit() else None
+        if key == "rating" and val is not None and not 0 <= val <= 10:
+            raise HTTPException(422, "rating must be between 0 and 10")
+        fields[key] = val
+    ok = gnw.update_item(section, profile, title, fields)
+    if not ok:
+        raise HTTPException(404, "item not found")
+    return Response(status_code=204, headers={
+        "HX-Trigger": _hx_trigger(flashSuccess={"message": "Media details saved"}),
+        "HX-Refresh": "true",
+    })
+
+
+@app.post(
+    "/gnw/{section}/pick",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def gnw_pick(section: str, request: Request):
+    _gnw_section(section)
+    form = dict(await request.form())
+    profile = (form.get("profile") or "").strip() or None
+    pick = gnw.random_pick(section, profile)
+    return templates.TemplateResponse(
+        "partials/media_pick.html",
+        {"request": request, "section": section, "item": pick,
+         "status_labels": gnw.STATUS_LABELS},
+    )
+
+
+# --------------------------------------------------------------------------- #
+# UNDO — restore the most recent task-like snapshot for op_id
+# --------------------------------------------------------------------------- #
+
+@app.post("/undo/{op_id}", dependencies=[Depends(require_auth)])
+def undo(op_id: str):
+    _require_v2()
+    entry = _pop_undo(op_id)
+    if entry is None:
+        # Either expired or never existed. 410 makes the client clear its
+        # local toast state without treating it as a hard failure.
+        raise HTTPException(410, "undo window has expired")
+    try:
+        table = entry["table"]
+        if table == "discipline_list":
+            db.restore_discipline_row(entry["snapshot"])
+        else:
+            db.restore_task_row(
+                table,
+                entry["snapshot"],
+                entry.get("generated_task_uuids", []),
+            )
+    except Exception as exc:
+        raise HTTPException(500, f"undo failed: {exc}")
+    return Response(
+        status_code=200,
+        content="",
+        headers={"HX-Trigger": _hx_trigger(reloadBoard=None, undoCleared=None)},
+    )
+
+
+# --------------------------------------------------------------------------- #
+# DISCIPLINE
+# --------------------------------------------------------------------------- #
+
+def _year_grid(year: int) -> list[list[date | None]]:
+    """Build a 7-row × ~53-col grid of ``date`` cells for a whole year.
+
+    Column = ISO week starting Sunday; row 0 = Sunday .. row 6 = Saturday.
+    ``None`` in a slot means "before Jan 1" or "after Dec 31" (padding).
+    """
+    first = date(year, 1, 1)
+    last = date(year, 12, 31)
+    # Align the first column to the Sunday on/before Jan 1.
+    # Python's weekday(): Mon=0..Sun=6; we want Sun=0..Sat=6.
+    def sun_index(d: date) -> int:
+        return (d.weekday() + 1) % 7
+
+    start = first - timedelta(days=sun_index(first))
+    end = last + timedelta(days=(6 - sun_index(last)))
+    weeks: list[list[date | None]] = []
+    cur = start
+    while cur <= end:
+        week: list[date | None] = []
+        for _ in range(7):
+            week.append(cur if (first <= cur <= last) else None)
+            cur += timedelta(days=1)
+        weeks.append(week)
+    # transpose to rows=day-of-week, cols=week
+    rows: list[list[date | None]] = [[] for _ in range(7)]
+    for w in weeks:
+        for i, d in enumerate(w):
+            rows[i].append(d)
+    return rows
+
+
+def _available_years() -> list[int]:
+    """Years to show in the dropdown: from earliest completion → next year."""
+    current = date.today().year
+    with db.get_engine().connect() as conn:
+        from sqlalchemy import text as _t
+        row = conn.execute(
+            _t("SELECT MIN(completed_date) AS mn FROM discipline_completions")
+        ).first()
+    earliest_str = row.mn if row and row.mn else None
+    try:
+        earliest = int(earliest_str[:4]) if earliest_str else current
+    except (TypeError, ValueError):
+        earliest = current
+    start = min(earliest, current)
+    return list(range(start, current + 2))
+
+
+@app.get("/discipline", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def discipline_page(request: Request, year: int | None = None):
+    _require_v2()
+    if year is None:
+        year = date.today().year
+    disciplines = db.list_disciplines(include_inactive=True)
+    completions = db.list_completions_for_year(year)
+    today_iso = date.today().isoformat()
+    today_tasks = db.list_completion_tasks_for_day(today_iso)
+    # Index completions by a normalized task key too, so a completion logged
+    # under a slightly different string (trailing space, different case) still
+    # lights up its discipline's heatmap instead of silently going missing.
+    def _norm(s: str | None) -> str:
+        return (s or "").strip().lower()
+
+    completions_by_norm: dict[str, set[str]] = {}
+    for _task_name, _days in completions.items():
+        completions_by_norm.setdefault(_norm(_task_name), set()).update(_days)
+    today_by_norm = {_norm(task) for task in today_tasks}
+    # Attach year-specific completion sets + computed streak (from all-time in-year data).
+    for d in disciplines:
+        days = completions.get(d["task"])
+        if not days:
+            days = completions_by_norm.get(_norm(d["task"]), set())
+        d["_year_days"] = days
+        d["_today_done"] = _norm(d["task"]) in today_by_norm
+        # Streak is computed against the CURRENT date, so use full history when
+        # viewing the current year and just the year's data otherwise.
+        if year == date.today().year:
+            d["_streak"] = db.compute_streak(days)
+        else:
+            d["_streak"] = d.get("current_streak") or 0
+    return templates.TemplateResponse(
+        "discipline.html",
+        {
+            "request": request,
+            "active_nav": "discipline",
+            "page_title": "Discipline",
+            "disciplines": disciplines,
+            "year": year,
+            "years": _available_years(),
+            "grid": _year_grid(year),
+            "today_iso": today_iso,
+        },
+    )
+
+
+@app.get("/discipline/new", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def discipline_new_form(request: Request):
+    return templates.TemplateResponse(
+        "partials/discipline_form.html",
+        {"request": request, "d": {}, "is_new": True},
+    )
+
+
+@app.post("/discipline", dependencies=[Depends(require_auth)])
+async def discipline_create(request: Request):
+    _require_v2()
+    form = dict(await request.form())
+    try:
+        db.create_discipline(form)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    # Full-page reload is fine here — the heatmap grid depends on the discipline list.
+    return Response(
+        status_code=204,
+        headers={
+            "HX-Trigger": _hx_trigger(
+                flashSuccess={"message": "Discipline created"},
+                closeModal=None,
+            ),
+            "HX-Refresh": "true",
+        },
+    )
+
+
+@app.get(
+    "/discipline/{row_uuid}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_auth)],
+)
+def discipline_edit_form(request: Request, row_uuid: str):
+    _require_v2()
+    row = db.get_discipline(row_uuid)
+    if not row:
+        raise HTTPException(404)
+    return templates.TemplateResponse(
+        "partials/discipline_form.html",
+        {"request": request, "d": row, "is_new": False},
+    )
+
+
+@app.post("/discipline/{row_uuid}", dependencies=[Depends(require_auth)])
+async def discipline_update(request: Request, row_uuid: str):
+    _require_v2()
+    form = dict(await request.form())
+    try:
+        db.update_discipline(row_uuid, form)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return Response(
+        status_code=204,
+        headers={
+            "HX-Trigger": _hx_trigger(
+                flashSuccess={"message": "Discipline saved"},
+                closeModal=None,
+            ),
+            "HX-Refresh": "true",
+        },
+    )
+
+
+@app.post("/discipline/{row_uuid}/deactivate", dependencies=[Depends(require_auth)])
+def discipline_deactivate(row_uuid: str):
+    _require_v2()
+    db.deactivate_discipline(row_uuid)
+    return Response(status_code=204, headers={
+        "HX-Trigger": _hx_trigger(flashSuccess={"message": "Discipline deactivated"}),
+        "HX-Refresh": "true",
+    })
+
+
+@app.post("/discipline/{row_uuid}/delete", dependencies=[Depends(require_auth)])
+def discipline_delete(row_uuid: str):
+    """Hard-delete a discipline (and its completions), with a 12s undo.
+
+    The snapshot returned by ``db.delete_discipline`` bundles the
+    discipline_list row + all its completions rows so ``restore_discipline_row``
+    can put both back.
+    """
+    _require_v2()
+    snapshot = db.delete_discipline(row_uuid)
+    if snapshot is None:
+        raise HTTPException(404, "discipline not found")
+    task_name = (snapshot.get("discipline") or {}).get("task") or "discipline"
+    op_id = _stash_undo("discipline_list", snapshot, f"Deleted ‘{task_name}’")
+    return Response(
+        status_code=204,
+        headers={
+            "HX-Trigger": _hx_trigger(
+                showUndo={"op_id": op_id, "label": f"Deleted ‘{task_name}’",
+                          "ttl_ms": _UNDO_TTL_SECONDS * 1000},
+                reloadBoard=None,
+            ),
+        },
+    )
+
+
+@app.post("/discipline/{row_uuid}/today", dependencies=[Depends(require_auth)])
+async def discipline_today(row_uuid: str, request: Request):
+    """Explicit, discoverable mark/unmark action for the current day.
+
+    The server—not the browser—chooses today's date and resolves the current
+    canonical task/category by UUID before touching the legacy text-keyed
+    completion table.
+    """
+    _require_v2()
+    discipline = db.get_discipline(row_uuid)
+    if not discipline:
+        raise HTTPException(404, "discipline not found")
+    if not int(discipline.get("active") or 0):
+        raise HTTPException(409, "inactive disciplines cannot be marked")
+    form = dict(await request.form())
+    action = str(form.get("action") or "mark").strip().lower()
+    if action not in {"mark", "unmark"}:
+        raise HTTPException(400, "action must be mark or unmark")
+    task = str(discipline["task"])
+    day = date.today().isoformat()
+    try:
+        if action == "mark":
+            ok = db.mark_completion(task, discipline.get("catagory"), day)
+            message = f"{task} marked done for today"
+        else:
+            ok = db.unmark_completion(task, day)
+            message = f"{task} cleared for today"
+    except Exception as exc:  # noqa: BLE001
+        return _discipline_toggle_error(
+            f"Couldn't {action} “{task}” for {day}: {type(exc).__name__}: {exc}"
+        )
+    if not ok:
+        return _discipline_toggle_error(
+            f"“{task}” for {day} did not persist in the requested state."
+        )
+    marked = db.completion_exists(task, day)
+    if marked != (action == "mark"):
+        return _discipline_toggle_error(
+            f"“{task}” for {day} changed during verification. Refresh and try again."
+        )
+    return JSONResponse({
+        "ok": True,
+        "discipline_uuid": row_uuid,
+        "task": task,
+        "day": day,
+        "marked": marked,
+        "streak": db.computed_discipline_streak(task),
+        "message": message,
+    })
+
+
+@app.post("/discipline/toggle", dependencies=[Depends(require_auth)])
+async def discipline_toggle(request: Request):
+    """Mark or unmark a single (task, day) — HTMX target is the cell itself.
+
+    Every write is verified against the DB (see ``db.mark_completion`` /
+    ``db.unmark_completion``, which re-read inside the same transaction) so a
+    save that never landed is reported instead of silently swallowed. Any
+    failure returns HTTP 422 with a plain-text reason and an ``HX-Trigger:
+    flashError`` header — HTMX won't swap the cell (so it can't lie about being
+    saved) and the frontend shows a toast with the reason.
+    """
+    _require_v2()
+    form = dict(await request.form())
+    task = form.get("task", "")
+    catagory = form.get("catagory") or None
+    day = form.get("day", "")
+    action = form.get("action", "toggle")
+    discipline_uuid = form.get("discipline_uuid", "")
+    if discipline_uuid:
+        discipline = db.get_discipline(discipline_uuid)
+        if not discipline:
+            raise HTTPException(404, "discipline not found")
+        # Resolve the canonical current values server-side. Completion rows
+        # are keyed by task text in the LuigiBot schema, so stale/rendered
+        # text must not create a detached history row.
+        task = discipline["task"]
+        catagory = discipline.get("catagory")
+    if not task or not day:
+        raise HTTPException(400, "task and day required")
+
+    try:
+        if action == "mark":
+            want_marked = True
+            ok = db.mark_completion(task, catagory, day)
+        elif action == "unmark":
+            want_marked = False
+            ok = db.unmark_completion(task, day)
+        else:
+            # Default: read current state and flip it.
+            if db.completion_exists(task, day):
+                want_marked = False
+                ok = db.unmark_completion(task, day)
+            else:
+                want_marked = True
+                ok = db.mark_completion(task, catagory, day)
+    except Exception as exc:  # noqa: BLE001
+        verb = "unmark" if action == "unmark" else "save"
+        return _discipline_toggle_error(
+            f"Couldn't {verb} “{task}” for {day}: {type(exc).__name__}: {exc}"
+        )
+
+    if not ok:
+        # The transaction committed but the row isn't in the state we asked for
+        # — surface it rather than showing a cell that claims it saved.
+        did = "record" if want_marked else "clear"
+        return _discipline_toggle_error(
+            f"“{task}” for {day} didn't {did} — the database accepted the write "
+            "but the change isn't there. Try again; if it persists, check the "
+            "discipline_completions table."
+        )
+
+    return templates.TemplateResponse(
+        "partials/discipline_cell.html",
+        {
+            "request": request,
+            "discipline_uuid": discipline_uuid,
+            "task": task,
+            "catagory": catagory,
+            "day": day,
+            "marked": want_marked,
+            "today_iso": date.today().isoformat(),
+        },
+    )
+
+
+def _discipline_toggle_error(message: str) -> Response:
+    """A non-swapping error response for the discipline toggle. 422 keeps HTMX
+    from applying the swap (so the cell/row stays truthful), and the
+    ``flashError`` trigger drives the frontend error toast."""
+    return Response(
+        content=message,
+        status_code=422,
+        media_type="text/plain; charset=utf-8",
+        headers={"HX-Trigger": _hx_trigger(flashError={"message": message})},
+    )
+
+
+# --------------------------------------------------------------------------- #
+# FOLLOW-UPS
+# --------------------------------------------------------------------------- #
+
+@app.get("/follow-ups", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def follow_ups_page(request: Request):
+    _require_v2()
+    rows = db.list_follow_ups()
+    return templates.TemplateResponse(
+        "follow_ups.html",
+        {
+            "request": request,
+            "active_nav": "follow-ups",
+            "page_title": "Follow-ups",
+            "rows": rows,
+        },
+    )
+
+
+@app.get("/follow-ups/panel", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def follow_ups_panel(request: Request):
+    """The follow-up rules manager as a standalone partial, loaded into the
+    Tasks-page modal (the feature lives there now rather than as a nav tab)."""
+    _require_v2()
+    return templates.TemplateResponse(
+        "partials/follow_ups_panel.html",
+        {"request": request, "rows": db.list_follow_ups()},
+    )
+
+
+@app.get("/follow-ups/new", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def follow_ups_new_form(request: Request):
+    return templates.TemplateResponse(
+        "partials/follow_up_form.html",
+        {
+            "request": request,
+            "f": {},
+            "is_new": True,
+            "trigger_tasks": db.list_task_names(),
+        },
+    )
+
+
+@app.post("/follow-ups", dependencies=[Depends(require_auth)])
+async def follow_ups_create(request: Request):
+    _require_v2()
+    form = dict(await request.form())
+    db.create_follow_up(form)
+    return Response(status_code=204, headers={
+        "HX-Trigger": _hx_trigger(
+            flashSuccess={"message": "Follow-up rule created"},
+            closeModal=None,
+        ),
+        "HX-Refresh": "true",
+    })
+
+
+@app.get(
+    "/follow-ups/{row_uuid}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_auth)],
+)
+def follow_ups_edit_form(request: Request, row_uuid: str):
+    _require_v2()
+    row = db.get_follow_up(row_uuid)
+    if not row:
+        raise HTTPException(404)
+    return templates.TemplateResponse(
+        "partials/follow_up_form.html",
+        {
+            "request": request,
+            "f": row,
+            "is_new": False,
+            "trigger_tasks": db.list_task_names(),
+        },
+    )
+
+
+@app.post("/follow-ups/{row_uuid}", dependencies=[Depends(require_auth)])
+async def follow_ups_update(request: Request, row_uuid: str):
+    _require_v2()
+    form = dict(await request.form())
+    db.update_follow_up(row_uuid, form)
+    return Response(status_code=204, headers={
+        "HX-Trigger": _hx_trigger(
+            flashSuccess={"message": "Follow-up rule saved"},
+            closeModal=None,
+        ),
+        "HX-Refresh": "true",
+    })
+
+
+@app.post("/follow-ups/{row_uuid}/delete", dependencies=[Depends(require_auth)])
+def follow_ups_delete(row_uuid: str):
+    _require_v2()
+    db.delete_follow_up(row_uuid)
+    return Response(status_code=200, content="", headers={"HX-Trigger": "closeModal"})
+
+
+# --------------------------------------------------------------------------- #
+# PROJECTS — Gantt chart, grouped by catagory
+# --------------------------------------------------------------------------- #
+# All layout math (px/day scale, swimlane y-coords, month gridlines) lives
+# here in the route so the template only iterates over pre-shaped data. Keeps
+# Jinja readable and makes the numbers unit-testable if we ever want to.
+
+def _parse_iso_date(s: Any) -> date | None:
+    if not s:
+        return None
+    try:
+        return date.fromisoformat(str(s)[:10])
+    except ValueError:
+        return None
+
+
+def _status_slug(s: str | None) -> str:
+    return (s or "not-started").lower().replace(" ", "-")
+
+
+# Row/header/bar heights are used by both the SVG and the paired HTML name
+# column, so the two panes stay row-aligned. Change here → change nowhere else.
+_GANTT_HEADER_H = 42
+_GANTT_ROW_H = 28
+_GANTT_CAT_H = 32
+_GANTT_BAR_H = 16
+_GANTT_MIN_WIDTH = 900
+
+
+def _build_gantt(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Shape a row set into everything projects.html needs to draw one SVG.
+
+    Task placement rules:
+      * ``end`` = ``due_date``. Tasks without one land in "unscheduled".
+      * ``start`` = ``start_time`` if set, else ``task_creation``. If neither
+        is usable (or start > end), we fall back to min(today, end) so the
+        bar has a sensible width instead of collapsing to zero.
+    """
+    if not rows:
+        return None
+
+    from collections import defaultdict
+
+    scheduled: list[dict[str, Any]] = []
+    unscheduled: list[dict[str, Any]] = []
+    today = date.today()
+
+    for r in rows:
+        end = _parse_iso_date(r.get("due_date"))
+        if not end:
+            unscheduled.append(r)
+            continue
+        start = _parse_iso_date(r.get("start_time")) or _parse_iso_date(r.get("task_creation"))
+        if not start or start > end:
+            start = min(today, end)
+        entry = dict(r)
+        entry["_start"] = start
+        entry["_end"] = end
+        scheduled.append(entry)
+
+    if not scheduled and not unscheduled:
+        return None
+
+    if scheduled:
+        chart_start = min(r["_start"] for r in scheduled)
+        chart_end = max(r["_end"] for r in scheduled)
+        chart_start = min(chart_start, today)
+        chart_end = max(chart_end, today)
+        # Padding so bars don't touch the panel edges.
+        chart_start -= timedelta(days=3)
+        chart_end += timedelta(days=3)
+    else:
+        # Only unscheduled — still produce a nominal axis so the template
+        # doesn't have to handle a missing chart.
+        chart_start = today - timedelta(days=30)
+        chart_end = today + timedelta(days=30)
+
+    span_days = max(1, (chart_end - chart_start).days)
+
+    # Choose a base px/day per span, then stretch to at least _GANTT_MIN_WIDTH
+    # so short-span charts don't render as a stubby column.
+    if span_days <= 90:
+        px_per_day: float = 12.0
+    elif span_days <= 365:
+        px_per_day = 5.0
+    else:
+        px_per_day = 2.0
+    total_width = max(_GANTT_MIN_WIDTH, span_days * px_per_day)
+    if span_days * px_per_day < _GANTT_MIN_WIDTH:
+        px_per_day = _GANTT_MIN_WIDTH / span_days
+
+    def x_for(d: date) -> float:
+        return (d - chart_start).days * px_per_day
+
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for r in scheduled:
+        groups[r.get("project") or "(none)"].append(r)
+
+    swimlanes: list[dict[str, Any]] = []
+    y = _GANTT_HEADER_H
+    for cat_name in sorted(groups.keys()):
+        tasks_in = groups[cat_name]
+        cat_y = y
+        y += _GANTT_CAT_H
+        lane_tasks = []
+        for t in tasks_in:
+            x1 = x_for(t["_start"])
+            x2 = x_for(t["_end"])
+            lane_tasks.append({
+                "task": t["task"],
+                "status": t["status"] or "Not Started",
+                "status_class": _status_slug(t["status"]),
+                "priority": t.get("priority") or 0,
+                "uuid": t["uuid"],
+                "source": t.get("source", "task"),
+                "catagory": t.get("catagory") or "",
+                "project": t.get("project") or "",
+                "start_iso": t["_start"].isoformat(),
+                "end_iso": t["_end"].isoformat(),
+                "bar_x": x1,
+                "bar_y": y + (_GANTT_ROW_H - _GANTT_BAR_H) / 2,
+                "bar_w": max(2.0, x2 - x1),
+                "row_y": y,
+            })
+            y += _GANTT_ROW_H
+        swimlanes.append({
+            "catagory": cat_name,
+            "count": len(tasks_in),
+            "cat_y": cat_y,
+            "y_start": cat_y,
+            "y_end": y,
+            "tasks": lane_tasks,
+        })
+
+    total_height = max(_GANTT_HEADER_H + 60, y + 8)
+
+    # Month ticks — a vertical gridline + label on the first of each month.
+    months: list[dict[str, Any]] = []
+    d = date(chart_start.year, chart_start.month, 1)
+    while d <= chart_end:
+        if d >= chart_start:
+            months.append({"x": x_for(d), "label": d.strftime("%b %Y")})
+        d = date(d.year + 1, 1, 1) if d.month == 12 else date(d.year, d.month + 1, 1)
+
+    today_x = x_for(today) if chart_start <= today <= chart_end else None
+
+    return {
+        "total_width": total_width,
+        "total_height": total_height,
+        "px_per_day": px_per_day,
+        "header_h": _GANTT_HEADER_H,
+        "row_h": _GANTT_ROW_H,
+        "cat_h": _GANTT_CAT_H,
+        "bar_h": _GANTT_BAR_H,
+        "swimlanes": swimlanes,
+        "months": months,
+        "today_x": today_x,
+        "chart_start_iso": chart_start.isoformat(),
+        "chart_end_iso": chart_end.isoformat(),
+        "unscheduled": unscheduled,
+        "scheduled_count": len(scheduled),
+    }
+
+
+@app.get("/projects", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def projects_page(request: Request):
+    """Gantt-style view of open items grouped by ``catagory``.
+
+    Category selection comes from the query string (repeated ``catagory``
+    params). The page renders an empty state until at least one is picked,
+    so first-time load stays snappy on large DBs.
+    """
+    _require_v2()
+    selected = [p for p in request.query_params.getlist("project") if p]
+    # Preserve old bookmarks from the category-grouped version.
+    if not selected:
+        selected = [p for p in request.query_params.getlist("catagory") if p]
+    include_recurring = request.query_params.get("include_recurring", "1") == "1"
+
+    all_projects = db.list_projects_with_open_tasks(
+        include_recurring=include_recurring
+    )
+    # The old empty-by-default screen looked broken until chips were selected.
+    if not selected:
+        selected = [row["project"] for row in all_projects]
+    rows = db.list_project_rows(selected, include_recurring=include_recurring)
+    chart = _build_gantt(rows)
+
+    return templates.TemplateResponse(
+        "projects.html",
+        {
+            "request": request,
+            "active_nav": "projects",
+            "page_title": "Projects",
+            "all_projects": all_projects,
+            "selected_projects": set(selected),
+            "project_grouping_enabled": db.project_grouping_enabled(),
+            "include_recurring": include_recurring,
+            "chart": chart,
+            "today_iso": date.today().isoformat(),
+        },
+    )
+
+
+# --------------------------------------------------------------------------- #
+# CALENDAR — month view of task due dates
+# --------------------------------------------------------------------------- #
+
+@app.get("/calendar", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def calendar_page(request: Request, month: str | None = None):
+    _require_v2()
+    _reactivate_recurring()
+    today = date.today()
+    try:
+        current = date.fromisoformat(f"{month}-01") if month else today.replace(day=1)
+    except ValueError:
+        raise HTTPException(400, "month must be YYYY-MM")
+    last_day = calendar_mod.monthrange(current.year, current.month)[1]
+    month_end = current.replace(day=last_day)
+    # Full Sunday..Saturday weeks around the selected month.
+    grid_start = current - timedelta(days=(current.weekday() + 1) % 7)
+    grid_end = month_end + timedelta(days=(5 - month_end.weekday()) % 7)
+    rows = db.list_calendar_rows(grid_start, grid_end)
+    existing = {
+        (str(row.get("uuid") or ""), str(row.get("due_date") or "")[:10])
+        for row in rows
+    }
+    for rule in db.list_recurring():
+        for occurrence in recurrence.calendar_occurrence_dates(rule, grid_start, grid_end):
+            key = (str(rule.get("uuid") or ""), occurrence.isoformat())
+            if key in existing:
+                continue
+            projected = dict(rule)
+            projected.update({
+                "due_date": occurrence.isoformat(),
+                "completed": 0,
+                "status": "Not Started",
+                "source": "recurring",
+                "_projected": True,
+            })
+            rows.append(projected)
+            existing.add(key)
+    rows.sort(key=lambda row: (
+        str(row.get("due_date") or ""),
+        -int(row.get("priority") or 0),
+        str(row.get("task") or "").casefold(),
+    ))
+    by_day: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        by_day.setdefault(str(row.get("due_date") or "")[:10], []).append(row)
+    weeks: list[list[dict[str, Any]]] = []
+    cursor = grid_start
+    while cursor <= grid_end:
+        week: list[dict[str, Any]] = []
+        for _ in range(7):
+            week.append({
+                "date": cursor,
+                "iso": cursor.isoformat(),
+                "in_month": cursor.month == current.month,
+                "tasks": by_day.get(cursor.isoformat(), []),
+            })
+            cursor += timedelta(days=1)
+        weeks.append(week)
+    prev_month = (current - timedelta(days=1)).replace(day=1)
+    next_month = (month_end + timedelta(days=1)).replace(day=1)
+    return templates.TemplateResponse(
+        "calendar.html",
+        {
+            "request": request,
+            "active_nav": "calendar",
+            "page_title": "Calendar",
+            "month_label": current.strftime("%B %Y"),
+            "month_value": current.strftime("%Y-%m"),
+            "prev_month": prev_month.strftime("%Y-%m"),
+            "next_month": next_month.strftime("%Y-%m"),
+            "weeks": weeks,
+            "today_iso": today.isoformat(),
+        },
+    )
+
+
+# --------------------------------------------------------------------------- #
+# HOME (customizable widget dashboard)
+# --------------------------------------------------------------------------- #
+
+@app.get("/home", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def home_page(request: Request):
+    _require_v2()
+    _reactivate_recurring()
+    today = date.today()
+    monday = today - timedelta(days=today.weekday())
+    open_tasks = db.list_open_tasks(limit=25)
+    disciplines_pending = db.list_disciplines_pending_today()
+    disc_week = db.weekly_discipline_counts(today)
+    task_week = db.weekly_task_completion_counts(today)
+    overdue_tasks = db.list_overdue_tasks(limit=10)
+    upcoming_tasks = db.list_upcoming_tasks(days=7, limit=10)
+    recent_completions = db.list_recent_completions(limit=8)
+    discipline_streaks = db.list_discipline_streaks(limit=8)
+    follow_ups = db.list_follow_ups_preview(limit=8)
+    recent_activity = db.list_recent_activity(limit=15, days=14)
+    weekly_review = db.weekly_review()
+    disciplines_at_risk = db.list_disciplines_at_risk()
+    # Game'N'Watch: "currently playing/watching" widgets. Best-effort — never
+    # let a Sheets hiccup break the home page.
+    gnw_playing: list[dict[str, Any]] = []
+    gnw_watching: list[dict[str, Any]] = []
+    if gnw.is_enabled():
+        try:
+            gnw_playing = [i for i in gnw.list_items("games") if i["status"] == "playing"][:8]
+            gnw_watching = [i for i in gnw.list_items("shows") if i["status"] == "watching"][:8]
+        except Exception:  # noqa: BLE001
+            gnw_playing, gnw_watching = [], []
+    return templates.TemplateResponse(
+        "home.html",
+        {
+            "request": request,
+            "active_nav": "home",
+            "page_title": "Home",
+            "open_tasks": open_tasks,
+            "disciplines_pending": disciplines_pending,
+            "disc_week": disc_week,
+            "task_week": task_week,
+            "overdue_tasks": overdue_tasks,
+            "upcoming_tasks": upcoming_tasks,
+            "recent_completions": recent_completions,
+            "discipline_streaks": discipline_streaks,
+            "follow_ups": follow_ups,
+            "recent_activity": recent_activity,
+            "weekly_review": weekly_review,
+            "disciplines_at_risk": disciplines_at_risk,
+            "gnw_enabled": gnw.is_enabled(),
+            "gnw_playing": gnw_playing,
+            "gnw_watching": gnw_watching,
+            "week_of": monday.isoformat(),
+            "today_iso": today.isoformat(),
+            "chat_enabled": not isinstance(_LLM_PROVIDER, llm_mod.DisabledProvider),
+            "chat_provider": _LLM_PROVIDER.name,
+            "chat_model": _LLM_PROVIDER.model,
+            "chat_disabled_reason": getattr(_LLM_PROVIDER, "reason", ""),
+        },
+    )
+
+
+# --------------------------------------------------------------------------- #
+# CHAT — LLM-driven natural-language interface to the task tools
+# --------------------------------------------------------------------------- #
+# Security notes:
+#   - The LLM can only invoke tools registered in chat_tools.build_registry().
+#   - No shell, no eval, no filesystem write, no dynamic code loading.
+#   - Chat history lives in-memory keyed by the session cookie value; a
+#     restart clears everything.
+
+from .auth import COOKIE_NAME as _AUTH_COOKIE  # keep import local — no top-of-file churn
+
+_CHAT_LOCK = threading.Lock()
+
+
+def _chat_session_id(request: Request) -> str:
+    """Use the auth cookie itself as the chat session key. Falls back to the
+    remote address so the panel still works for token/bearer-only clients."""
+    sid = request.cookies.get(_AUTH_COOKIE)
+    if sid:
+        return f"cookie:{sid}"
+    client = request.client.host if request.client else "unknown"
+    return f"addr:{client}"
+
+
+@app.post("/chat", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def chat_send(request: Request, message: str = Form(...)):
+    _require_v2()
+    text = (message or "").strip()
+    if not text:
+        # Render nothing — HTMX will just no-op the swap.
+        return HTMLResponse("")
+
+    session_id = _chat_session_id(request)
+    # The provider is synchronous. A sync route runs in FastAPI's threadpool,
+    # keeping slow LLM calls from freezing every other request. Serialize chat
+    # turns so two rapid submissions cannot interleave one shared history.
+    with _CHAT_LOCK:
+        history = llm_mod.get_history(session_id)
+        if not history:
+            history.append({"role": "system", "content": chat_tools.SYSTEM_PROMPT})
+        turn_start = len(history)
+        history.append({"role": "user", "content": text})
+
+        try:
+            result = llm_mod.run_chat_with_tools(_LLM_PROVIDER, history, _LLM_TOOLS)
+            reply = result.reply or "(no response)"
+            tool_calls = result.tool_calls
+            error = None
+        except llm_mod.LLMError as exc:
+            # Remove the complete partial turn (user, assistant and any tool
+            # messages), not merely whichever message happened to be last.
+            del history[turn_start:]
+            reply = ""
+            tool_calls = []
+            error = str(exc)
+        finally:
+            llm_mod.trim_history(session_id)
+
+    return templates.TemplateResponse(
+        "partials/chat_exchange.html",
+        {
+            "request": request,
+            "user_message": text,
+            "assistant_message": reply,
+            "tool_calls": tool_calls,
+            "error": error,
+        },
+    )
+
+
+@app.post("/chat/reset", dependencies=[Depends(require_auth)])
+def chat_reset(request: Request):
+    llm_mod.reset_history(_chat_session_id(request))
+    return HTMLResponse("")
+
+
+# --------------------------------------------------------------------------- #
+# ADMIN — self-update (git pull + pip install) and restart
+# --------------------------------------------------------------------------- #
+
+def _git_head_short() -> str:
+    """Best-effort short git SHA; returns empty string if git unavailable."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(REPO_DIR), "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def _git_status_line() -> str:
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(REPO_DIR), "log", "-1", "--pretty=%h %s (%cr)"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def _git_branch() -> str:
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(REPO_DIR), "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+@app.get("/admin", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def admin_page(request: Request):
+    env_path = env_file.env_file_path(REPO_DIR)
+    writable, unwritable_reason = env_file.env_file_writable(env_path)
+    try:
+        current_env = env_file.read_env_file(env_path)
+    except Exception as exc:  # e.g. permission error on read
+        current_env = {}
+        env_read_error = f"{type(exc).__name__}: {exc}"
+    else:
+        env_read_error = ""
+    return templates.TemplateResponse(
+        "admin.html",
+        {
+            "request": request,
+            "active_nav": "admin",
+            "page_title": "Admin",
+            "repo_dir": str(REPO_DIR),
+            "git_head": _git_head_short(),
+            "git_branch": _git_branch(),
+            "git_last": _git_status_line(),
+            "python_exe": sys.executable,
+            "schema_version": _STARTUP_SCHEMA["version"],
+            "env_file_path": str(env_path),
+            "env_file_exists": env_path.exists(),
+            "env_writable": writable,
+            "env_unwritable_reason": unwritable_reason,
+            "env_read_error": env_read_error,
+            "env_groups": env_file.grouped_view(current_env),
+            "protected_env_keys_present": sorted(
+                env_file.PROTECTED_KEYS.intersection(current_env)
+            ),
+            "gnw": gnw.credentials_status(),
+        },
+    )
+
+
+def _integration_result(name: str, check) -> dict[str, Any]:
+    started = time.perf_counter()
+    try:
+        detail = str(check() or "connected")
+        return {
+            "name": name,
+            "ok": True,
+            "detail": detail,
+            "ms": round((time.perf_counter() - started) * 1000),
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "name": name,
+            "ok": False,
+            "detail": f"{type(exc).__name__}: {exc}",
+            "ms": round((time.perf_counter() - started) * 1000),
+        }
+
+
+@app.get("/admin/integrations", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def admin_integrations(request: Request):
+    """Run bounded, read-only checks without requiring server-terminal access."""
+    import httpx
+    from sqlalchemy import text as sql_text
+
+    def check_db():
+        with db.get_engine().connect() as conn:
+            return f"query returned {conn.execute(sql_text('SELECT 1')).scalar_one()}"
+
+    def check_sheets():
+        reason = gnw.disabled_reason()
+        if reason:
+            raise RuntimeError(reason)
+        sheet = gnw._get_sheet()
+        return f"sheet: {sheet.title}"
+
+    def check_discipline():
+        return db.discipline_storage_health()
+
+    def check_tvmaze():
+        response = httpx.get("https://api.tvmaze.com/shows/1", timeout=8)
+        response.raise_for_status()
+        return "catalog reachable"
+
+    def check_anilist():
+        data = gnw._anilist_request("query { Media(id: 1) { id } }", {})
+        if not data.get("Media"):
+            raise RuntimeError("unexpected response")
+        return "catalog reachable"
+
+    def check_youtube():
+        if not os.environ.get("LUIGI_WEB_YOUTUBE_API_KEY", "").strip():
+            raise RuntimeError("optional API key not configured")
+        return "playlist search configured"
+
+    def check_steam():
+        response = httpx.get(
+            "https://store.steampowered.com/api/appdetails",
+            params={"appids": 10, "cc": "us", "l": "en"}, timeout=8,
+        )
+        response.raise_for_status()
+        progress = bool(os.environ.get("LUIGI_WEB_STEAM_API_KEY") and os.environ.get("LUIGI_WEB_STEAM_ID"))
+        return "store reachable; progress configured" if progress else "store reachable; progress not configured"
+
+    def check_llm():
+        if isinstance(_LLM_PROVIDER, llm_mod.DisabledProvider):
+            raise RuntimeError(_LLM_PROVIDER.reason)
+        return f"{_LLM_PROVIDER.name} · {_LLM_PROVIDER.model}"
+
+    def check_git():
+        head = _git_head_short()
+        if not head:
+            raise RuntimeError("git checkout unavailable")
+        return f"{_git_branch()} · {head}"
+
+    def check_env():
+        path = env_file.env_file_path(REPO_DIR)
+        writable, reason = env_file.env_file_writable(path)
+        if not writable:
+            raise RuntimeError(reason)
+        return f"writable: {path}"
+
+    def check_finance():
+        if not finance_is_configured():
+            raise RuntimeError("separate Finance token not configured")
+        return finance.storage_health()
+
+    checks = [
+        _integration_result("PostgreSQL", check_db),
+        _integration_result("Discipline storage", check_discipline),
+        _integration_result("Google Sheets", check_sheets),
+        _integration_result("Steam", check_steam),
+        _integration_result("TVMaze", check_tvmaze),
+        _integration_result("AniList", check_anilist),
+        _integration_result("YouTube", check_youtube),
+        _integration_result("LLM", check_llm),
+        _integration_result("Git checkout", check_git),
+        _integration_result("Environment file", check_env),
+        _integration_result("Finance storage", check_finance),
+    ]
+    return templates.TemplateResponse(
+        "partials/admin_integrations.html",
+        {"request": request, "checks": checks, "checked_at": _dt.now().strftime("%H:%M:%S")},
+    )
+
+
+@app.post("/admin/gnw-credentials", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+async def admin_gnw_credentials(request: Request):
+    """Save a pasted Game'N'Watch service-account credentials.json.
+
+    Writes it to the app-managed path (see gnw.credentials_path) so no
+    host-side file placement is needed, then hot-reloads the Sheets client.
+    """
+    form = await request.form()
+    raw = form.get("credentials", "")
+    ok, message = gnw.save_credentials(raw if isinstance(raw, str) else "")
+    return templates.TemplateResponse(
+        "partials/admin_gnw_result.html",
+        {"request": request, "ok": ok, "message": message,
+         "status": gnw.credentials_status()},
+    )
+
+
+@app.post("/admin/env", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+async def admin_env_save(request: Request):
+    """Save changes to the managed keys in the .env file.
+
+    Contract:
+      * Only keys in env_file.KNOWN_KEYS are accepted; anything else is
+        rejected by env_file.update_env_file.
+      * Secret fields sent empty mean 'keep the current value' — see the
+        UI copy on the form. This avoids blanking a password by mistake.
+      * The file itself does the atomic write; we just prepare the payload.
+    """
+    env_path = env_file.env_file_path(REPO_DIR)
+    form = await request.form()
+
+    try:
+        current = env_file.read_env_file(env_path)
+    except Exception as exc:
+        return templates.TemplateResponse(
+            "partials/admin_env_result.html",
+            {"request": request, "ok": False,
+             "error": f"could not read {env_path}: {exc}",
+             "changed": [], "unchanged_secrets": [],
+             "hot_reloaded": [], "restart_needed": []},
+        )
+
+    updates: dict[str, str] = {}
+    unchanged_secrets: list[str] = []
+    for spec in env_file.KNOWN_KEYS:
+        submitted = form.get(spec.name)
+        if submitted is None:
+            continue
+        new_val = str(submitted)
+        if spec.is_secret and new_val == "":
+            # Blank secret = keep current. Only skip when the user actually
+            # left it blank (submitted == "" but the field was sent).
+            unchanged_secrets.append(spec.name)
+            continue
+        if new_val == current.get(spec.name, ""):
+            continue  # nothing changed — skip the write
+        updates[spec.name] = new_val
+
+    if not updates:
+        return templates.TemplateResponse(
+            "partials/admin_env_result.html",
+            {"request": request, "ok": True, "error": None,
+             "changed": [], "unchanged_secrets": unchanged_secrets,
+             "hot_reloaded": [], "restart_needed": []},
+        )
+
+    try:
+        changed = env_file.update_env_file(env_path, updates, known_only=True)
+    except env_file.EnvUpdateError as exc:
+        return templates.TemplateResponse(
+            "partials/admin_env_result.html",
+            {"request": request, "ok": False, "error": str(exc),
+             "changed": [], "unchanged_secrets": unchanged_secrets,
+             "hot_reloaded": [], "restart_needed": []},
+        )
+    except Exception as exc:
+        return templates.TemplateResponse(
+            "partials/admin_env_result.html",
+            {"request": request, "ok": False,
+             "error": f"{type(exc).__name__}: {exc}",
+             "changed": [], "unchanged_secrets": unchanged_secrets,
+             "hot_reloaded": [], "restart_needed": []},
+        )
+
+    hot_reloaded, restart_needed = _hot_reload_env(changed, updates)
+
+    return templates.TemplateResponse(
+        "partials/admin_env_result.html",
+        {"request": request, "ok": True, "error": None,
+         "changed": changed, "unchanged_secrets": unchanged_secrets,
+         "hot_reloaded": hot_reloaded, "restart_needed": restart_needed},
+    )
+
+
+# Keys we can safely apply live by mutating os.environ + rebuilding singletons.
+# Anything not listed here still needs a systemctl restart to take effect.
+_HOT_RELOADABLE = {
+    "LUIGI_WEB_LLM_PROVIDER",
+    "LUIGI_WEB_LLM_BASE_URL",
+    "LUIGI_WEB_LLM_API_KEY",
+    "LUIGI_WEB_LLM_MODEL",
+    "LUIGI_WEB_LLM_TIMEOUT",
+    "LUIGI_WEB_LLM_MAX_TOOL_ITERATIONS",
+    "LUIGI_WEB_COPILOT_HOME",
+    "LUIGI_WEB_STEAM_API_KEY",
+    "LUIGI_WEB_STEAM_ID",
+    "LUIGI_WEB_YOUTUBE_API_KEY",
+}
+
+
+def _hot_reload_env(changed: list[str], updates: dict[str, str]) -> tuple[list[str], list[str]]:
+    """Push freshly-saved values into os.environ and rebuild any live singletons
+    that depend on them. Returns (hot_reloaded_keys, restart_needed_keys)."""
+    global _LLM_PROVIDER
+    hot: list[str] = []
+    cold: list[str] = []
+    llm_touched = False
+    for key in changed:
+        if key in _HOT_RELOADABLE:
+            os.environ[key] = updates[key]
+            hot.append(key)
+            if key.startswith("LUIGI_WEB_LLM_") or key == "LUIGI_WEB_COPILOT_HOME":
+                llm_touched = True
+        else:
+            cold.append(key)
+    if llm_touched:
+        _LLM_PROVIDER = llm_mod.build_provider_from_env()
+    return hot, cold
+
+
+def _run(cmd: list[str], cwd: Path, env: dict[str, str] | None = None,
+         timeout: int = 180) -> tuple[int, str]:
+    """Run a shell command, capture combined output, return (rc, text)."""
+    try:
+        proc = subprocess.run(
+            cmd, cwd=str(cwd), capture_output=True, text=True,
+            timeout=timeout, env=env,
+        )
+    except FileNotFoundError as exc:
+        return 127, f"$ {' '.join(shlex.quote(c) for c in cmd)}\n{exc}"
+    except subprocess.TimeoutExpired:
+        return 124, f"$ {' '.join(shlex.quote(c) for c in cmd)}\nTIMEOUT after {timeout}s"
+    combined = (proc.stdout or "") + (proc.stderr or "")
+    header = f"$ {' '.join(shlex.quote(c) for c in cmd)}\n"
+    return proc.returncode, header + combined
+
+
+@app.post("/admin/update", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def admin_update(request: Request):
+    """Pull latest git + reinstall requirements. Does NOT restart."""
+    steps: list[dict[str, Any]] = []
+
+    # Environment for subprocesses: force pip to be quiet-ish and cacheless so
+    # systemd's ProtectHome=true doesn't trip us up.
+    env = os.environ.copy()
+    env["PIP_NO_CACHE_DIR"] = "1"
+    env.setdefault("HOME", str(REPO_DIR))  # keep git happy under ProtectHome=true
+
+    # 1. Verify this is a git checkout.
+    if not (REPO_DIR / ".git").exists():
+        steps.append({
+            "name": "git check",
+            "rc": 1,
+            "out": f"{REPO_DIR} is not a git checkout. Cannot self-update.",
+        })
+        return templates.TemplateResponse(
+            "partials/admin_update_result.html",
+            {"request": request, "steps": steps, "ok": False, "restarted": False},
+        )
+
+    # 2. git fetch
+    rc, out = _run(["git", "fetch", "--all", "--prune"], cwd=REPO_DIR, env=env)
+    steps.append({"name": "git fetch", "rc": rc, "out": out})
+    ok = rc == 0
+
+    # 3. git pull (fast-forward only — refuse to auto-merge)
+    if ok:
+        rc, out = _run(["git", "pull", "--ff-only"], cwd=REPO_DIR, env=env)
+        steps.append({"name": "git pull --ff-only", "rc": rc, "out": out})
+        ok = rc == 0
+
+    # 4. pip install -r requirements.txt (uses the running interpreter's venv)
+    if ok:
+        rc, out = _run(
+            [sys.executable, "-m", "pip", "install", "--no-cache-dir",
+             "-r", "requirements.txt"],
+            cwd=REPO_DIR, env=env, timeout=600,
+        )
+        steps.append({"name": "pip install -r requirements.txt", "rc": rc, "out": out})
+        ok = rc == 0
+
+    return templates.TemplateResponse(
+        "partials/admin_update_result.html",
+        {"request": request, "steps": steps, "ok": ok, "restarted": False,
+         "git_head": _git_head_short(), "git_last": _git_status_line()},
+    )
+
+
+@app.post("/admin/restart", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def admin_restart(request: Request):
+    """Exit the process; systemd (Restart=always) brings it back with new code.
+
+    ``os._exit(0)`` on its own only kills the *current* uvicorn worker — the
+    other worker(s) keep serving stale bytecode after a code pull, which
+    makes new-code and old-code behaviour appear "randomly". So we signal
+    our parent (the uvicorn master) first, which cleanly reaps every worker
+    and lets systemd's ``Restart=always`` bring the whole tree back on the
+    new code. If we're somehow not a worker (dev mode, single-process), the
+    ``os._exit`` fallback still gets us a fresh process.
+    """
+    def _exit_soon() -> None:
+        time.sleep(0.6)
+        try:
+            ppid = os.getppid()
+            # ppid == 1 means our parent is already init/systemd (we ARE
+            # the top process), so killing it would take out unrelated
+            # services. Fall through to _exit in that case.
+            if ppid > 1:
+                os.kill(ppid, signal.SIGTERM)
+        except OSError:
+            pass
+        os._exit(0)
+
+    threading.Thread(target=_exit_soon, daemon=True).start()
+    return templates.TemplateResponse(
+        "partials/admin_update_result.html",
+        {"request": request, "steps": [], "ok": True, "restarted": True},
+    )
+
+
+@app.get("/admin/backup", dependencies=[Depends(require_auth)])
+def admin_backup():
+    """Full read-only JSON dump of the luigi_todo tables the GUI touches.
+
+    Streams as a file attachment named ``luigi-backup-YYYYMMDD-HHMMSS.json``.
+    Respects the "no whole-table rewrites, no DDL" contract — this is read
+    traffic only and never writes back.
+    """
+    _require_v2()
+    payload = db.export_backup()
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    filename = f"luigi-backup-{stamp}.json"
+    return JSONResponse(
+        content=payload,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Dev entry point
+# --------------------------------------------------------------------------- #
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(
+        "luigi_web.application:app",
+        host=os.environ.get("LUIGI_WEB_BIND", "0.0.0.0"),
+        port=int(os.environ.get("LUIGI_WEB_PORT", "8080")),
+        reload=False,
+    )

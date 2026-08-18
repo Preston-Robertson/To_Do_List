@@ -17,11 +17,8 @@ from unittest.mock import MagicMock, Mock, patch
 from sqlalchemy import create_engine, text
 from starlette.requests import Request
 
-import app
-import auth
-import db
-import gnw
-import llm
+from luigi_web import application as app
+from luigi_web import auth, db, gnw, llm
 
 
 class AuthTests(unittest.TestCase):
