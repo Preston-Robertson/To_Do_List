@@ -29,6 +29,7 @@ from fastapi.templating import Jinja2Templates
 from . import db
 from . import recurrence
 from . import task_events
+from . import clock
 from .auth import (
     COOKIE_NAME,
     CSRF_COOKIE_NAME,
@@ -1369,7 +1370,7 @@ def _year_grid(year: int) -> list[list[date | None]]:
 
 def _available_years() -> list[int]:
     """Years to show in the dropdown: from earliest completion → next year."""
-    current = date.today().year
+    current = clock.local_today().year
     with db.get_engine().connect() as conn:
         from sqlalchemy import text as _t
         row = conn.execute(
@@ -1388,10 +1389,10 @@ def _available_years() -> list[int]:
 def discipline_page(request: Request, year: int | None = None):
     _require_v2()
     if year is None:
-        year = date.today().year
+        year = clock.local_today().year
     disciplines = db.list_disciplines(include_inactive=True)
     completions = db.list_completions_for_year(year)
-    today_iso = date.today().isoformat()
+    today_iso = clock.local_today().isoformat()
     today_tasks = db.list_completion_tasks_for_day(today_iso)
     # Index completions by a normalized task key too, so a completion logged
     # under a slightly different string (trailing space, different case) still
@@ -1412,7 +1413,7 @@ def discipline_page(request: Request, year: int | None = None):
         d["_today_done"] = _norm(d["task"]) in today_by_norm
         # Streak is computed against the CURRENT date, so use full history when
         # viewing the current year and just the year's data otherwise.
-        if year == date.today().year:
+        if year == clock.local_today().year:
             d["_streak"] = db.compute_streak(days)
         else:
             d["_streak"] = d.get("current_streak") or 0
@@ -1551,7 +1552,7 @@ async def discipline_today(row_uuid: str, request: Request):
     if action not in {"mark", "unmark"}:
         raise HTTPException(400, "action must be mark or unmark")
     task = str(discipline["task"])
-    day = date.today().isoformat()
+    day = clock.local_today().isoformat()
     try:
         if action == "mark":
             ok = db.mark_completion(task, discipline.get("catagory"), day)
@@ -1653,7 +1654,7 @@ async def discipline_toggle(request: Request):
             "catagory": catagory,
             "day": day,
             "marked": want_marked,
-            "today_iso": date.today().isoformat(),
+            "today_iso": clock.local_today().isoformat(),
         },
     )
 
@@ -1814,7 +1815,7 @@ def _build_gantt(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
 
     scheduled: list[dict[str, Any]] = []
     unscheduled: list[dict[str, Any]] = []
-    today = date.today()
+    today = clock.local_today()
 
     for r in rows:
         end = _parse_iso_date(r.get("due_date"))
@@ -1968,7 +1969,7 @@ def projects_page(request: Request):
             "project_grouping_enabled": db.project_grouping_enabled(),
             "include_recurring": include_recurring,
             "chart": chart,
-            "today_iso": date.today().isoformat(),
+            "today_iso": clock.local_today().isoformat(),
         },
     )
 
@@ -1981,7 +1982,7 @@ def projects_page(request: Request):
 def calendar_page(request: Request, month: str | None = None):
     _require_v2()
     _reactivate_recurring()
-    today = date.today()
+    today = clock.local_today()
     try:
         current = date.fromisoformat(f"{month}-01") if month else today.replace(day=1)
     except ValueError:
@@ -2053,7 +2054,10 @@ def calendar_page(request: Request, month: str | None = None):
             "next_month": next_month.strftime("%Y-%m"),
             "weeks": weeks,
             "today_iso": today.isoformat(),
-            "completion_history_available": history_status.available,
+            "completion_history_available": (
+                history_status.available or bool(completion_rows)
+            ),
+            "completion_history_complete": history_status.available,
             "completion_history_reason": history_status.reason,
             "completion_day_policy": task_events.server_time_policy(),
         },
@@ -2068,7 +2072,7 @@ def calendar_page(request: Request, month: str | None = None):
 def home_page(request: Request):
     _require_v2()
     _reactivate_recurring()
-    today = date.today()
+    today = clock.local_today()
     monday = today - timedelta(days=today.weekday())
     open_tasks = db.list_open_tasks(limit=25)
     disciplines_pending = db.list_disciplines_pending_today()
@@ -2492,6 +2496,7 @@ _HOT_RELOADABLE = {
     "LUIGI_WEB_STEAM_ID",
     "LUIGI_WEB_YOUTUBE_API_KEY",
     "LUIGI_WEB_DAY_CUTOFF",
+    "LUIGI_WEB_TIMEZONE",
 }
 
 

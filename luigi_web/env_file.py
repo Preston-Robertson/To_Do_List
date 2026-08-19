@@ -72,6 +72,7 @@ KNOWN_KEYS: tuple[EnvKey, ...] = (
     EnvKey("LUIGI_WEB_BIND",        "Bind address",      "Uvicorn bind address (default 0.0.0.0).",        "Web"),
     EnvKey("LUIGI_WEB_PORT",        "Bind port",         "Uvicorn port (default 8080).",                   "Web",      input_type="number"),
     EnvKey("LUIGI_WEB_DAY_CUTOFF", "Completion day cutoff", "HH:MM server-local cutoff; earlier completions count toward the previous day (default 04:00).", "Web"),
+    EnvKey("LUIGI_WEB_TIMEZONE", "Local timezone", "IANA timezone used for today and completion dates (default America/New_York).", "Web"),
     # Finance ---------------------------------------------------------------
     EnvKey("LUIGI_WEB_FINANCE_DB", "Finance database", "App-owned SQLite path. Keep it outside the repository.", "Finance"),
     EnvKey("LUIGI_WEB_FINANCE_BASE_CURRENCY", "Base currency", "ISO currency code used for reports (default USD).", "Finance"),

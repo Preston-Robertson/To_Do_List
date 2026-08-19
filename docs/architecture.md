@@ -48,6 +48,9 @@ The optional shared `task_events` contract records immutable actual timestamps
 and effective completion dates. LuigiBot owns its migration. Before that table
 is installed, legacy completion remains available, Calendar marks completion
 history unavailable, and explicit completion-date overrides are rejected.
+Calendar nevertheless shows currently completed legacy rows, converting naive
+legacy timestamps as UTC into the configured `LUIGI_WEB_TIMEZONE`; this is
+explicitly labeled limited history until the ledger is available.
 
 The current Discipline schema links completions by task text. The coordinated
 UUID migration plan is in `discipline-v2-plan.md` and must be delivered with

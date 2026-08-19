@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .paths import FEEDBACK_DB_PATH
+from . import clock
 
 CATEGORIES = ("Bug", "Idea", "UX", "Other")
 STATUSES = ("New", "Reviewed", "Planned", "Resolved", "Archived")
@@ -81,7 +82,7 @@ def create_item(data: dict[str, Any]) -> str:
     if page_path and (not page_path.startswith("/") or "?" in page_path or "#" in page_path):
         raise ValueError("feedback page path must be a local path without query data")
     row_uuid = str(uuid.uuid4())
-    now = datetime.now().isoformat(timespec="seconds")
+    now = clock.local_now().isoformat(timespec="seconds")
     with _connect() as conn:
         conn.execute("""
             INSERT INTO feedback_items (
@@ -116,7 +117,7 @@ def update_item(row_uuid: str, data: dict[str, Any]) -> bool:
     status = _clean_status(data.get("status"))
     tags = str(data.get("tags") or "").strip()[:500]
     notes = str(data.get("notes") or "").strip()[:5000]
-    now = datetime.now().isoformat(timespec="seconds")
+    now = clock.local_now().isoformat(timespec="seconds")
     with _connect() as conn:
         result = conn.execute("""
             UPDATE feedback_items
@@ -136,7 +137,7 @@ def delete_item(row_uuid: str) -> bool:
 def export_payload() -> dict[str, Any]:
     return {
         "version": 1,
-        "exported_at": datetime.now().isoformat(timespec="seconds"),
+        "exported_at": clock.local_now().isoformat(timespec="seconds"),
         "items": list_items(),
     }
 

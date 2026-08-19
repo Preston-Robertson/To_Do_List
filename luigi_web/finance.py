@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .paths import DATA_DIR
+from . import clock
 
 _DB_LOCK = threading.RLock()
 _IMPORT_LOCK = threading.Lock()
@@ -89,7 +90,7 @@ def iso_date(value: Any, field: str = "date") -> str:
 
 
 def month_value(value: Any | None = None) -> str:
-    raw = str(value or date.today().strftime("%Y-%m")).strip()
+    raw = str(value or clock.local_today().strftime("%Y-%m")).strip()
     if not re.fullmatch(r"\d{4}-\d{2}", raw):
         raise ValueError("month must be YYYY-MM")
     try:
@@ -136,7 +137,7 @@ def quantity_from_micro(value: int | None) -> str:
 
 
 def now_iso() -> str:
-    return datetime.now().isoformat(timespec="seconds")
+    return clock.local_now().isoformat(timespec="seconds")
 
 
 def new_id() -> str:
@@ -526,7 +527,7 @@ def upsert_holding(data: dict[str, Any]) -> str:
     market_value_minor = to_minor(data.get("market_value") or "0", "market value")
     if cost_basis_minor < 0 or market_value_minor < 0:
         raise ValueError("holding values cannot be negative")
-    as_of = iso_date(data.get("as_of_date") or date.today().isoformat(), "as-of date")
+    as_of = iso_date(data.get("as_of_date") or clock.local_today().isoformat(), "as-of date")
     timestamp = now_iso()
     with connect(write=True) as connection:
         existing = connection.execute(
@@ -675,7 +676,7 @@ def finance_alerts(*, budgets: list[dict[str, Any]] | None = None,
             alerts.append({"level": "danger", "title": "Budget exceeded", "detail": budget["category"]})
         elif percent >= 80:
             alerts.append({"level": "warning", "title": "Budget nearing limit", "detail": budget["category"]})
-    today = date.today()
+    today = clock.local_today()
     soon = today + timedelta(days=7)
     for item in recurring:
         due = date.fromisoformat(str(item["next_due_date"])[:10])
@@ -695,7 +696,7 @@ def finance_alerts(*, budgets: list[dict[str, Any]] | None = None,
 def save_net_worth_snapshot(snapshot_date: str | None = None) -> str:
     state = dashboard()
     snapshot_id = new_id()
-    day = iso_date(snapshot_date or date.today().isoformat(), "snapshot date")
+    day = iso_date(snapshot_date or clock.local_today().isoformat(), "snapshot date")
     with connect(write=True) as connection:
         connection.execute("""
             INSERT INTO finance_net_worth_snapshots (id, snapshot_date, total_minor, created_at)

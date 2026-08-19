@@ -1,9 +1,11 @@
 """Contract tests for the optional LuigiBot-owned task event ledger."""
 from __future__ import annotations
 
+import os
 import unittest
 from unittest.mock import patch
-from datetime import datetime
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
@@ -79,15 +81,16 @@ class TaskEventsContractTests(unittest.TestCase):
         engine.dispose()
 
     def test_effective_date_uses_server_local_cutoff(self) -> None:
+        eastern = ZoneInfo("America/New_York")
         self.assertEqual(
             task_events.effective_date_for(
-                datetime(2026, 8, 19, 1, 0), cutoff="04:00"
+                datetime(2026, 8, 19, 1, 0, tzinfo=eastern), cutoff="04:00"
             ),
             "2026-08-18",
         )
         self.assertEqual(
             task_events.effective_date_for(
-                datetime(2026, 8, 19, 5, 0), cutoff="04:00"
+                datetime(2026, 8, 19, 5, 0, tzinfo=eastern), cutoff="04:00"
             ),
             "2026-08-19",
         )
@@ -238,6 +241,27 @@ class TaskEventsContractTests(unittest.TestCase):
         self.assertEqual(int(completed), 1)
         self.assertFalse(transition.history_available)
         self.assertIsNone(transition.event_uuid)
+        engine.dispose()
+
+    def test_legacy_completion_fallback_converts_utc_to_local_calendar_day(self) -> None:
+        engine = self._task_engine()
+        with engine.begin() as conn:
+            conn.execute(text("""
+                UPDATE tasks SET completed = 1, status = 'Completed',
+                    completed_time = '2026-08-19T01:00:00'
+                WHERE uuid = 'task-1'
+            """))
+        with (
+            patch.object(db, "get_engine", return_value=engine),
+            patch.dict(os.environ, {"LUIGI_WEB_TIMEZONE": "America/New_York"}),
+        ):
+            status, rows = db.list_task_completion_events(
+                date(2026, 8, 18), date(2026, 8, 18)
+            )
+        self.assertFalse(status.available)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["due_date"], "2026-08-18")
+        self.assertTrue(rows[0]["_history_limited"])
         engine.dispose()
 
     def test_date_override_rolls_back_when_ledger_is_absent(self) -> None:

@@ -33,6 +33,7 @@ from typing import Any
 import httpx
 
 from .paths import GNW_CREDENTIALS_PATH, PROJECT_ROOT
+from . import clock
 
 # gspread + google-auth are optional. Import lazily-tolerant so the whole app
 # doesn't fail to boot on a box where they aren't installed yet.
@@ -532,7 +533,7 @@ def media_insights(
     today: date | None = None,
 ) -> dict[str, Any]:
     """Build chart/table-ready aggregate metrics from normalized sheet rows."""
-    today = today or date.today()
+    today = today or clock.local_today()
     complete_statuses = {"completed", "achievements"} if section == "games" else {"completed"}
     statuses = statuses_for(section)
     status_counts = {status: 0 for status in statuses}
@@ -946,7 +947,7 @@ def add_catalog_item(
     put("Title", title)
     put("Status", status)
     put("Priority", max(1, min(int(priority), 5)))
-    put("Date Added", date.today().isoformat())
+    put("Date Added", clock.local_today().isoformat())
     put("Cover URL", metadata.get("cover_url"))
     put("External ID", metadata.get("external_id"))
     put("Source", metadata.get("source"))
@@ -1094,7 +1095,7 @@ def _stamp_if_empty(ws, row_idx: int, hidx: dict[str, int], header: str) -> None
     if existing and str(existing).strip():
         return
     try:
-        ws.update_cell(row_idx, col, date.today().isoformat())
+        ws.update_cell(row_idx, col, clock.local_today().isoformat())
     except Exception:  # noqa: BLE001
         pass
 

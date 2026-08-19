@@ -510,16 +510,17 @@
     const done = e.target.closest("[data-at-risk-done]");
     if (done) {
       e.preventDefault();
+      const endpoint = done.dataset.endpoint;
+      if (!endpoint) {
+        window.showError("This discipline action is missing its endpoint.");
+        return;
+      }
       const fd = new FormData();
-      fd.set("discipline_uuid", done.dataset.disciplineUuid || "");
-      fd.set("task", done.dataset.task || "");
-      fd.set("day", done.dataset.day || "");
-      if (done.dataset.catagory) fd.set("catagory", done.dataset.catagory);
       fd.set("action", "mark");
       const originalText = done.textContent;
       done.disabled = true;
       done.textContent = "…";
-      fetch("/discipline/toggle", {
+      fetch(endpoint, {
         method: "POST",
         body: fd,
         credentials: "same-origin",

@@ -63,6 +63,7 @@ web-only features, including Finance.
 - `luigi_web/llm.py`: OpenAI-compatible and isolated GitHub Copilot providers.
 - `luigi_web/env_file.py`: allow-listed Admin environment editor.
 - `luigi_web/recurrence.py`: dependency-free recurrence and calendar projection math.
+- `luigi_web/clock.py`: configured single-user timezone and legacy UTC conversion.
 - `luigi_web/paths.py`: repository-root filesystem anchors shared after packaging.
 - `templates/`: server-rendered pages and HTMX partials.
 - `static/`: local CSS, JavaScript, icons, and vendored browser libraries.

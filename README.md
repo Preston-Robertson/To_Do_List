@@ -106,6 +106,8 @@ control. Core settings:
 | `LUIGI_WEB_UI_TOKEN` | Main application login token |
 | `LUIGI_WEB_FINANCE_TOKEN` | Separate Finance unlock token |
 | `LUIGI_WEB_SECURE_COOKIES` | Set to `1` behind HTTPS |
+| `LUIGI_WEB_TIMEZONE` | IANA timezone for user-facing dates (default `America/New_York`) |
+| `LUIGI_WEB_DAY_CUTOFF` | Local `HH:MM` cutoff for previous-day completion (default `04:00`) |
 | `LUIGI_WEB_FINANCE_DB` | App-owned Finance SQLite path |
 | `LUIGI_WEB_FINANCE_BASE_CURRENCY` | ISO currency used for reports |
 | `LUIGI_WEB_LLM_*` | Optional GitHub Copilot or OpenAI-compatible assistant |
@@ -113,6 +115,11 @@ control. Core settings:
 | `LUIGI_WEB_GNW_*` | Optional Game'N'Watch Google Sheet |
 | `LUIGI_WEB_STEAM_*` | Optional Steam progress integration |
 | `LUIGI_WEB_YOUTUBE_API_KEY` | Optional playlist search |
+
+Until the shared `task_events` migration is installed, Calendar still displays
+currently completed task rows using `completed_time`, converted from legacy UTC
+timestamps into `LUIGI_WEB_TIMEZONE`. It labels this as limited history because
+older recurring completions cannot be reconstructed after reactivation.
 
 The authenticated Admin page can edit allow-listed settings and run read-only
 integration checks. It deliberately cannot read or change

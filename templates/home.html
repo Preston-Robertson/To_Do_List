@@ -22,10 +22,7 @@
             </span>
             <button type="button" class="btn btn-tiny"
                     data-at-risk-done
-                  data-discipline-uuid="{{ d.uuid }}"
-                    data-task="{{ d.task }}"
-                    data-catagory="{{ d.catagory or '' }}"
-                    data-day="{{ today_iso }}">Done</button>
+                    data-endpoint="/discipline/{{ d.uuid }}/today">Done</button>
           </li>
         {% endfor %}
         {% if disciplines_at_risk|length > 5 %}

@@ -19,8 +19,10 @@
   <label><input type="checkbox" value="completed" checked
     {% if not completion_history_available %}disabled{% endif %}> Completed</label>
   <label><input type="checkbox" value="projected" checked> Recurring projection</label>
-  {% if completion_history_available %}
+  {% if completion_history_complete %}
     <span class="muted-hint">{{ completion_day_policy }}</span>
+  {% elif completion_history_available %}
+    <span class="calendar-layer-warning" title="{{ completion_history_reason }}">Current completed tasks only · {{ completion_day_policy }}</span>
   {% else %}
     <span class="calendar-layer-warning" title="{{ completion_history_reason }}">Completion history unavailable</span>
   {% endif %}

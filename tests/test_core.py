@@ -19,7 +19,7 @@ from sqlalchemy import create_engine, text
 from starlette.requests import Request
 
 from luigi_web import application as app
-from luigi_web import auth, db, gnw, llm
+from luigi_web import auth, clock, db, gnw, llm
 
 
 class AuthTests(unittest.TestCase):
@@ -311,16 +311,24 @@ class DisciplineWorkflowTests(unittest.TestCase):
             patch.object(db, "mark_completion", return_value=True) as mark,
             patch.object(db, "completion_exists", return_value=True),
             patch.object(db, "computed_discipline_streak", return_value=5),
+            patch.object(clock, "local_today", return_value=date(2026, 8, 18)),
         ):
             response = asyncio.run(app.discipline_today("disc-1", FormRequest()))
         mark.assert_called_once_with(
-            "MacroFactor Logging", "Health", date.today().isoformat()
+            "MacroFactor Logging", "Health", "2026-08-18"
         )
         self.assertEqual(response.status_code, 200)
         payload = json.loads(response.body)
         self.assertTrue(payload["marked"])
         self.assertEqual(payload["streak"], 5)
         self.assertEqual(payload["discipline_uuid"], "disc-1")
+
+        source, _, _ = app.templates.env.loader.get_source(
+            app.templates.env, "home.html"
+        )
+        self.assertIn(
+            'data-endpoint="/discipline/{{ d.uuid }}/today"', source
+        )
 
     def test_discipline_frequency_is_one_to_seven(self) -> None:
         self.assertEqual(db._discipline_frequency("7"), 7)

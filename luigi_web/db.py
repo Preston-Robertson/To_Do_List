@@ -28,6 +28,7 @@ from sqlalchemy.engine import Engine, URL
 
 from . import recurrence as recurrence_rules
 from . import task_events
+from . import clock
 from .paths import TASK_METADATA_PATH
 
 
@@ -257,7 +258,7 @@ def _active_filter(table: str, alias: str = "") -> str:
     if not has_web_column(table, "archived"):
         return "1=1"
     prefix = f"{alias}." if alias else ""
-    return f"COALESCE({prefix}archived, 0) = 0"
+    return f"CAST(COALESCE({prefix}archived, 0) AS INTEGER) = 0"
 
 
 # --------------------------------------------------------------------------- #
@@ -293,11 +294,11 @@ def new_uuid() -> str:
 
 
 def now_iso() -> str:
-    return datetime.now().isoformat(timespec="seconds")
+    return clock.local_now().isoformat(timespec="seconds")
 
 
 def today_iso() -> str:
-    return date.today().isoformat()
+    return clock.local_today().isoformat()
 
 
 # Weekday helpers ---------------------------------------------------------- #
@@ -421,7 +422,11 @@ def reactivation_date(row: dict[str, Any]) -> str | None:
     if not completed_time:
         return None
     try:
-        base = date.fromisoformat(str(completed_time)[:10])
+        base = date.fromisoformat(
+            str(row.get("_effective_completion_date"))[:10]
+            if row.get("_effective_completion_date")
+            else clock.local_date_from_timestamp(str(completed_time))
+        )
     except (ValueError, TypeError):
         return None
 
@@ -686,7 +691,7 @@ def _follow_up_task_payload(rule: dict[str, Any]) -> dict[str, Any]:
         offset = int(rule["due_offset_days"])
         if offset < 0:
             raise ValueError("follow-up due offset cannot be negative")
-        due_date = (date.today() + timedelta(days=offset)).isoformat()
+        due_date = (clock.local_today() + timedelta(days=offset)).isoformat()
     return {
         "uuid": new_uuid(),
         "task": str(rule.get("follow_up_task") or "").strip(),
@@ -1072,7 +1077,7 @@ def _snooze_task_like(table: str, row_uuid: str, days: int) -> str | None:
         ).first()
         if cur is None:
             return None
-        today = date.today()
+        today = clock.local_today()
         base = today
         if cur.due_date:
             try:
@@ -1206,14 +1211,45 @@ def list_task_completion_events(
 ) -> tuple[task_events.Capability, list[dict[str, Any]]]:
     with get_engine().connect() as conn:
         status = task_events.capability(conn)
-        rows = (
-            task_events.list_active_completions(
+        if status.available:
+            rows = task_events.list_active_completions(
                 conn,
                 start_date=start.isoformat(),
                 end_date=end.isoformat(),
             )
-            if status.available else []
-        )
+        else:
+            expanded_start = (start - timedelta(days=1)).isoformat()
+            expanded_end = (end + timedelta(days=1)).isoformat()
+            rows = _rows(conn.execute(text(f"""
+                SELECT uuid AS source_task_uuid, 'tasks' AS source_table,
+                       task AS task_snapshot, catagory AS catagory_snapshot,
+                       completed_time AS occurred_at, due_date AS due_date_snapshot,
+                       1 AS source_exists, NULL AS event_uuid
+                FROM tasks
+                WHERE CAST(completed AS INTEGER) = 1 AND completed_time IS NOT NULL
+                  AND SUBSTR(completed_time, 1, 10) BETWEEN :start AND :end
+                  AND {_active_filter('tasks')}
+                UNION ALL
+                SELECT uuid AS source_task_uuid, 'recurring_tasks' AS source_table,
+                       task AS task_snapshot, catagory AS catagory_snapshot,
+                       completed_time AS occurred_at, due_date AS due_date_snapshot,
+                       1 AS source_exists, NULL AS event_uuid
+                FROM recurring_tasks
+                WHERE CAST(completed AS INTEGER) = 1 AND completed_time IS NOT NULL
+                  AND SUBSTR(completed_time, 1, 10) BETWEEN :start AND :end
+                  AND {_active_filter('recurring_tasks')}
+            """), {"start": expanded_start, "end": expanded_end}))
+            for row in rows:
+                try:
+                    row["effective_date"] = clock.local_date_from_timestamp(
+                        str(row["occurred_at"])
+                    )
+                except ValueError:
+                    row["effective_date"] = str(row["occurred_at"])[:10]
+            rows = [
+                row for row in rows
+                if start.isoformat() <= row["effective_date"] <= end.isoformat()
+            ]
     shaped: list[dict[str, Any]] = []
     for row in rows:
         source = (
@@ -1232,6 +1268,7 @@ def list_task_completion_events(
             "source_exists": bool(row.get("source_exists")),
             "_event_uuid": row["event_uuid"],
             "_calendar_layer": "completed",
+            "_history_limited": not status.available,
         })
     return status, shaped
 
@@ -1286,7 +1323,7 @@ def reactivate_due_recurring(today: date | None = None) -> int:
     in the future, are left untouched, and once reset a row no longer matches
     the ``completed = 1`` filter.
     """
-    today = today or date.today()
+    today = today or clock.local_today()
     cols = _cols_for("recurring_tasks")
     q = text(f"""
         SELECT {", ".join(cols)}
@@ -1792,7 +1829,7 @@ def compute_streak(dates: Iterable[str]) -> int:
     day_set = set(dates)
     if not day_set:
         return 0
-    today = date.today()
+    today = clock.local_today()
     from datetime import timedelta
     anchor = today if today.isoformat() in day_set else today - timedelta(days=1)
     if anchor.isoformat() not in day_set:
@@ -1944,7 +1981,7 @@ def list_disciplines_at_risk() -> list[dict[str, Any]]:
     A daily discipline (freq=7) becomes at-risk 1 full day after the last
     hit; a 3x/week (freq=3) after ~3 days. Tightest breakers first.
     """
-    today = date.today()
+    today = clock.local_today()
     q = text("""
         SELECT dl.uuid, dl.task, dl.catagory, dl.current_streak,
                dl.frequency_per_week,
@@ -1987,7 +2024,7 @@ def list_disciplines_at_risk() -> list[dict[str, Any]]:
 def _week_bounds(anchor: date | None = None) -> tuple[date, list[date]]:
     """Return (monday_date, [mon..sun]) for the week containing ``anchor``."""
     if anchor is None:
-        anchor = date.today()
+        anchor = clock.local_today()
     monday = anchor - timedelta(days=anchor.weekday())  # Mon=0..Sun=6
     days = [monday + timedelta(days=i) for i in range(7)]
     return monday, days
@@ -2061,7 +2098,7 @@ def weekly_review(anchor: date | None = None) -> dict[str, Any]:
     * ``carried_over``                open tasks whose due_date is < today (still overdue)
     * ``upcoming_next_week``          open tasks due within the next 7 days
     """
-    end = (anchor or date.today()) - timedelta(days=1)
+    end = (anchor or clock.local_today()) - timedelta(days=1)
     start = end - timedelta(days=6)
     start_iso, end_iso = start.isoformat(), end.isoformat()
 
@@ -2102,7 +2139,7 @@ def weekly_review(anchor: date | None = None) -> dict[str, Any]:
             ) x
         """), {"today": today}).scalar_one()
 
-        soon = (date.today() + timedelta(days=7)).isoformat()
+        soon = (clock.local_today() + timedelta(days=7)).isoformat()
         upcoming = conn.execute(text("""
             SELECT COUNT(*) AS n FROM (
                 SELECT uuid FROM tasks
@@ -2163,7 +2200,7 @@ def list_overdue_tasks(limit: int | None = 10) -> list[dict[str, Any]]:
 def list_upcoming_tasks(days: int = 7, limit: int | None = 10) -> list[dict[str, Any]]:
     """Open tasks due today through today+``days`` (inclusive)."""
     lim = "" if limit is None else f"LIMIT {int(limit)}"
-    today = date.today()
+    today = clock.local_today()
     end = (today + timedelta(days=int(days))).isoformat()
     q = text(f"""
         SELECT uuid, task, priority, status, due_date, catagory, 'task' AS source
@@ -2245,8 +2282,8 @@ def list_recent_activity(limit: int = 15, days: int = 14) -> list[dict[str, Any]
     ISO timestamps; we pad date-only values with ``T00:00:00`` so lexical
     sort is chronologically correct.
     """
-    cutoff_ts = (datetime.now() - timedelta(days=int(days))).isoformat(timespec="seconds")
-    cutoff_day = (date.today() - timedelta(days=int(days))).isoformat()
+    cutoff_ts = (clock.local_now() - timedelta(days=int(days))).isoformat(timespec="seconds")
+    cutoff_day = (clock.local_today() - timedelta(days=int(days))).isoformat()
     q = text(f"""
         SELECT * FROM (
             SELECT

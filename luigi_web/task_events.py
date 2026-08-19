@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import os
-import time
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, time as clock_time, timedelta
@@ -16,6 +15,8 @@ from typing import Any
 
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import NoSuchTableError
+
+from . import clock
 
 TABLE_NAME = "task_events"
 COMPLETED = "completed"
@@ -63,6 +64,10 @@ def effective_date_for(
     override: str | date | None = None,
 ) -> str:
     """Calculate the server-local effective date for one completion."""
+    if occurred_at.tzinfo is None:
+        occurred_at = clock.parse_timestamp_local(occurred_at.isoformat())
+    else:
+        occurred_at = occurred_at.astimezone(clock.user_timezone())
     if override not in (None, ""):
         try:
             selected = (
@@ -84,17 +89,13 @@ def effective_date_for_iso(
     cutoff: str | None = None,
     override: str | date | None = None,
 ) -> str:
-    try:
-        parsed = datetime.fromisoformat(occurred_at)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("occurred_at must be an ISO datetime") from exc
+    parsed = clock.parse_timestamp_local(occurred_at)
     return effective_date_for(parsed, cutoff=cutoff, override=override)
 
 
 def server_time_policy() -> str:
     cutoff = parse_day_cutoff().strftime("%H:%M")
-    zone = datetime.now().astimezone().tzname() or time.tzname[0] or "local"
-    return f"before {cutoff} counts toward the previous day ({zone})"
+    return f"before {cutoff} counts toward the previous day ({clock.timezone_name()})"
 
 
 def capability(bind: Any) -> Capability:

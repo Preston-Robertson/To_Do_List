@@ -22,6 +22,7 @@ from datetime import date, timedelta
 from typing import Any
 
 from . import db
+from . import clock
 from .llm import Tool
 
 
@@ -67,7 +68,7 @@ def _iso_date(args: dict[str, Any], key: str, default: str | None = None) -> str
         return default
     s = str(v).strip()
     # Accept "today"/"tomorrow" shortcuts — the LLM often uses them.
-    today = date.today()
+    today = clock.local_today()
     if s.lower() == "today":
         return today.isoformat()
     if s.lower() == "tomorrow":
@@ -280,7 +281,7 @@ def handle_plan_my_day(args: dict[str, Any]) -> dict[str, Any]:
     """
     limit = _int(args, "limit", 10) or 10
     limit = min(max(limit, 1), 25)
-    today = date.today().isoformat()
+    today = clock.local_today().isoformat()
 
     overdue = db.list_overdue_tasks(limit=50)
     upcoming = db.list_upcoming_tasks(days=1, limit=50)  # includes today
@@ -351,7 +352,7 @@ def handle_plan_my_day(args: dict[str, Any]) -> dict[str, Any]:
 
 def handle_mark_discipline_done(args: dict[str, Any]) -> dict[str, Any]:
     name = _str(args, "task", required=True)
-    day = _iso_date(args, "day", default=date.today().isoformat())
+    day = _iso_date(args, "day", default=clock.local_today().isoformat())
     row = db.find_discipline_by_name(name)
     if row is None:
         raise ValueError(
