@@ -28,6 +28,7 @@ from fastapi.templating import Jinja2Templates
 
 from . import db
 from . import recurrence
+from . import task_events
 from .auth import (
     COOKIE_NAME,
     CSRF_COOKIE_NAME,
@@ -73,6 +74,10 @@ async def csrf_middleware(request: Request, call_next):
         response.headers["Cache-Control"] = "no-store"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
+    if request.url.path.startswith("/feedback"):
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
     if not request.cookies.get(CSRF_COOKIE_NAME):
         response.set_cookie(
             CSRF_COOKIE_NAME,
@@ -101,8 +106,12 @@ from . import env_file
 from . import finance
 from . import gnw
 from .finance_routes import router as finance_router
+from .feedback_routes import router as feedback_router
+from .preview_routes import router as preview_router
 
 app.include_router(finance_router)
+app.include_router(feedback_router)
+app.include_router(preview_router)
 
 
 def _asset_version() -> str:
@@ -135,6 +144,7 @@ templates.env.globals["recurrence_schedule_type"] = db.recurrence_schedule_type
 templates.env.globals["recurrence_schedule_label"] = db.recurrence_schedule_label
 templates.env.globals["MONTH_ORDINAL_OPTIONS"] = recurrence.MONTH_ORDINAL_OPTIONS
 templates.env.globals["has_web_column"] = db.has_web_column
+templates.env.globals["completion_day_policy"] = task_events.server_time_policy
 
 
 async def _form_dict(request: Request) -> dict[str, Any]:
@@ -215,6 +225,11 @@ def _startup_schema_check() -> None:
         # Finance is an isolated optional domain; its failure must not make
         # LuigiBot task pages unavailable. Finance routes surface the error.
         pass
+    try:
+        from . import feedback
+        feedback.init_db()
+    except Exception:
+        pass
 
 
 def _require_v2() -> None:
@@ -266,6 +281,8 @@ def _stash_undo(
     snapshot: dict[str, Any],
     label: str,
     generated_task_uuids: list[str] | None = None,
+    task_event_uuid: str | None = None,
+    task_event_type: str | None = None,
 ) -> str:
     """Record a 'before' snapshot for a task-like mutation. Returns an
     opaque ``op_id`` the client uses to POST ``/undo/{op_id}`` within the
@@ -279,6 +296,8 @@ def _stash_undo(
             "snapshot": snapshot,
             "label": label,
             "generated_task_uuids": list(generated_task_uuids or []),
+            "task_event_uuid": task_event_uuid,
+            "task_event_type": task_event_type,
             "expires_at": now + _UNDO_TTL_SECONDS,
         }
     return op_id
@@ -494,6 +513,87 @@ async def tasks_quick_create(request: Request):
     })
 
 
+@app.post("/tasks/bulk", dependencies=[Depends(require_auth)])
+async def tasks_bulk(request: Request):
+    _require_v2()
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(400, "bulk request must be JSON") from exc
+    action = str(payload.get("action") or "").strip()
+    value = payload.get("value")
+    items = payload.get("items")
+    if action not in {"status", "archive", "project", "catagory", "delete"}:
+        raise HTTPException(422, "invalid bulk action")
+    if not isinstance(items, list) or not items or len(items) > 500:
+        raise HTTPException(422, "select between 1 and 500 tasks")
+    if action == "status" and value not in db.STATUS_VALUES:
+        raise HTTPException(422, "invalid task status")
+    if action in {"project", "catagory"} and len(str(value or "")) > 240:
+        raise HTTPException(422, "bulk value is too long")
+
+    results: list[dict[str, Any]] = []
+    for item in items:
+        row_uuid = str(item.get("uuid") or "") if isinstance(item, dict) else ""
+        source = str(item.get("source") or "") if isinstance(item, dict) else ""
+        result = {"uuid": row_uuid, "source": source, "ok": False, "error": None}
+        if not row_uuid or source not in {"task", "recurring"}:
+            result["error"] = "invalid task reference"
+            results.append(result)
+            continue
+        try:
+            recurring = source == "recurring"
+            if action == "status":
+                transition = (
+                    db.set_recurring_status(row_uuid, str(value))
+                    if recurring else db.set_task_status(row_uuid, str(value))
+                )
+                result["generated_task_uuids"] = list(
+                    transition.generated_task_uuids
+                )
+            elif action == "archive":
+                saved = (
+                    db.archive_recurring(row_uuid, True)
+                    if recurring else db.archive_task(row_uuid, True)
+                )
+                if not saved:
+                    raise LookupError("task not found")
+            elif action in {"project", "catagory"}:
+                saved = (
+                    db.set_recurring_metadata(
+                        row_uuid, field=action, value=str(value or "")
+                    )
+                    if recurring else db.set_task_metadata(
+                        row_uuid, field=action, value=str(value or "")
+                    )
+                )
+                if not saved:
+                    raise LookupError("task not found")
+            else:
+                if recurring:
+                    if db.get_recurring(row_uuid) is None:
+                        raise LookupError("task not found")
+                    db.delete_recurring(row_uuid)
+                else:
+                    if db.get_task(row_uuid) is None:
+                        raise LookupError("task not found")
+                    db.delete_task(row_uuid)
+            result["ok"] = True
+        except Exception:  # noqa: BLE001 - returned per row
+            logger.exception(
+                "Bulk %s failed for %s task %s", action, source, row_uuid
+            )
+            result["error"] = "Operation failed"
+        results.append(result)
+    succeeded = sum(1 for result in results if result["ok"])
+    return JSONResponse({
+        "action": action,
+        "succeeded": succeeded,
+        "failed": len(results) - succeeded,
+        "results": results,
+    })
+
+
 @app.get(
     "/tasks/{row_uuid}/edit",
     response_class=HTMLResponse,
@@ -574,18 +674,27 @@ async def tasks_set_status(request: Request, row_uuid: str):
     response_class=HTMLResponse,
     dependencies=[Depends(require_auth)],
 )
-def tasks_toggle_complete(request: Request, row_uuid: str):
+async def tasks_toggle_complete(request: Request, row_uuid: str):
     _require_v2()
     before = db.get_task(row_uuid)
     if not before:
         raise HTTPException(404)
-    _, generated_task_uuids = db.toggle_task_completed(row_uuid)
+    form = await request.form()
+    effective_date = str(form.get("effective_date") or "").strip() or None
+    try:
+        transition = db.toggle_task_completed(
+            row_uuid, effective_date=effective_date
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     row = db.get_task(row_uuid)
     if not row:
         raise HTTPException(404)
     verb = "Completed" if int(row.get("completed") or 0) == 1 else "Reopened"
     op_id = _stash_undo(
-        "tasks", before, f"{verb} ‘{before.get('task','')}’", generated_task_uuids
+        "tasks", before, f"{verb} ‘{before.get('task','')}’",
+        list(transition.generated_task_uuids), transition.event_uuid,
+        transition.event_type,
     )
     trigger = _hx_trigger(
         showUndo={"op_id": op_id, "label": f"{verb} ‘{before.get('task','')}’",
@@ -781,19 +890,27 @@ async def recurring_set_status(request: Request, row_uuid: str):
     response_class=HTMLResponse,
     dependencies=[Depends(require_auth)],
 )
-def recurring_toggle_complete(request: Request, row_uuid: str):
+async def recurring_toggle_complete(request: Request, row_uuid: str):
     _require_v2()
     before = db.get_recurring(row_uuid)
     if not before:
         raise HTTPException(404)
-    _, generated_task_uuids = db.toggle_recurring_completed(row_uuid)
+    form = await request.form()
+    effective_date = str(form.get("effective_date") or "").strip() or None
+    try:
+        transition = db.toggle_recurring_completed(
+            row_uuid, effective_date=effective_date
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     row = db.get_recurring(row_uuid)
     if not row:
         raise HTTPException(404)
     verb = "Completed" if int(row.get("completed") or 0) == 1 else "Reopened"
     op_id = _stash_undo(
         "recurring_tasks", before, f"{verb} ‘{before.get('task','')}’",
-        generated_task_uuids,
+        list(transition.generated_task_uuids), transition.event_uuid,
+        transition.event_type,
     )
     trigger = _hx_trigger(
         showUndo={"op_id": op_id, "label": f"{verb} ‘{before.get('task','')}’",
@@ -955,6 +1072,43 @@ def games_page(request: Request):
 @app.get("/shows", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 def shows_page(request: Request):
     return _gnw_board(request, "shows", "Shows")
+
+
+@app.get(
+    "/media/insights",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_auth)],
+)
+def media_insights_page(
+    request: Request,
+    section: str = "games",
+    profile: str = "",
+):
+    section = _gnw_section(section)
+    reason = gnw.disabled_reason()
+    profiles: list[str] = []
+    insights: dict[str, Any] | None = None
+    if not reason:
+        try:
+            profiles = gnw.list_profiles()
+            items = gnw.list_items(section, profile or None)
+            insights = gnw.media_insights(section, items)
+        except Exception as exc:  # noqa: BLE001
+            reason = str(exc) or type(exc).__name__
+    return templates.TemplateResponse(
+        "media_insights.html",
+        {
+            "request": request,
+            "active_nav": section,
+            "page_title": "Media Insights",
+            "section": section,
+            "profile": profile,
+            "profiles": profiles,
+            "insights": insights,
+            "disabled_reason": reason,
+            "status_labels": gnw.STATUS_LABELS,
+        },
+    )
 
 
 @app.get("/gnw/{section}/new", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
@@ -1166,6 +1320,8 @@ def undo(op_id: str):
                 table,
                 entry["snapshot"],
                 entry.get("generated_task_uuids", []),
+                entry.get("task_event_uuid"),
+                entry.get("task_event_type"),
             )
     except Exception as exc:
         raise HTTPException(500, f"undo failed: {exc}")
@@ -1836,6 +1992,8 @@ def calendar_page(request: Request, month: str | None = None):
     grid_start = current - timedelta(days=(current.weekday() + 1) % 7)
     grid_end = month_end + timedelta(days=(5 - month_end.weekday()) % 7)
     rows = db.list_calendar_rows(grid_start, grid_end)
+    for row in rows:
+        row["_calendar_layer"] = "planned"
     existing = {
         (str(row.get("uuid") or ""), str(row.get("due_date") or "")[:10])
         for row in rows
@@ -1852,9 +2010,14 @@ def calendar_page(request: Request, month: str | None = None):
                 "status": "Not Started",
                 "source": "recurring",
                 "_projected": True,
+                "_calendar_layer": "projected",
             })
             rows.append(projected)
             existing.add(key)
+    history_status, completion_rows = db.list_task_completion_events(
+        grid_start, grid_end
+    )
+    rows.extend(completion_rows)
     rows.sort(key=lambda row: (
         str(row.get("due_date") or ""),
         -int(row.get("priority") or 0),
@@ -1890,6 +2053,9 @@ def calendar_page(request: Request, month: str | None = None):
             "next_month": next_month.strftime("%Y-%m"),
             "weeks": weeks,
             "today_iso": today.isoformat(),
+            "completion_history_available": history_status.available,
+            "completion_history_reason": history_status.reason,
+            "completion_day_policy": task_events.server_time_policy(),
         },
     )
 
@@ -2147,6 +2313,9 @@ def admin_integrations(request: Request):
     def check_discipline():
         return db.discipline_storage_health()
 
+    def check_task_events():
+        return db.task_events_storage_health()
+
     def check_tvmaze():
         response = httpx.get("https://api.tvmaze.com/shows/1", timeout=8)
         response.raise_for_status()
@@ -2198,6 +2367,7 @@ def admin_integrations(request: Request):
     checks = [
         _integration_result("PostgreSQL", check_db),
         _integration_result("Discipline storage", check_discipline),
+        _integration_result("Task event history", check_task_events),
         _integration_result("Google Sheets", check_sheets),
         _integration_result("Steam", check_steam),
         _integration_result("TVMaze", check_tvmaze),
@@ -2321,6 +2491,7 @@ _HOT_RELOADABLE = {
     "LUIGI_WEB_STEAM_API_KEY",
     "LUIGI_WEB_STEAM_ID",
     "LUIGI_WEB_YOUTUBE_API_KEY",
+    "LUIGI_WEB_DAY_CUTOFF",
 }
 
 

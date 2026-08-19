@@ -51,6 +51,7 @@ class FinanceRepositoryTests(unittest.TestCase):
             email_shaped,
             identifier_shaped,
             "Account 1234567890",
+            "1234-5678-9012-3456",
         ):
             with self.subTest(unsafe=unsafe):
                 with self.assertRaisesRegex(ValueError, "personal|identifier"):

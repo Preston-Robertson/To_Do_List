@@ -13,6 +13,19 @@
   </div>
 </section>
 
+<div class="calendar-layer-bar" data-calendar-layers>
+  <span class="muted-hint">Layers</span>
+  <label><input type="checkbox" value="planned" checked> Planned</label>
+  <label><input type="checkbox" value="completed" checked
+    {% if not completion_history_available %}disabled{% endif %}> Completed</label>
+  <label><input type="checkbox" value="projected" checked> Recurring projection</label>
+  {% if completion_history_available %}
+    <span class="muted-hint">{{ completion_day_policy }}</span>
+  {% else %}
+    <span class="calendar-layer-warning" title="{{ completion_history_reason }}">Completion history unavailable</span>
+  {% endif %}
+</div>
+
 <section class="calendar-grid" aria-label="{{ month_label }} calendar">
   {% for label in ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'] %}
     <div class="calendar-dow">{{ label }}</div>
@@ -23,15 +36,27 @@
         <div class="calendar-day-number">{{ day.date.day }}</div>
         <div class="calendar-items">
           {% for t in day.tasks %}
+            {% set layer = t._calendar_layer or 'planned' %}
+            {% if layer == 'completed' and not t.source_exists %}
+            <span class="calendar-item calendar-item-snapshot is-completed"
+              data-calendar-layer="{{ layer }}"
+              title="Completed {{ t.completed_time }} · source task no longer exists">
+              <span aria-hidden="true">✓</span>
+              <span class="calendar-item-title">{{ t.task }}</span>
+            </span>
+            {% else %}
             <button type="button"
-              class="calendar-item status-{{ (t.status or 'not-started')|lower|replace(' ', '-') }}{% if t.completed %} is-completed{% endif %}"
+              class="calendar-item status-{{ (t.status or 'not-started')|lower|replace(' ', '-') }}{% if t.completed %} is-completed{% endif %} layer-{{ layer }}"
+              data-calendar-layer="{{ layer }}"
               hx-get="/{{ 'recurring' if t.source == 'recurring' else 'tasks' }}/{{ t.uuid }}/edit"
               hx-target="#modal-body"
               onclick="openModal()"
               title="{{ t.task }} · {{ t.status }}{% if t.project %} · {{ t.project }}{% endif %}">
+              {% if layer == 'completed' %}<span aria-hidden="true">✓</span>{% endif %}
               {% if t.source == 'recurring' %}<span>↻</span>{% endif %}
               <span class="calendar-item-title">{{ t.task }}</span>
             </button>
+            {% endif %}
           {% endfor %}
         </div>
       </div>

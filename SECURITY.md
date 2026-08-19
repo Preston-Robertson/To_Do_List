@@ -53,6 +53,16 @@ example uses `/etc/luigi-web/credentials.env` with mode `0600`; it is loaded
 after the Admin-managed environment file so protected values take precedence.
 Creating or rotating either token requires host-administrator access.
 
+Preview deployment uses a third protected `LUIGI_WEB_DEPLOY_TOKEN`. It is not
+editable through Admin and grants a one-hour HttpOnly deployment session only
+under `/admin/preview`. The web service still cannot run arbitrary privileged
+commands: Preview mutations pass through the fixed root-owned helper and narrow
+sudoers rule documented in `docs/preview-deployment.md`.
+
+The local Feedback database is excluded from the Assistant and global search.
+Nothing is transmitted automatically; exports require explicit review and are
+served with no-store cache controls.
+
 ## Storage and backups
 
 - Shared task data lives in the LuigiBot PostgreSQL database.

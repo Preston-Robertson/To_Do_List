@@ -25,8 +25,12 @@
   data-recurring-interval="{{ t.recurring_interval or '' }}"
   data-reactivation-date="{{ _reactivates or '' }}"
   data-endpoint="{{ card_endpoint }}"
+  data-task-source="{{ 'recurring' if card_endpoint == '/recurring' else 'task' }}"
 >
   <header class="card-header">
+    <label class="task-select" title="Select {{ t.task }}">
+      <input type="checkbox" data-task-select aria-label="Select {{ t.task }}">
+    </label>
     <span class="card-priority p{{ t.priority or 0 }}">P{{ t.priority or 0 }}</span>
     <h3 class="card-title">{{ t.task }}</h3>
   </header>
@@ -85,6 +89,15 @@
                 hx-target="#card-{{ t.uuid }}" hx-swap="outerHTML">{{ label }}</button>
             {% endfor %}
           </div>
+          <div class="action-menu-label">Completion date override</div>
+          <form class="action-menu-date-form"
+            hx-post="{{ card_endpoint }}/{{ t.uuid }}/complete"
+            hx-target="#card-{{ t.uuid }}" hx-swap="outerHTML">
+            <input type="date" name="effective_date" required
+              aria-label="Effective completion date for {{ t.task }}">
+            <button class="action-menu-chip" type="submit">Complete</button>
+          </form>
+          <p class="action-menu-hint">Automatic: {{ completion_day_policy() }}</p>
         {% else %}
           <button class="action-menu-item"
             hx-post="{{ card_endpoint }}/{{ t.uuid }}/archive"

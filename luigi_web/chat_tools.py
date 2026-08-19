@@ -233,9 +233,9 @@ def handle_create_task(args: dict[str, Any]) -> dict[str, Any]:
 def handle_complete_task(args: dict[str, Any]) -> dict[str, Any]:
     row_uuid, table = _resolve_task_uuid(args)
     if table == "tasks":
-        db.set_task_status(row_uuid, "Completed")
+        db.set_task_status(row_uuid, "Completed", actor_source="assistant")
     else:
-        db.set_recurring_status(row_uuid, "Completed")
+        db.set_recurring_status(row_uuid, "Completed", actor_source="assistant")
     return {"uuid": row_uuid, "table": table, "status": "Completed"}
 
 
@@ -245,9 +245,9 @@ def handle_update_task_status(args: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f"status must be one of {list(db.STATUS_VALUES)}")
     row_uuid, table = _resolve_task_uuid(args)
     if table == "tasks":
-        db.set_task_status(row_uuid, status)
+        db.set_task_status(row_uuid, status, actor_source="assistant")
     else:
-        db.set_recurring_status(row_uuid, status)
+        db.set_recurring_status(row_uuid, status, actor_source="assistant")
     return {"uuid": row_uuid, "table": table, "status": status}
 
 

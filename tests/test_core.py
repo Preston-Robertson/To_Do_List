@@ -14,6 +14,7 @@ from datetime import date, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from starlette.requests import Request
 
@@ -65,6 +66,16 @@ class DatabaseHelperTests(unittest.TestCase):
             "recurring_month_weekday": 0,
         }
         self.assertEqual(db.reactivation_date(row), "2026-09-07")
+
+    def test_reactivation_uses_effective_completion_date(self) -> None:
+        row = {
+            "completed": 1,
+            "recurring": 1,
+            "completed_time": "2026-08-19T01:00:00",
+            "_effective_completion_date": "2026-08-18",
+            "recurring_interval": 1,
+        }
+        self.assertEqual(db.reactivation_date(row), "2026-08-19")
 
     def test_follow_up_payload_maps_rule_and_due_offset(self) -> None:
         payload = db._follow_up_task_payload({
@@ -318,6 +329,63 @@ class DisciplineWorkflowTests(unittest.TestCase):
 
 
 class GameAndWatchTests(unittest.TestCase):
+    def test_media_insights_handles_partial_metrics(self) -> None:
+        items = [
+            {
+                "title": "Rated backlog", "status": "backlog", "rating": 9,
+                "platform": "Steam", "hours_played": "12.5",
+                "date_added": "2026-08-01", "last_played": "2026-08-10",
+            },
+            {
+                "title": "Finished", "status": "completed", "rating": 7,
+                "platform": "", "hours_played": "not recorded",
+                "date_added": "partial-date", "last_played": "",
+            },
+            {
+                "title": "Unrated", "status": "paused", "rating": None,
+                "platform": None, "hours_played": "2",
+                "date_added": "", "last_played": "",
+            },
+        ]
+        insights = gnw.media_insights(
+            "games", items, today=date(2026, 8, 18)
+        )
+        self.assertEqual(insights["total"], 3)
+        self.assertEqual(insights["average_rating"], 8.0)
+        self.assertEqual(insights["completion_percent"], 33)
+        self.assertEqual(insights["total_hours"], 14.5)
+        self.assertEqual(insights["average_backlog_age_days"], 17)
+        self.assertEqual(insights["breakdown_labels"], ["Unknown", "Steam"])
+        self.assertEqual(
+            [item["title"] for item in insights["highly_rated_unfinished"]],
+            ["Rated backlog"],
+        )
+
+    def test_media_insights_page_uses_local_charts_and_tables(self) -> None:
+        request = Request({
+            "type": "http", "method": "GET", "path": "/media/insights",
+            "query_string": b"section=games", "headers": [],
+        })
+        items = [{
+            "title": "Example Game", "profile": "Example Profile",
+            "status": "playing", "rating": 9, "platform": "Steam",
+            "hours_played": "5", "date_added": "2026-08-01",
+            "last_played": "2026-08-17",
+        }]
+        with (
+            patch.object(gnw, "disabled_reason", return_value=None),
+            patch.object(gnw, "list_profiles", return_value=["Example Profile"]),
+            patch.object(gnw, "list_items", return_value=items),
+        ):
+            response = app.media_insights_page(request, "games", "")
+        body = response.body.decode()
+        self.assertIn("Media Insights", body)
+        self.assertIn("chart.umd.min.js", body)
+        self.assertIn("media_insights.js", body)
+        self.assertIn("Highly rated unfinished", body)
+        self.assertIn("Example Game", body)
+        self.assertIn("insights-data-table", body)
+
     def test_game_board_has_paused_and_achievement_sections(self) -> None:
         self.assertIn("paused", gnw.GAME_STATUSES)
         self.assertIn("achievements", gnw.GAME_STATUSES)
@@ -694,6 +762,13 @@ class GanttTests(unittest.TestCase):
             patch.object(app, "_reactivate_recurring"),
             patch.object(db, "list_calendar_rows", return_value=[]),
             patch.object(db, "list_recurring", return_value=[]),
+            patch.object(
+                db,
+                "list_task_completion_events",
+                return_value=(
+                    app.task_events.Capability(False, "not installed"), []
+                ),
+            ),
         ):
             response = app.calendar_page(request, "2026-08")
         self.assertEqual(response.context["month_label"], "August 2026")
@@ -714,6 +789,13 @@ class GanttTests(unittest.TestCase):
             patch.object(app, "_reactivate_recurring"),
             patch.object(db, "list_calendar_rows", return_value=[]),
             patch.object(db, "list_recurring", return_value=[recurring]),
+            patch.object(
+                db,
+                "list_task_completion_events",
+                return_value=(
+                    app.task_events.Capability(False, "not installed"), []
+                ),
+            ),
         ):
             response = app.calendar_page(request, "2026-08")
         august_third = next(
@@ -779,6 +861,63 @@ class ConsolidatedTasksTests(unittest.TestCase):
         )
         self.assertIn('data-completed="1"', card)
         self.assertIn('data-completed="1"', compact)
+
+    def test_bulk_selection_identity_is_shared_by_board_and_list(self) -> None:
+        row = {
+            "uuid": "rec-1", "task": "Weekly Review", "priority": 3,
+            "status": "Not Started", "completed": 0, "due_date": None,
+            "completed_time": None, "recurring": 1, "recurring_interval": 7,
+            "recurring_days": None, "project": None, "catagory": "Work",
+            "task_group": None, "sub_group": None, "_endpoint_root": "/recurring",
+        }
+        card = app.templates.get_template("partials/task_card.html").render(
+            t=row, endpoint_root="/tasks",
+        )
+        compact = app.templates.get_template("partials/task_list.html").render(
+            rows=[row], statuses=db.STATUS_DISPLAY_ORDER, endpoint_root="/tasks",
+        )
+        for html in (card, compact):
+            self.assertIn('data-uuid="rec-1"', html)
+            self.assertIn('data-task-source="recurring"', html)
+            self.assertIn("data-task-select", html)
+
+    def test_bulk_route_reports_mixed_success_and_failure(self) -> None:
+        client = TestClient(app.app)
+        client.cookies.set(auth.COOKIE_NAME, "expected")
+        client.cookies.set(auth.CSRF_COOKIE_NAME, "csrf-value")
+        transition = db.TaskTransition(completed=1)
+        with (
+            patch.dict(os.environ, {"LUIGI_WEB_UI_TOKEN": "expected"}),
+            patch.object(db, "set_task_status", return_value=transition) as task_status,
+            patch.object(
+                db, "set_recurring_status", side_effect=PermissionError("denied")
+            ) as recurring_status,
+        ):
+            response = client.post("/tasks/bulk", json={
+                "action": "status", "value": "Completed",
+                "items": [
+                    {"uuid": "task-1", "source": "task"},
+                    {"uuid": "rec-1", "source": "recurring"},
+                ],
+            }, headers={"X-CSRF-Token": "csrf-value"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["succeeded"], 1)
+        self.assertEqual(response.json()["failed"], 1)
+        self.assertEqual(response.json()["results"][1]["error"], "Operation failed")
+        task_status.assert_called_once_with("task-1", "Completed")
+        recurring_status.assert_called_once_with("rec-1", "Completed")
+
+    def test_bulk_route_rejects_invalid_action_before_writes(self) -> None:
+        client = TestClient(app.app)
+        client.cookies.set(auth.COOKIE_NAME, "expected")
+        client.cookies.set(auth.CSRF_COOKIE_NAME, "csrf-value")
+        with patch.dict(os.environ, {"LUIGI_WEB_UI_TOKEN": "expected"}):
+            response = client.post("/tasks/bulk", json={
+                "action": "drop-table", "items": [
+                    {"uuid": "task-1", "source": "task"}
+                ],
+            }, headers={"X-CSRF-Token": "csrf-value"})
+        self.assertEqual(response.status_code, 422)
 
 
 class CommandPaletteTests(unittest.TestCase):

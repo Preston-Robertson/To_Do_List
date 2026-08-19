@@ -17,6 +17,8 @@
         class="task-list-row{% if t.completed %} is-completed{% endif %}"
         role="row"
         data-task-list-row
+        data-uuid="{{ t.uuid }}"
+        data-task-source="{{ 'recurring' if row_endpoint == '/recurring' else 'task' }}"
         data-title="{{ (t.task or '')|lower }}"
         data-project="{{ (t.project or '')|lower }}"
         data-priority="{{ t.priority or 0 }}"
@@ -30,6 +32,7 @@
         data-reactivation-date="{{ reactivation_date(t) or '' }}"
       >
         <div class="task-list-name" role="cell">
+          <label class="task-select" title="Select {{ t.task }}"><input type="checkbox" data-task-select aria-label="Select {{ t.task }}"></label>
           <button type="button" class="task-list-title"
             hx-get="{{ row_endpoint }}/{{ t.uuid }}/edit"
             hx-target="#modal-body" onclick="openModal()">{{ t.task }}</button>
@@ -85,6 +88,16 @@
                       hx-on::after-request="if(event.detail.successful) window.location.reload()">{{ label }}</button>
                   {% endfor %}
                 </div>
+                <div class="action-menu-label">Completion date override</div>
+                <form class="action-menu-date-form"
+                  hx-post="{{ row_endpoint }}/{{ t.uuid }}/complete"
+                  hx-swap="none"
+                  hx-on::after-request="if(event.detail.successful) window.location.reload()">
+                  <input type="date" name="effective_date" required
+                    aria-label="Effective completion date for {{ t.task }}">
+                  <button class="action-menu-chip" type="submit">Complete</button>
+                </form>
+                <p class="action-menu-hint">Automatic: {{ completion_day_policy() }}</p>
               {% else %}
                 <button class="action-menu-item"
                   hx-post="{{ row_endpoint }}/{{ t.uuid }}/archive"

@@ -11,6 +11,7 @@
   <script src="/static/js/vendor/htmx.min.js?v={{ asset_version }}" defer></script>
   <script src="/static/js/vendor/Sortable.min.js?v={{ asset_version }}" defer></script>
   <script src="/static/js/app.js?v={{ asset_version }}" defer></script>
+  {% block head_scripts %}{% endblock %}
 </head>
 <body class="app-body">
   <div class="route-progress" id="route-progress" aria-hidden="true"><span></span></div>
@@ -103,6 +104,21 @@
              {% if active_nav == 'admin' %}aria-current="page"{% endif %} title="Admin">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>
             <span>Admin</span>
+          </a>
+          <a href="/admin/preview" class="nav-item {% if active_nav == 'preview' %}active{% endif %}"
+            {% if active_nav == 'preview' %}aria-current="page"{% endif %} title="Preview deployment">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 3-5 9 5 9M16 3l5 9-5 9M10 19l4-14"/></svg>
+            <span>Preview</span>
+          </a>
+          <button type="button" class="nav-item" title="Send local feedback"
+            hx-get="/feedback/new" hx-target="#modal-body" onclick="openModal()">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v12H8l-4 4Z"/><path d="M8 8h8M8 12h5"/></svg>
+            <span>Feedback</span>
+          </button>
+          <a href="/feedback" class="nav-item {% if active_nav == 'feedback' %}active{% endif %}"
+            {% if active_nav == 'feedback' %}aria-current="page"{% endif %} title="Feedback inbox">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4Z"/><path d="m4 12 4 3h8l4-3"/></svg>
+            <span>Feedback inbox</span>
           </a>
         </div>
       </nav>

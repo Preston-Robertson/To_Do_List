@@ -21,6 +21,7 @@ from fastapi.responses import RedirectResponse
 
 COOKIE_NAME = "luigi_session"
 FINANCE_COOKIE_NAME = "luigi_finance_session"
+DEPLOY_COOKIE_NAME = "luigi_deploy_session"
 CSRF_COOKIE_NAME = "luigi_csrf"
 
 
@@ -63,6 +64,28 @@ def is_finance_authenticated(candidate: Optional[str]) -> bool:
     if not candidate or not finance_is_configured():
         return False
     return secrets.compare_digest(candidate, _finance_session_value())
+
+
+def _expected_deploy_token() -> str:
+    token = os.environ.get("LUIGI_WEB_DEPLOY_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError("LUIGI_WEB_DEPLOY_TOKEN is not set")
+    return token
+
+
+def _deploy_session_value() -> str:
+    token = _expected_deploy_token().encode("utf-8")
+    return hashlib.sha256(b"luigi-deploy-session\0" + token).hexdigest()
+
+
+def deploy_is_configured() -> bool:
+    return bool(os.environ.get("LUIGI_WEB_DEPLOY_TOKEN", "").strip())
+
+
+def is_deploy_authenticated(candidate: Optional[str]) -> bool:
+    if not candidate or not deploy_is_configured():
+        return False
+    return secrets.compare_digest(candidate, _deploy_session_value())
 
 
 def csrf_token() -> str:
@@ -131,6 +154,7 @@ def logout_response() -> RedirectResponse:
     resp = RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
     resp.delete_cookie(COOKIE_NAME, path="/")
     resp.delete_cookie(FINANCE_COOKIE_NAME, path="/")
+    resp.delete_cookie(DEPLOY_COOKIE_NAME, path="/")
     return resp
 
 
@@ -170,3 +194,42 @@ def require_finance_auth(
             headers={"Location": "/finance/unlock"},
         )
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="finance is locked")
+
+
+def deploy_unlock_response(supplied_token: str) -> RedirectResponse:
+    if not supplied_token or not secrets.compare_digest(
+        supplied_token, _expected_deploy_token()
+    ):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="bad token")
+    response = RedirectResponse(
+        url="/admin/preview", status_code=status.HTTP_303_SEE_OTHER
+    )
+    response.set_cookie(
+        key=DEPLOY_COOKIE_NAME,
+        value=_deploy_session_value(),
+        httponly=True,
+        samesite="strict",
+        secure=secure_cookies(),
+        max_age=60 * 60,
+        path="/admin/preview",
+    )
+    return response
+
+
+def deploy_lock_response() -> RedirectResponse:
+    response = RedirectResponse(
+        url="/admin/preview", status_code=status.HTTP_303_SEE_OTHER
+    )
+    response.delete_cookie(DEPLOY_COOKIE_NAME, path="/admin/preview")
+    return response
+
+
+def require_deploy_auth(
+    luigi_deploy_session: Optional[str] = Cookie(default=None),
+):
+    if is_deploy_authenticated(luigi_deploy_session):
+        return True
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="deployment controls are locked",
+    )

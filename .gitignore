@@ -16,6 +16,8 @@ finance.db-*
 finance-export-*.csv
 finance-backup-*.json
 data/copilot/
+data/feedback.db
+data/feedback.db-*
 LOCAL_DEPLOYMENT.md
 LOCAL_FEATURE_REQUESTS.md
 

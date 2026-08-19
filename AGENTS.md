@@ -56,6 +56,9 @@ web-only features, including Finance.
 - `luigi_web/db.py`: LuigiBot shared-schema adapter.
 - `luigi_web/finance.py`: app-owned Finance repository, imports, reports, and audit log.
 - `luigi_web/finance_routes.py`: separately authenticated Finance HTTP routes.
+- `luigi_web/feedback.py` / `feedback_routes.py`: local-only Feedback inbox.
+- `luigi_web/task_events.py`: adapter for the LuigiBot-owned shared event ledger.
+- `luigi_web/preview.py` / `preview_routes.py`: constrained Preview helper client/UI.
 - `luigi_web/gnw.py`: Game'N'Watch Google Sheets and public catalog integrations.
 - `luigi_web/llm.py`: OpenAI-compatible and isolated GitHub Copilot providers.
 - `luigi_web/env_file.py`: allow-listed Admin environment editor.
@@ -75,6 +78,9 @@ web-only features, including Finance.
 - Do not add third-party CDN dependencies. Browser assets are served locally.
 - New public documentation must use placeholders such as `<postgres-host>` and
   must not include private hostnames, container IDs, LAN addresses, or usernames.
+- Preview mutations require a separate deployment unlock and the fixed
+  root-owned helper. Never add arbitrary shell, branch, path, or systemd input.
+- Feedback remains local-only unless the user explicitly reviews and exports it.
 
 ## Validation
 

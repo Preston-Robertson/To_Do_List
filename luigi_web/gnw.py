@@ -483,6 +483,9 @@ def _row_to_item(section: str, headers: list[str], row: list[str]) -> dict[str, 
         "external_id": ext_id,
         "link": _build_link(source, ext_id),
         "times_picked": _to_int(g("Times Picked"), 0),
+        "date_added": g("Date Added"),
+        "date_started": g("Date Started"),
+        "date_completed": g("Date Completed"),
     }
     if section == "games":
         item.update({
@@ -491,6 +494,7 @@ def _row_to_item(section: str, headers: list[str], row: list[str]) -> dict[str, 
             "developers": g("Developers"),
             "release_date": g("Release Date"),
             "hours_played": g("Hours Played"),
+            "last_played": g("Last Played"),
         })
     else:
         item.update({
@@ -501,6 +505,111 @@ def _row_to_item(section: str, headers: list[str], row: list[str]) -> dict[str, 
             "runtime": g("Runtime"),
         })
     return item
+
+
+def _metric_number(value: Any) -> float:
+    if value in (None, ""):
+        return 0.0
+    try:
+        return float(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _metric_date(value: Any) -> date | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except (TypeError, ValueError):
+        return None
+
+
+def media_insights(
+    section: str,
+    items: list[dict[str, Any]],
+    *,
+    today: date | None = None,
+) -> dict[str, Any]:
+    """Build chart/table-ready aggregate metrics from normalized sheet rows."""
+    today = today or date.today()
+    complete_statuses = {"completed", "achievements"} if section == "games" else {"completed"}
+    statuses = statuses_for(section)
+    status_counts = {status: 0 for status in statuses}
+    breakdown: dict[str, int] = {}
+    ratings = {score: 0 for score in range(11)}
+    rating_values: list[int] = []
+    total_hours = 0.0
+    backlog_ages: list[int] = []
+    freshness_ages: list[int] = []
+    highly_rated_unfinished: list[dict[str, Any]] = []
+
+    for item in items:
+        status = str(item.get("status") or "backlog")
+        status_counts[status] = status_counts.get(status, 0) + 1
+        raw_dimension = (
+            item.get("platform") if section == "games" else item.get("genre")
+        )
+        dimension = str(raw_dimension or "Unknown").strip() or "Unknown"
+        breakdown[dimension] = breakdown.get(dimension, 0) + 1
+        rating = item.get("rating")
+        if isinstance(rating, int) and 0 <= rating <= 10:
+            ratings[rating] += 1
+            rating_values.append(rating)
+            if rating >= 8 and status not in complete_statuses:
+                highly_rated_unfinished.append(item)
+        if section == "games":
+            total_hours += _metric_number(item.get("hours_played"))
+            freshness = _metric_date(item.get("last_played"))
+            if freshness:
+                freshness_ages.append(max(0, (today - freshness).days))
+        added = _metric_date(item.get("date_added"))
+        if status == "backlog" and added:
+            backlog_ages.append(max(0, (today - added).days))
+
+    completed_count = sum(status_counts.get(status, 0) for status in complete_statuses)
+    total = len(items)
+    highly_rated_unfinished.sort(
+        key=lambda item: (
+            -int(item.get("rating") or 0),
+            str(item.get("title") or "").casefold(),
+        )
+    )
+    return {
+        "section": section,
+        "total": total,
+        "rated_count": len(rating_values),
+        "average_rating": (
+            round(sum(rating_values) / len(rating_values), 1)
+            if rating_values else None
+        ),
+        "completed_count": completed_count,
+        "completion_percent": round((completed_count / total) * 100) if total else 0,
+        "total_hours": round(total_hours, 1),
+        "average_backlog_age_days": (
+            round(sum(backlog_ages) / len(backlog_ages)) if backlog_ages else None
+        ),
+        "average_play_freshness_days": (
+            round(sum(freshness_ages) / len(freshness_ages))
+            if freshness_ages else None
+        ),
+        "status_labels": [STATUS_LABELS.get(status, status) for status in status_counts],
+        "status_values": list(status_counts.values()),
+        "rating_labels": [str(score) for score in ratings],
+        "rating_values": list(ratings.values()),
+        "breakdown_label": "Platform" if section == "games" else "Genre",
+        "breakdown_labels": [
+            key for key, _ in sorted(
+                breakdown.items(), key=lambda pair: (-pair[1], pair[0].casefold())
+            )
+        ],
+        "breakdown_values": [
+            value for _, value in sorted(
+                breakdown.items(), key=lambda pair: (-pair[1], pair[0].casefold())
+            )
+        ],
+        "highly_rated_unfinished": highly_rated_unfinished[:10],
+    }
 
 
 # --------------------------------------------------------------------------- #

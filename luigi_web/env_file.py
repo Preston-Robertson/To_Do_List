@@ -40,6 +40,9 @@ _LINE_RE = re.compile(r"^(?P<key>[A-Z_][A-Z0-9_]*)\s*=\s*(?P<val>.*)$")
 PROTECTED_KEYS = frozenset({
     "LUIGI_WEB_UI_TOKEN",
     "LUIGI_WEB_FINANCE_TOKEN",
+    "LUIGI_WEB_DEPLOY_TOKEN",
+    "LUIGI_WEB_PREVIEW_HELPER",
+    "LUIGI_WEB_TASK_METADATA_FILE",
 })
 
 
@@ -68,9 +71,11 @@ KNOWN_KEYS: tuple[EnvKey, ...] = (
     EnvKey("LUIGI_WEB_SECURE_COOKIES", "Secure cookies", "Set to 1 when the app is served over HTTPS.", "Web"),
     EnvKey("LUIGI_WEB_BIND",        "Bind address",      "Uvicorn bind address (default 0.0.0.0).",        "Web"),
     EnvKey("LUIGI_WEB_PORT",        "Bind port",         "Uvicorn port (default 8080).",                   "Web",      input_type="number"),
+    EnvKey("LUIGI_WEB_DAY_CUTOFF", "Completion day cutoff", "HH:MM server-local cutoff; earlier completions count toward the previous day (default 04:00).", "Web"),
     # Finance ---------------------------------------------------------------
     EnvKey("LUIGI_WEB_FINANCE_DB", "Finance database", "App-owned SQLite path. Keep it outside the repository.", "Finance"),
     EnvKey("LUIGI_WEB_FINANCE_BASE_CURRENCY", "Base currency", "ISO currency code used for reports (default USD).", "Finance"),
+    EnvKey("LUIGI_WEB_FEEDBACK_DB", "Feedback database", "App-owned local Feedback SQLite path.", "Feedback"),
     # LLM chat --------------------------------------------------------------
     EnvKey("LUIGI_WEB_LLM_PROVIDER",           "LLM provider",  "'copilot' (GitHub subscription), 'openai', or 'disabled'.", "LLM"),
     EnvKey("LUIGI_WEB_LLM_BASE_URL",           "LLM base URL",  "Used only for an OpenAI-compatible /chat/completions endpoint.", "LLM", input_type="url"),

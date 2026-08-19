@@ -1,0 +1,15 @@
+<form class="entity-form" hx-post="/feedback" hx-swap="none">
+  <h2>Save feedback</h2>
+  <label>Category
+    <select name="category">{% for category in categories %}<option>{{ category }}</option>{% endfor %}</select>
+  </label>
+  <label>Feedback
+    <textarea name="message" rows="7" maxlength="5000" required placeholder="What should change, and what happened instead?"></textarea>
+  </label>
+  <input type="hidden" name="page_path" value="{{ page_path }}">
+  {% if page_path %}<p class="muted-hint">Page reference: <code>{{ page_path }}</code>. Query strings and form contents are not captured.</p>{% endif %}
+  <div class="form-actions">
+    <button type="button" class="btn btn-ghost" data-close-modal>Cancel</button>
+    <button type="submit" class="btn btn-primary">Save locally</button>
+  </div>
+</form>

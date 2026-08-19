@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="board-header"><div><h1>Preview deployment</h1><span class="muted-hint">Isolated branch, service, task snapshot, and local data</span></div></section>
+<section class="preview-layout">
+  <div id="preview-status">{% include "partials/preview_status.html" %}</div>
+  <aside class="preview-security">
+    <h2>Deployment unlock</h2>
+    {% if not deploy_configured %}
+      <div class="admin-banner-err">Set <code>LUIGI_WEB_DEPLOY_TOKEN</code> in the protected host credentials file. It cannot be changed in Admin.</div>
+    {% elif deploy_unlocked %}
+      <p>Privileged Preview controls are unlocked for this browser for one hour.</p>
+      <form hx-post="/admin/preview/lock" hx-swap="none"><button class="btn" type="submit">Lock controls</button></form>
+    {% else %}
+      <form hx-post="/admin/preview/unlock" hx-target="main" hx-swap="innerHTML" class="entity-form">
+        <label>Deployment token<input type="password" name="token" required autocomplete="current-password"></label>
+        <button class="btn btn-primary" type="submit">Unlock controls</button>
+      </form>
+    {% endif %}
+    <h2>Isolation contract</h2>
+    <ul>
+      <li>Production branch is never switched.</li>
+      <li>Preview uses a separate PostgreSQL snapshot.</li>
+      <li>Finance is empty and isolated.</li>
+      <li>Removal clears the Preview task snapshot and writable data.</li>
+    </ul>
+  </aside>
+</section>
+{% endblock %}

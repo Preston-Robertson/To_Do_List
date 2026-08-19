@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="board-header"><div><h1>Feedback inbox</h1><span class="muted-hint">Local planning notes; nothing is transmitted automatically</span></div>
+  <div class="board-header-actions"><button class="btn btn-primary" hx-get="/feedback/new" hx-target="#modal-body" onclick="openModal()">+ Feedback</button><a class="btn" href="/feedback/export">Review export</a></div>
+</section>
+<form method="get" class="filter-bar feedback-filter">
+  <input type="search" name="q" value="{{ query }}" placeholder="Search feedback" aria-label="Search feedback">
+  <select name="status" aria-label="Feedback status"><option value="">All states</option>{% for value in statuses %}<option value="{{ value }}" {% if value == status_filter %}selected{% endif %}>{{ value }}</option>{% endfor %}</select>
+  <button class="btn btn-tiny" type="submit">Filter</button>
+</form>
+<section class="feedback-list">
+{% for item in rows %}
+  <article class="feedback-item">
+    <header><span class="chip">{{ item.category }}</span><strong>{{ item.status }}</strong><time>{{ item.created_at }}</time></header>
+    <p>{{ item.message }}</p>
+    {% if item.page_path %}<a href="{{ item.page_path }}">{{ item.page_path }}</a>{% endif %}
+    <form hx-post="/feedback/{{ item.uuid }}" hx-swap="none" class="feedback-review-form">
+      <label>Status<select name="status">{% for value in statuses %}<option {% if value == item.status %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
+      <label>Tags<input type="text" name="tags" value="{{ item.tags or '' }}"></label>
+      <label class="grow">Notes<input type="text" name="notes" value="{{ item.notes or '' }}"></label>
+      <button class="btn btn-tiny" type="submit">Save</button>
+      <button class="btn btn-tiny btn-danger" type="button" hx-post="/feedback/{{ item.uuid }}/delete" hx-swap="none" hx-confirm="Delete this feedback item?">Delete</button>
+    </form>
+  </article>
+{% else %}<p class="empty">No feedback matches this view.</p>{% endfor %}
+</section>
+{% endblock %}

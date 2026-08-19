@@ -1149,6 +1149,136 @@
     initRecurringToggle(e.target);
   });
 
+  // ------------------- Bulk task actions -------------------
+  function initBulkTasks(root) {
+    const scope = (root && root.closest)
+      ? (root.closest("[data-tasks-scope]") || root.querySelector?.("[data-tasks-scope]"))
+      : document.querySelector("[data-tasks-scope]");
+    if (!scope || scope.dataset.bulkInit === "1") return;
+    scope.dataset.bulkInit = "1";
+    const bar = scope.querySelector("[data-bulk-task-bar]");
+    if (!bar) return;
+    const storageKey = "luigi.tasks.bulkFailed";
+    const selected = new Set();
+    const keyFor = (row) => `${row.dataset.taskSource}:${row.dataset.uuid}`;
+    const rowFor = (input) => input.closest(".card,[data-task-list-row]");
+    try {
+      const restored = JSON.parse(sessionStorage.getItem(storageKey) || "[]");
+      restored.forEach((key) => selected.add(String(key)));
+      sessionStorage.removeItem(storageKey);
+    } catch {}
+
+    const sync = () => {
+      scope.querySelectorAll("[data-task-select]").forEach((input) => {
+        const row = rowFor(input);
+        input.checked = row ? selected.has(keyFor(row)) : false;
+      });
+      bar.hidden = selected.size === 0;
+      bar.querySelector("[data-bulk-count]").textContent = String(selected.size);
+    };
+    scope.addEventListener("change", (event) => {
+      const input = event.target.closest?.("[data-task-select]");
+      if (!input) return;
+      const row = rowFor(input);
+      if (!row) return;
+      const key = keyFor(row);
+      if (input.checked) selected.add(key); else selected.delete(key);
+      sync();
+    });
+    scope.querySelector("[data-bulk-select-visible]")?.addEventListener("click", () => {
+      const panel = scope.querySelector('[data-view-panel]:not([hidden])');
+      panel?.querySelectorAll(".card,[data-task-list-row]").forEach((row) => {
+        if (!row.classList.contains("card-filtered-out")) selected.add(keyFor(row));
+      });
+      sync();
+    });
+    bar.querySelector("[data-bulk-clear]").addEventListener("click", () => {
+      selected.clear(); sync();
+    });
+    const action = bar.querySelector("[data-bulk-action]");
+    const status = bar.querySelector("[data-bulk-status]");
+    const value = bar.querySelector("[data-bulk-value]");
+    const paint = () => {
+      status.hidden = action.value !== "status";
+      value.hidden = !["project", "catagory"].includes(action.value);
+      value.placeholder = action.value === "catagory" ? "Category" : "Project";
+    };
+    action.addEventListener("change", paint); paint();
+    bar.querySelector("[data-bulk-apply]").addEventListener("click", async () => {
+      const destructive = ["archive", "delete"].includes(action.value);
+      if (destructive && !confirm(`${action.value} ${selected.size} selected tasks?`)) return;
+      const items = [...selected].map((key) => {
+        const [source, uuid] = key.split(":", 2); return { source, uuid };
+      });
+      const response = await fetch("/tasks/bulk", {
+        method: "POST", credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: action.value,
+          value: action.value === "status" ? status.value : value.value,
+          items,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) { window.showError(data.detail || "Bulk action failed"); return; }
+      const failed = new Set(
+        (data.results || []).filter((result) => !result.ok)
+          .map((result) => `${result.source}:${result.uuid}`)
+      );
+      selected.clear(); failed.forEach((key) => selected.add(key)); sync();
+      try { sessionStorage.setItem(storageKey, JSON.stringify([...failed])); } catch {}
+      bar.querySelector("[data-bulk-result]").textContent = `${data.succeeded} succeeded; ${data.failed} failed`;
+      if (data.succeeded) window.setTimeout(() => window.location.reload(), 700);
+    });
+    sync();
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => initBulkTasks());
+  } else { initBulkTasks(); }
+
+  // ------------------- Calendar layers -------------------
+  function initCalendarLayers(root) {
+    const scope = root && root.querySelector ? root : document;
+    const bar = scope.querySelector("[data-calendar-layers]");
+    if (!bar || bar.dataset.layerInit === "1") return;
+    bar.dataset.layerInit = "1";
+    const key = "luigi.calendar.layers";
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem(key) || "{}"); }
+    catch { saved = {}; }
+
+    const apply = () => {
+      const state = {};
+      bar.querySelectorAll('input[type="checkbox"]').forEach((input) => {
+        if (Object.prototype.hasOwnProperty.call(saved, input.value)) {
+          input.checked = Boolean(saved[input.value]);
+        }
+        if (input.disabled) input.checked = false;
+        state[input.value] = input.checked;
+      });
+      document.querySelectorAll("[data-calendar-layer]").forEach((item) => {
+        item.classList.toggle(
+          "calendar-layer-hidden",
+          !state[item.dataset.calendarLayer]
+        );
+      });
+      localStorage.setItem(key, JSON.stringify(state));
+      saved = state;
+    };
+    bar.querySelectorAll('input[type="checkbox"]').forEach((input) => {
+      input.addEventListener("change", () => {
+        saved[input.value] = input.checked;
+        apply();
+      });
+    });
+    apply();
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => initCalendarLayers());
+  } else {
+    initCalendarLayers();
+  }
+
   // ------------------- Tasks filter bar + saved filters -------------------
   // All filtering is client-side: cards carry data-* attrs and we toggle a
   // `.card-filtered-out` class. Saved filters live in localStorage under

@@ -14,14 +14,16 @@ the shared LuigiBot repository.
   progress, and shared data with LuigiBot.
 - **Projects:** named-project timeline with scheduled and unscheduled work.
 - **Games and shows:** shared Game'N'Watch Google Sheet, metadata search,
-  covers, ratings, statuses, Steam playtime, and achievements.
+  covers, ratings, statuses, Steam playtime, achievements, and local Insights
+  charts/tables.
 - **Finance:** separately unlocked accounts, transactions, budgets,
   investments, net worth, CSV import, reports, alerts, audit history, and
   exports. Finance data is isolated from LuigiBot and the LLM.
 - **Assistant:** optional GitHub Copilot subscription or OpenAI-compatible chat
   with an allow-listed task tool registry. Finance is intentionally excluded.
 - **Operations:** integration health, environment editor, backup/export,
-  self-update, responsive navigation, and `Ctrl+K` global commands.
+  self-update, local Feedback, bulk task actions, isolated branch Preview,
+  responsive navigation, and `Ctrl+K` global commands.
 
 ## Screenshots
 
@@ -186,6 +188,10 @@ Repository guidance:
   technical design
 - [`docs/discipline-v2-plan.md`](docs/discipline-v2-plan.md) — coordinated
   LuigiBot Discipline migration
+- [`docs/task-events-plan.md`](docs/task-events-plan.md) — shared completion
+  and task activity event contract
+- [`docs/preview-deployment.md`](docs/preview-deployment.md) — isolated Git
+  branch Preview worktree/service setup
 - [`docs/screenshots/README.md`](docs/screenshots/README.md) — public screenshot
   capture checklist
 - [`SECURITY.md`](SECURITY.md) — security and sensitive-data policy

@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block head_scripts %}
+  <script src="/static/js/vendor/chart.umd.min.js?v={{ asset_version }}" defer></script>
+  <script src="/static/js/media_insights.js?v={{ asset_version }}" defer></script>
+{% endblock %}
+{% block content %}
+<section class="board-header media-insights-header">
+  <div>
+    <h1>Media Insights</h1>
+    <span class="muted-hint">Ratings, progress, and backlog health</span>
+  </div>
+  <div class="board-header-actions">
+    <div class="view-switcher" role="group" aria-label="Media type">
+      <a class="view-switcher-btn{% if section == 'games' %} active{% endif %}"
+        href="/media/insights?section=games{% if profile %}&amp;profile={{ profile|urlencode }}{% endif %}">Games</a>
+      <a class="view-switcher-btn{% if section == 'shows' %} active{% endif %}"
+        href="/media/insights?section=shows{% if profile %}&amp;profile={{ profile|urlencode }}{% endif %}">Shows</a>
+    </div>
+    {% if profiles %}
+    <form method="get" action="/media/insights" class="year-picker">
+      <input type="hidden" name="section" value="{{ section }}">
+      <label>Profile
+        <select name="profile" onchange="this.form.submit()">
+          <option value="" {% if not profile %}selected{% endif %}>All profiles</option>
+          {% for value in profiles %}<option value="{{ value }}" {% if value == profile %}selected{% endif %}>{{ value }}</option>{% endfor %}
+        </select>
+      </label>
+    </form>
+    {% endif %}
+    <a class="btn" href="/{{ section }}{% if profile %}?profile={{ profile|urlencode }}{% endif %}">Back to board</a>
+  </div>
+</section>
+
+{% if disabled_reason %}
+  <section class="empty-hero"><p>{{ disabled_reason }}</p></section>
+{% else %}
+<section class="insights-summary" aria-label="Media summary">
+  <div><span>Total</span><strong>{{ insights.total }}</strong></div>
+  <div><span>Average rating</span><strong>{{ insights.average_rating if insights.average_rating is not none else '—' }}</strong></div>
+  <div><span>Completed</span><strong>{{ insights.completion_percent }}%</strong></div>
+  {% if section == 'games' %}<div><span>Hours played</span><strong>{{ insights.total_hours }}</strong></div>{% endif %}
+  <div><span>Backlog age</span><strong>{% if insights.average_backlog_age_days is not none %}{{ insights.average_backlog_age_days }}d{% else %}—{% endif %}</strong></div>
+</section>
+
+<script type="application/json" id="media-insights-data">{{ {
+  'status': {'labels': insights.status_labels, 'values': insights.status_values},
+  'ratings': {'labels': insights.rating_labels, 'values': insights.rating_values},
+  'breakdown': {'label': insights.breakdown_label, 'labels': insights.breakdown_labels, 'values': insights.breakdown_values}
+}|tojson }}</script>
+
+<section class="insights-grid">
+  <article class="insights-chart-panel">
+    <h2>Status</h2>
+    <div class="insights-canvas"><canvas data-insights-chart="status" role="img" aria-label="Status distribution; data is available in the table below"></canvas></div>
+    <table class="insights-data-table" aria-label="Status distribution data"><thead><tr><th>Status</th><th>Count</th></tr></thead><tbody>
+      {% for label in insights.status_labels %}<tr><td>{{ label }}</td><td>{{ insights.status_values[loop.index0] }}</td></tr>{% endfor %}
+    </tbody></table>
+  </article>
+  <article class="insights-chart-panel">
+    <h2>Ratings</h2>
+    <div class="insights-canvas"><canvas data-insights-chart="ratings" role="img" aria-label="Rating distribution; data is available in the table below"></canvas></div>
+    <table class="insights-data-table" aria-label="Rating distribution data"><thead><tr><th>Rating</th><th>Count</th></tr></thead><tbody>
+      {% for label in insights.rating_labels %}<tr><td>{{ label }}</td><td>{{ insights.rating_values[loop.index0] }}</td></tr>{% endfor %}
+    </tbody></table>
+  </article>
+  <article class="insights-chart-panel">
+    <h2>{{ insights.breakdown_label }}</h2>
+    <div class="insights-canvas"><canvas data-insights-chart="breakdown" role="img" aria-label="{{ insights.breakdown_label }} distribution; data is available in the table below"></canvas></div>
+    <table class="insights-data-table" aria-label="{{ insights.breakdown_label }} distribution data"><thead><tr><th>{{ insights.breakdown_label }}</th><th>Count</th></tr></thead><tbody>
+      {% for label in insights.breakdown_labels %}<tr><td>{{ label }}</td><td>{{ insights.breakdown_values[loop.index0] }}</td></tr>{% endfor %}
+    </tbody></table>
+  </article>
+</section>
+
+<section class="insights-detail-band">
+  <header><h2>Highly rated unfinished</h2><span class="muted-hint">Rating 8 or higher</span></header>
+  {% if insights.highly_rated_unfinished %}
+  <div class="table-wrap"><table class="data-table"><thead><tr><th>Title</th><th>Rating</th><th>Status</th><th>{% if section == 'games' %}Platform{% else %}Genre{% endif %}</th></tr></thead><tbody>
+    {% for item in insights.highly_rated_unfinished %}<tr>
+      <td><a href="/{{ section }}{% if item.profile %}?profile={{ item.profile|urlencode }}{% endif %}">{{ item.title }}</a></td>
+      <td>{{ item.rating }}/10</td><td>{{ status_labels.get(item.status, item.status) }}</td>
+      <td>{{ (item.platform if section == 'games' else item.genre) or 'Unknown' }}</td>
+    </tr>{% endfor %}
+  </tbody></table></div>
+  {% else %}<p class="empty">No highly rated unfinished items.</p>{% endif %}
+</section>
+{% endif %}
+{% endblock %}

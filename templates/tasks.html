@@ -121,8 +121,27 @@
       >Clear</button>
 
       <span class="filter-summary" data-filter-summary aria-live="polite"></span>
+      <button type="button" class="btn btn-tiny" data-bulk-select-visible>Select visible</button>
     </div>
   </section>
+
+  <div class="bulk-task-bar" data-bulk-task-bar hidden>
+    <strong><span data-bulk-count>0</span> selected</strong>
+    <select data-bulk-action aria-label="Bulk action">
+      <option value="status">Change status</option>
+      <option value="project">Set project</option>
+      <option value="catagory">Set category</option>
+      <option value="archive">Archive</option>
+      <option value="delete">Delete</option>
+    </select>
+    <select data-bulk-status aria-label="Bulk status">
+      {% for status in statuses %}<option value="{{ status }}">{{ status }}</option>{% endfor %}
+    </select>
+    <input type="text" data-bulk-value placeholder="Project or category" maxlength="240" hidden>
+    <button type="button" class="btn btn-primary" data-bulk-apply>Apply</button>
+    <button type="button" class="btn btn-ghost" data-bulk-clear>Clear</button>
+    <span class="muted-hint" data-bulk-result aria-live="polite"></span>
+  </div>
 
   <section class="kanban" id="kanban-board" data-view-panel="board">
     {% for status in statuses %}

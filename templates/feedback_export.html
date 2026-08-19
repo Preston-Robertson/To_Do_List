@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="board-header"><div><h1>Review feedback export</h1><span class="muted-hint">Inspect every item before downloading</span></div>
+  <div class="board-header-actions"><a class="btn" href="/feedback">Back</a><a class="btn" href="/feedback/export.md" download>Markdown</a><a class="btn btn-primary" href="/feedback/export.json" download>JSON</a></div>
+</section>
+<section class="feedback-export-review">
+  {% for item in rows %}<article><strong>{{ item.category }} · {{ item.status }}</strong><p>{{ item.message }}</p><small>{{ item.created_at }}{% if item.page_path %} · {{ item.page_path }}{% endif %}</small></article>{% else %}<p class="empty">Nothing to export.</p>{% endfor %}
+</section>
+{% endblock %}

@@ -1,0 +1,30 @@
+<article class="preview-status-panel">
+  <header><h2>Environment status</h2>{% if preview.healthy %}<span class="chip">healthy</span>{% elif preview.service_active %}<span class="chip chip-muted">starting</span>{% else %}<span class="chip chip-muted">stopped</span>{% endif %}</header>
+  {% if result %}<div class="admin-banner-ok">{{ result }}</div>{% endif %}
+  {% if error %}<div class="admin-banner-err">{{ error }}</div>{% endif %}
+  {% if not preview.configured %}
+    <div class="admin-banner-warn">The root-owned Preview helper/environment is not installed. See <code>docs/preview-deployment.md</code>.</div>
+  {% endif %}
+  <dl class="kv">
+    <dt>Exists</dt><dd>{{ 'yes' if preview.exists else 'no' }}</dd>
+    <dt>Branch</dt><dd><code>{{ preview.branch or '—' }}</code></dd>
+    <dt>Commit</dt><dd><code>{{ preview.commit or '—' }}</code></dd>
+    <dt>Port</dt><dd><code>{{ preview.port or '—' }}</code></dd>
+    <dt>Service</dt><dd>{{ 'active' if preview.service_active else 'stopped' }}</dd>
+  </dl>
+  {% if deploy_unlocked and preview.configured %}
+    {% if not preview.exists %}
+      <form class="preview-create-form" hx-post="/admin/preview/create" hx-target="#preview-status" hx-swap="innerHTML">
+        <label>Remote branch<select name="branch" required><option value="">Choose branch</option>{% for value in branches %}<option>{{ value }}</option>{% endfor %}</select></label>
+        <button class="btn btn-primary" type="submit" hx-confirm="Create Preview and copy the local Production task database into its isolated snapshot?">Create Preview</button>
+      </form>
+    {% else %}
+      <div class="preview-actions">
+        <button class="btn" hx-post="/admin/preview/update" hx-target="#preview-status" hx-swap="innerHTML" hx-confirm="Update Preview code and refresh its isolated task snapshot?">Update snapshot</button>
+        <button class="btn" hx-post="/admin/preview/restart" hx-target="#preview-status" hx-swap="innerHTML">Restart</button>
+        <button class="btn btn-danger" hx-post="/admin/preview/remove" hx-target="#preview-status" hx-swap="innerHTML" hx-confirm="Remove Preview worktree, task snapshot, and writable data?">Remove</button>
+        {% if preview.healthy and preview.port %}<a class="btn btn-primary" href="http://{{ request.url.hostname }}:{{ preview.port }}/" target="_blank" rel="noopener">Open Preview</a>{% endif %}
+      </div>
+    {% endif %}
+  {% endif %}
+</article>

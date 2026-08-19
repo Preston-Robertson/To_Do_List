@@ -1,0 +1,33 @@
+[Unit]
+Description=Luigi Web Preview
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=luigi-web
+Group=luigi-web
+WorkingDirectory=/opt/luigi-web-preview
+EnvironmentFile=/etc/luigi-web/preview.env
+Environment=PIP_NO_CACHE_DIR=1
+ExecStart=/opt/luigi-web-preview-runtime/.venv/bin/uvicorn app:app \
+  --host ${LUIGI_WEB_BIND} \
+  --port ${LUIGI_WEB_PORT} \
+  --workers 1 \
+  --no-access-log
+Restart=always
+RestartSec=2s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/luigi-web-preview-data
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

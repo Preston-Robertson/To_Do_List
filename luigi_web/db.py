@@ -19,6 +19,7 @@ import os
 import json
 import threading
 import uuid as _uuid
+from dataclasses import dataclass
 from datetime import datetime, date, timedelta
 from typing import Any, Iterable
 
@@ -26,6 +27,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine, URL
 
 from . import recurrence as recurrence_rules
+from . import task_events
 from .paths import TASK_METADATA_PATH
 
 
@@ -415,7 +417,7 @@ def reactivation_date(row: dict[str, Any]) -> str | None:
         return None
     if not (row.get("completed") and row.get("recurring")):
         return None
-    completed_time = row.get("completed_time")
+    completed_time = row.get("_effective_completion_date") or row.get("completed_time")
     if not completed_time:
         return None
     try:
@@ -737,7 +739,93 @@ def _spawn_follow_ups(conn, trigger_task: str) -> list[str]:
     return created
 
 
-def _set_task_like_status(table: str, row_uuid: str, status: str) -> list[str]:
+@dataclass(frozen=True)
+class TaskTransition:
+    completed: int
+    generated_task_uuids: tuple[str, ...] = ()
+    event_uuid: str | None = None
+    event_type: str | None = None
+    history_available: bool = False
+
+
+def _select_task_for_update(conn, table: str, row_uuid: str):
+    lock = "" if conn.dialect.name == "sqlite" else " FOR UPDATE"
+    return conn.execute(text(f"""
+        SELECT task, catagory, due_date, completed, completed_time
+        FROM {table}
+        WHERE uuid = :u{lock}
+    """), {"u": row_uuid}).first()
+
+
+def _record_task_transition_event(
+    conn,
+    *,
+    table: str,
+    row_uuid: str,
+    current,
+    completed: int,
+    occurred_at: str,
+    actor_source: str,
+    operation_uuid: str | None,
+    effective_date_override: str | None,
+) -> tuple[str | None, str | None, bool]:
+    status = task_events.capability(conn)
+    if not status.available:
+        if effective_date_override:
+            raise ValueError(
+                "completion date override requires the shared task_events migration"
+            )
+        return None, None, False
+    was_completed = bool(int(current.completed or 0))
+    if completed and not was_completed:
+        event_uuid = task_events.append_event(
+            conn,
+            event_type=task_events.COMPLETED,
+            source_task_uuid=row_uuid,
+            source_table=table,
+            task_snapshot=str(current.task or ""),
+            catagory_snapshot=current.catagory,
+            occurred_at=occurred_at,
+            effective_date=task_events.effective_date_for_iso(
+                occurred_at, override=effective_date_override
+            ),
+            due_date_snapshot=(str(current.due_date)[:10] if current.due_date else None),
+            actor_source=actor_source,
+            operation_uuid=operation_uuid,
+        )
+        return event_uuid, task_events.COMPLETED, True
+    if not completed and was_completed:
+        completion_uuid = task_events.latest_active_completion(
+            conn,
+            source_task_uuid=row_uuid,
+            source_table=table,
+        )
+        if completion_uuid is None:
+            return None, None, True
+        event_uuid = task_events.append_reversal(
+            conn,
+            completion_event_uuid=completion_uuid,
+            source_task_uuid=row_uuid,
+            source_table=table,
+            task_snapshot=str(current.task or ""),
+            catagory_snapshot=current.catagory,
+            occurred_at=occurred_at,
+            actor_source=actor_source,
+            operation_uuid=operation_uuid,
+        )
+        return event_uuid, task_events.COMPLETION_REVERSED, True
+    return None, None, True
+
+
+def _set_task_like_status(
+    table: str,
+    row_uuid: str,
+    status: str,
+    *,
+    actor_source: str = "web",
+    operation_uuid: str | None = None,
+    effective_date: str | None = None,
+) -> TaskTransition:
     if status not in STATUS_VALUES:
         raise ValueError(f"invalid status: {status}")
     # Dragging to/from the Completed column toggles the completed flag too so
@@ -750,28 +838,49 @@ def _set_task_like_status(table: str, row_uuid: str, status: str) -> list[str]:
         WHERE uuid = :u
     """)
     with get_engine().begin() as conn:
-        current = conn.execute(
-            text(f"SELECT task, completed FROM {table} WHERE uuid = :u FOR UPDATE"),
-            {"u": row_uuid},
-        ).first()
+        current = _select_task_for_update(conn, table, row_uuid)
         if current is None:
-            return []
+            return TaskTransition(completed=0)
         conn.execute(q, {"s": status, "c": completed, "ct": completed_time, "u": row_uuid})
+        event_uuid, event_type, history_available = _record_task_transition_event(
+            conn,
+            table=table,
+            row_uuid=row_uuid,
+            current=current,
+            completed=completed,
+            occurred_at=completed_time or now_iso(),
+            actor_source=actor_source,
+            operation_uuid=operation_uuid,
+            effective_date_override=effective_date,
+        )
         if completed and not int(current.completed or 0):
-            return _spawn_follow_ups(conn, str(current.task or ""))
-    return []
+            generated = tuple(_spawn_follow_ups(conn, str(current.task or "")))
+        else:
+            generated = ()
+    return TaskTransition(
+        completed=completed,
+        generated_task_uuids=generated,
+        event_uuid=event_uuid,
+        event_type=event_type,
+        history_available=history_available,
+    )
 
 
-def _toggle_task_like_completed(table: str, row_uuid: str) -> tuple[int, list[str]]:
-    """Flip completion and return ``(new_value, generated_task_uuids)``."""
+def _toggle_task_like_completed(
+    table: str,
+    row_uuid: str,
+    *,
+    actor_source: str = "web",
+    operation_uuid: str | None = None,
+    effective_date: str | None = None,
+) -> TaskTransition:
+    """Flip completion and return the complete transition result."""
     with get_engine().begin() as conn:
-        cur = conn.execute(
-            text(f"SELECT task, completed FROM {table} WHERE uuid = :u FOR UPDATE"),
-            {"u": row_uuid},
-        ).first()
+        cur = _select_task_for_update(conn, table, row_uuid)
         if cur is None:
             raise LookupError(f"{table} row not found")
         new_val = 0 if int(cur.completed or 0) == 1 else 1
+        occurred_at = now_iso()
         conn.execute(
             text(f"""
                 UPDATE {table}
@@ -780,10 +889,27 @@ def _toggle_task_like_completed(table: str, row_uuid: str) -> tuple[int, list[st
                     status = CASE WHEN :c = 1 THEN 'Completed' ELSE 'Not Started' END
                 WHERE uuid = :u
             """),
-            {"c": new_val, "ct": now_iso() if new_val else None, "u": row_uuid},
+            {"c": new_val, "ct": occurred_at if new_val else None, "u": row_uuid},
         )
-        created = _spawn_follow_ups(conn, str(cur.task or "")) if new_val else []
-    return new_val, created
+        event_uuid, event_type, history_available = _record_task_transition_event(
+            conn,
+            table=table,
+            row_uuid=row_uuid,
+            current=cur,
+            completed=new_val,
+            occurred_at=occurred_at,
+            actor_source=actor_source,
+            operation_uuid=operation_uuid,
+            effective_date_override=effective_date,
+        )
+        created = tuple(_spawn_follow_ups(conn, str(cur.task or ""))) if new_val else ()
+    return TaskTransition(
+        completed=new_val,
+        generated_task_uuids=created,
+        event_uuid=event_uuid,
+        event_type=event_type,
+        history_available=history_available,
+    )
 
 
 def _delete_task_like(table: str, row_uuid: str) -> None:
@@ -802,6 +928,29 @@ def _set_task_like_archived(table: str, row_uuid: str, archived: bool) -> bool:
         result = conn.execute(
             text(f"UPDATE {table} SET archived = :a WHERE uuid = :u"),
             {"a": 1 if archived else 0, "u": row_uuid},
+        )
+    return bool(result.rowcount)
+
+
+def _set_task_like_metadata(
+    table: str,
+    row_uuid: str,
+    *,
+    field: str,
+    value: str | None,
+) -> bool:
+    if field not in {"project", "catagory"}:
+        raise ValueError("bulk metadata field must be project or catagory")
+    cleaned = str(value or "").strip() or None
+    if field == "project" and not has_web_column(table, "project"):
+        if _get_task_like(table, row_uuid) is None:
+            return False
+        _set_web_metadata(table, row_uuid, project=cleaned)
+        return True
+    with get_engine().begin() as conn:
+        result = conn.execute(
+            text(f"UPDATE {table} SET {field} = :value WHERE uuid = :u"),
+            {"value": cleaned, "u": row_uuid},
         )
     return bool(result.rowcount)
 
@@ -830,6 +979,9 @@ def restore_task_row(
     table: str,
     snapshot: dict[str, Any],
     generated_task_uuids: Iterable[str] = (),
+    task_event_uuid: str | None = None,
+    task_event_type: str | None = None,
+    actor_source: str = "web",
 ) -> None:
     """Idempotent 'put back' for a task-like row snapshot.
 
@@ -867,6 +1019,42 @@ def restore_task_row(
             conn.execute(
                 text("DELETE FROM tasks WHERE uuid = :u"),
                 {"u": str(generated_uuid)},
+            )
+        if task_event_uuid and task_event_type == task_events.COMPLETED:
+            task_events.append_reversal(
+                conn,
+                completion_event_uuid=task_event_uuid,
+                source_task_uuid=str(row_uuid),
+                source_table=table,
+                task_snapshot=str(snapshot.get("task") or ""),
+                catagory_snapshot=snapshot.get("catagory"),
+                occurred_at=now_iso(),
+                actor_source=actor_source,
+            )
+        elif task_event_uuid and task_event_type == task_events.COMPLETION_REVERSED:
+            restored_at = now_iso()
+            original = task_events.completion_reversed_by(conn, task_event_uuid)
+            task_events.append_event(
+                conn,
+                event_type=task_events.COMPLETED,
+                source_task_uuid=str(row_uuid),
+                source_table=table,
+                task_snapshot=str(snapshot.get("task") or ""),
+                catagory_snapshot=snapshot.get("catagory"),
+                occurred_at=restored_at,
+                effective_date=(
+                    original.get("effective_date") if original else
+                    (str(snapshot.get("completed_time"))[:10]
+                     if snapshot.get("completed_time") else restored_at[:10])
+                ),
+                due_date_snapshot=(
+                    original.get("due_date_snapshot") if original else
+                    (str(snapshot.get("due_date"))[:10]
+                     if snapshot.get("due_date") else None)
+                ),
+                actor_source=actor_source,
+                related_event_uuid=task_event_uuid,
+                details={"reason": "undo completion reversal"},
             )
 
 
@@ -918,12 +1106,22 @@ def update_task(row_uuid: str, data: dict[str, Any]) -> None:
     _update_task_like("tasks", row_uuid, data)
 
 
-def set_task_status(row_uuid: str, status: str) -> list[str]:
-    return _set_task_like_status("tasks", row_uuid, status)
+def set_task_status(
+    row_uuid: str, status: str, *, actor_source: str = "web",
+    effective_date: str | None = None,
+) -> TaskTransition:
+    return _set_task_like_status(
+        "tasks", row_uuid, status, actor_source=actor_source,
+        effective_date=effective_date,
+    )
 
 
-def toggle_task_completed(row_uuid: str) -> tuple[int, list[str]]:
-    return _toggle_task_like_completed("tasks", row_uuid)
+def toggle_task_completed(
+    row_uuid: str, *, effective_date: str | None = None
+) -> TaskTransition:
+    return _toggle_task_like_completed(
+        "tasks", row_uuid, effective_date=effective_date
+    )
 
 
 def delete_task(row_uuid: str) -> None:
@@ -936,6 +1134,10 @@ def snooze_task(row_uuid: str, days: int) -> str | None:
 
 def archive_task(row_uuid: str, archived: bool = True) -> bool:
     return _set_task_like_archived("tasks", row_uuid, archived)
+
+
+def set_task_metadata(row_uuid: str, *, field: str, value: str | None) -> bool:
+    return _set_task_like_metadata("tasks", row_uuid, field=field, value=value)
 
 
 # public: recurring_tasks
@@ -955,12 +1157,83 @@ def update_recurring(row_uuid: str, data: dict[str, Any]) -> None:
     _update_task_like("recurring_tasks", row_uuid, data)
 
 
-def set_recurring_status(row_uuid: str, status: str) -> list[str]:
-    return _set_task_like_status("recurring_tasks", row_uuid, status)
+def set_recurring_status(
+    row_uuid: str, status: str, *, actor_source: str = "web",
+    effective_date: str | None = None,
+) -> TaskTransition:
+    return _set_task_like_status(
+        "recurring_tasks", row_uuid, status, actor_source=actor_source,
+        effective_date=effective_date,
+    )
 
 
-def toggle_recurring_completed(row_uuid: str) -> tuple[int, list[str]]:
-    return _toggle_task_like_completed("recurring_tasks", row_uuid)
+def toggle_recurring_completed(
+    row_uuid: str, *, effective_date: str | None = None
+) -> TaskTransition:
+    return _toggle_task_like_completed(
+        "recurring_tasks", row_uuid, effective_date=effective_date
+    )
+
+
+def task_events_storage_health() -> str:
+    """Verify the optional shared event contract and write permission."""
+    with get_engine().connect() as conn:
+        transaction = conn.begin()
+        try:
+            status = task_events.capability(conn)
+            if not status.available:
+                raise RuntimeError(status.reason)
+            event_uuid = task_events.append_event(
+                conn,
+                event_type=task_events.COMPLETED,
+                source_task_uuid="00000000-0000-0000-0000-000000000000",
+                source_table="tasks",
+                task_snapshot="Example task",
+                occurred_at="2000-01-01T00:00:00",
+                effective_date="2000-01-01",
+                actor_source="health-check",
+            )
+            if not event_uuid:
+                raise RuntimeError("task event write was not visible")
+        finally:
+            transaction.rollback()
+    return "contract and rolled-back write verified"
+
+
+def list_task_completion_events(
+    start: date,
+    end: date,
+) -> tuple[task_events.Capability, list[dict[str, Any]]]:
+    with get_engine().connect() as conn:
+        status = task_events.capability(conn)
+        rows = (
+            task_events.list_active_completions(
+                conn,
+                start_date=start.isoformat(),
+                end_date=end.isoformat(),
+            )
+            if status.available else []
+        )
+    shaped: list[dict[str, Any]] = []
+    for row in rows:
+        source = (
+            "recurring" if row["source_table"] == "recurring_tasks" else "task"
+        )
+        shaped.append({
+            "uuid": row["source_task_uuid"],
+            "task": row["task_snapshot"],
+            "catagory": row.get("catagory_snapshot"),
+            "priority": 0,
+            "status": "Completed",
+            "completed": 1,
+            "completed_time": row["occurred_at"],
+            "due_date": row["effective_date"],
+            "source": source,
+            "source_exists": bool(row.get("source_exists")),
+            "_event_uuid": row["event_uuid"],
+            "_calendar_layer": "completed",
+        })
+    return status, shaped
 
 
 def delete_recurring(row_uuid: str) -> None:
@@ -973,6 +1246,14 @@ def snooze_recurring(row_uuid: str, days: int) -> str | None:
 
 def archive_recurring(row_uuid: str, archived: bool = True) -> bool:
     return _set_task_like_archived("recurring_tasks", row_uuid, archived)
+
+
+def set_recurring_metadata(
+    row_uuid: str, *, field: str, value: str | None
+) -> bool:
+    return _set_task_like_metadata(
+        "recurring_tasks", row_uuid, field=field, value=value
+    )
 
 
 def list_task_names() -> list[str]:
@@ -1015,6 +1296,16 @@ def reactivate_due_recurring(today: date | None = None) -> int:
     """)
     with get_engine().connect() as conn:
         rows = _rows(conn.execute(q))
+        history_available = task_events.capability(conn).available
+        if history_available:
+            for row in rows:
+                row["_effective_completion_date"] = (
+                    task_events.latest_active_completion_effective_date(
+                        conn,
+                        source_task_uuid=str(row.get("uuid") or ""),
+                        source_table="recurring_tasks",
+                    )
+                )
 
     due: list[tuple[str, str]] = []
     for row in rows:
