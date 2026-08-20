@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="board-header">
+  <div><h1>Task activity</h1><span class="muted-hint">Completion, reversal, creation, and Discipline history</span></div>
+</section>
+{% if not history_complete %}
+  <div class="admin-banner-warn">Limited history from current table timestamps. The shared <code>task_events</code> migration is required for durable completion/reversal history. <span title="{{ history_reason }}">Details</span></div>
+{% endif %}
+<form method="get" class="activity-filter-bar">
+  <input type="search" name="q" value="{{ query }}" placeholder="Filter by task" aria-label="Filter activity by task">
+  <select name="kind" aria-label="Activity type">
+    <option value="" {% if not kind %}selected{% endif %}>All activity</option>
+    <option value="completed" {% if kind == 'completed' %}selected{% endif %}>Completed</option>
+    <option value="completion_reversed" {% if kind == 'completion_reversed' %}selected{% endif %}>Completion reversed</option>
+    <option value="created" {% if kind == 'created' %}selected{% endif %}>Created</option>
+    <option value="discipline" {% if kind == 'discipline' %}selected{% endif %}>Discipline</option>
+  </select>
+  <select name="days" aria-label="Activity window">
+    {% for value,label in [(7,'7 days'),(30,'30 days'),(90,'90 days'),(365,'1 year')] %}<option value="{{ value }}" {% if value == days %}selected{% endif %}>{{ label }}</option>{% endfor %}
+  </select>
+  <button class="btn btn-primary" type="submit">Apply</button>
+</form>
+<section class="activity-timeline">
+  {% for row in rows %}
+    <article class="activity-timeline-row kind-{{ row.kind }}">
+      <span class="activity-timeline-dot" aria-hidden="true"></span>
+      <div>
+        <header><strong>{{ row.what }}</strong><span class="chip chip-muted">{{ row.kind|replace('_',' ') }}</span>{% if row.source == 'recurring' %}<span class="chip chip-muted">↻</span>{% endif %}</header>
+        <p>
+          <time>{{ row.when_ts }}</time>
+          {% if row.effective_date and row.effective_date != row.when_ts[:10] %}<span>effective {{ row.effective_date }}</span>{% endif %}
+          {% if row.actor_source %}<span>via {{ row.actor_source }}</span>{% endif %}
+          {% if row.catagory %}<span>{{ row.catagory }}</span>{% endif %}
+        </p>
+      </div>
+      {% if row.uuid and row.source in ['task','recurring'] %}<button class="btn btn-tiny" hx-get="/{{ 'recurring' if row.source == 'recurring' else 'tasks' }}/{{ row.uuid }}/edit" hx-target="#modal-body" onclick="openModal()">Open</button>{% endif %}
+    </article>
+  {% else %}<p class="empty">No activity matches this view.</p>{% endfor %}
+</section>
+{% endblock %}

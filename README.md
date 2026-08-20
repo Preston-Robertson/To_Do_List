@@ -9,13 +9,14 @@ the shared LuigiBot repository.
 
 - **Tasks:** Kanban and compact list views, Quick Add, filters, snooze, Undo,
   completion triggers, interval/weekday/monthly-position recurrence, projects,
-  archive, and projected recurring occurrences on the calendar.
+  archive, a migration-aware Activity timeline, and projected recurring
+  occurrences on Month/Agenda calendar views.
 - **Discipline:** daily completion controls, yearly heatmaps, streaks, weekly
   progress, and shared data with LuigiBot.
 - **Projects:** named-project timeline with scheduled and unscheduled work.
 - **Games and shows:** shared Game'N'Watch Google Sheet, metadata search,
   covers, ratings, statuses, Steam playtime, achievements, and local Insights
-  charts/tables.
+  charts/tables with backlog health and health-aware weighted picks.
 - **Finance:** separately unlocked accounts, transactions, budgets,
   investments, net worth, CSV import, reports, alerts, audit history, and
   exports. Finance data is isolated from LuigiBot and the LLM.

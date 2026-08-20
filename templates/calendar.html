@@ -28,7 +28,21 @@
   {% endif %}
 </div>
 
-<section class="calendar-grid" aria-label="{{ month_label }} calendar">
+<div class="calendar-mode-bar" data-calendar-modes>
+  <div class="view-switcher" role="group" aria-label="Calendar view">
+    <button type="button" class="view-switcher-btn active" data-calendar-view="month" aria-pressed="true">Month</button>
+    <button type="button" class="view-switcher-btn" data-calendar-view="agenda" aria-pressed="false">Agenda</button>
+  </div>
+  <label>Density
+    <select data-calendar-density aria-label="Calendar density">
+      <option value="comfortable">Comfortable</option>
+      <option value="compact">Compact</option>
+    </select>
+  </label>
+</div>
+
+<div class="calendar-view-root" data-calendar-root>
+<section class="calendar-grid" aria-label="{{ month_label }} calendar" data-calendar-view-panel="month">
   {% for label in ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'] %}
     <div class="calendar-dow">{{ label }}</div>
   {% endfor %}
@@ -38,31 +52,33 @@
         <div class="calendar-day-number">{{ day.date.day }}</div>
         <div class="calendar-items">
           {% for t in day.tasks %}
-            {% set layer = t._calendar_layer or 'planned' %}
-            {% if layer == 'completed' and not t.source_exists %}
-            <span class="calendar-item calendar-item-snapshot is-completed"
-              data-calendar-layer="{{ layer }}"
-              title="Completed {{ t.completed_time }} · source task no longer exists">
-              <span aria-hidden="true">✓</span>
-              <span class="calendar-item-title">{{ t.task }}</span>
-            </span>
-            {% else %}
-            <button type="button"
-              class="calendar-item status-{{ (t.status or 'not-started')|lower|replace(' ', '-') }}{% if t.completed %} is-completed{% endif %} layer-{{ layer }}"
-              data-calendar-layer="{{ layer }}"
-              hx-get="/{{ 'recurring' if t.source == 'recurring' else 'tasks' }}/{{ t.uuid }}/edit"
-              hx-target="#modal-body"
-              onclick="openModal()"
-              title="{{ t.task }} · {{ t.status }}{% if t.project %} · {{ t.project }}{% endif %}">
-              {% if layer == 'completed' %}<span aria-hidden="true">✓</span>{% endif %}
-              {% if t.source == 'recurring' %}<span>↻</span>{% endif %}
-              <span class="calendar-item-title">{{ t.task }}</span>
-            </button>
-            {% endif %}
+            {% include "partials/calendar_item.html" %}
           {% endfor %}
         </div>
       </div>
     {% endfor %}
   {% endfor %}
 </section>
+
+<section class="calendar-agenda" aria-label="{{ month_label }} agenda" data-calendar-view-panel="agenda" hidden>
+  {% set agenda = namespace(has_items=false) %}
+  {% for week in weeks %}
+    {% for day in week %}
+      {% if day.in_month and day.tasks %}
+        {% set agenda.has_items = true %}
+        <article class="calendar-agenda-day{% if day.iso == today_iso %} is-today{% endif %}" data-calendar-agenda-day>
+          <header>
+            <time datetime="{{ day.iso }}"><strong>{{ day.date.strftime('%a') }}</strong><span>{{ day.date.strftime('%b') }} {{ day.date.day }}</span></time>
+            <span class="chip chip-muted">{{ day.tasks|length }}</span>
+          </header>
+          <div class="calendar-items">
+            {% for t in day.tasks %}{% include "partials/calendar_item.html" %}{% endfor %}
+          </div>
+        </article>
+      {% endif %}
+    {% endfor %}
+  {% endfor %}
+  {% if not agenda.has_items %}<p class="empty">No calendar items in {{ month_label }}.</p>{% endif %}
+</section>
+</div>
 {% endblock %}

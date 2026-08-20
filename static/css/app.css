@@ -855,6 +855,15 @@ kbd {
 }
 .calendar-layer-bar label { display: inline-flex; align-items: center; gap: 5px; }
 .calendar-layer-warning { color: var(--warn); }
+.calendar-mode-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.calendar-mode-bar label { display: flex; align-items: center; gap: 7px; color: var(--text-dim); font-size: 11px; }
+.calendar-mode-bar select { min-height: 31px; background: var(--bg-elev-2); border: 1px solid var(--border); color: var(--text); }
 .calendar-item.layer-completed { border-left-color: var(--success); }
 .calendar-item.layer-projected { border-left-style: dashed; opacity: .82; }
 .calendar-item-snapshot { cursor: default; }
@@ -908,9 +917,34 @@ kbd {
 .calendar-item.status-pending { border-left-color: #a78bfa; }
 .calendar-item.status-completed { border-left-color: var(--success); }
 .calendar-item.is-completed { opacity: .55; text-decoration: line-through; }
+.calendar-agenda { display: grid; gap: 8px; }
+.calendar-agenda[hidden] { display: none; }
+.calendar-agenda-day {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+}
+.calendar-agenda-day > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.calendar-agenda-day time span,.calendar-agenda-day time strong { display: block; }
+.calendar-agenda-day time span { margin-top: 2px; color: var(--text-dim); font-size: 11px; }
+.calendar-agenda-day.is-today { border-color: var(--accent); }
+.calendar-agenda-day[hidden] { display: none; }
+.calendar-view-root.is-compact .calendar-day { min-height: 88px; padding: 4px; }
+.calendar-view-root.is-compact .calendar-day-number { margin-bottom: 3px; font-size: 10px; }
+.calendar-view-root.is-compact .calendar-items { gap: 2px; }
+.calendar-view-root.is-compact .calendar-item { padding: 2px 4px; font-size: 10px; }
+.calendar-view-root.is-compact .calendar-agenda-day { padding: 6px 8px; }
 @media (max-width: 900px) {
   .calendar-grid { grid-template-columns: repeat(7, minmax(110px, 1fr)); }
   .calendar-header { align-items: flex-start; }
+  .calendar-agenda-day { grid-template-columns: 82px minmax(0, 1fr); }
+}
+@media (max-width: 620px) {
+  .calendar-mode-bar { align-items: stretch; }
+  .calendar-agenda-day { grid-template-columns: 1fr; gap: 6px; }
 }
 .archive-list { display: flex; flex-direction: column; gap: 8px; max-width: 1000px; }
 .archive-row {
@@ -2297,6 +2331,19 @@ kbd {
 .activity-icon-completed  { background: var(--success); color: #06210f; }
 .activity-icon-created    { background: var(--accent-dim); color: var(--text); }
 .activity-icon-discipline { background: var(--warn); color: #1a1000; }
+.activity-filter-bar { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.activity-filter-bar input { flex: 1 1 220px; }
+.activity-filter-bar input,.activity-filter-bar select { min-height: 34px; padding: 5px 8px; background: var(--bg-elev-2); border: 1px solid var(--border); color: var(--text); }
+.activity-timeline { position: relative; display: grid; gap: 0; max-width: 1000px; }
+.activity-timeline::before { content: ""; position: absolute; left: 11px; top: 8px; bottom: 8px; width: 1px; background: var(--border-strong); }
+.activity-timeline-row { position: relative; display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 9px 0; }
+.activity-timeline-dot { z-index: 1; width: 9px; height: 9px; margin-left: 7px; border: 2px solid var(--bg); border-radius: 50%; background: var(--text-muted); }
+.activity-timeline-row.kind-completed .activity-timeline-dot { background: var(--success); }
+.activity-timeline-row.kind-completion_reversed .activity-timeline-dot { background: var(--danger); }
+.activity-timeline-row.kind-created .activity-timeline-dot { background: var(--accent); }
+.activity-timeline-row header { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.activity-timeline-row p { display: flex; flex-wrap: wrap; gap: 8px; margin: 3px 0 0; color: var(--text-dim); font-size: 11px; }
+@media (max-width: 620px) { .activity-timeline-row { grid-template-columns: 24px minmax(0, 1fr); } .activity-timeline-row > .btn { grid-column: 2; justify-self: start; } }
 
 /* --------------------------------------------------------------------------
    Projects page — category picker + Gantt chart
@@ -3104,6 +3151,7 @@ kbd {
 .insights-detail-band { margin-top: 14px; }
 .insights-detail-band > header { display: flex; align-items: baseline; gap: 10px; }
 .insights-detail-band h2 { margin: 0 0 8px; font-size: 15px; }
+.insights-health-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .feedback-filter { margin-bottom: 12px; }
 .feedback-list { display: grid; gap: 8px; }
 .feedback-item { padding: 12px; border: 1px solid var(--border); background: var(--bg-elev); }
@@ -3132,6 +3180,7 @@ kbd {
   .insights-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .insights-grid { grid-template-columns: 1fr; }
   .insights-canvas { height: 210px; }
+  .insights-health-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 620px) {

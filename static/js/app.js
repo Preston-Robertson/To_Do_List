@@ -1244,6 +1244,8 @@
     if (!bar || bar.dataset.layerInit === "1") return;
     bar.dataset.layerInit = "1";
     const key = "luigi.calendar.layers";
+    const viewKey = "luigi.calendar.view";
+    const densityKey = "luigi.calendar.density";
     let saved = {};
     try { saved = JSON.parse(localStorage.getItem(key) || "{}"); }
     catch { saved = {}; }
@@ -1263,6 +1265,11 @@
           !state[item.dataset.calendarLayer]
         );
       });
+      document.querySelectorAll("[data-calendar-agenda-day]").forEach((day) => {
+        const hasVisible = [...day.querySelectorAll("[data-calendar-layer]")]
+          .some((item) => !item.classList.contains("calendar-layer-hidden"));
+        day.hidden = !hasVisible;
+      });
       localStorage.setItem(key, JSON.stringify(state));
       saved = state;
     };
@@ -1272,6 +1279,36 @@
         apply();
       });
     });
+    const modeBar = document.querySelector("[data-calendar-modes]");
+    const calendarRoot = document.querySelector("[data-calendar-root]");
+    const density = modeBar?.querySelector("[data-calendar-density]");
+    const applyView = (view) => {
+      const selected = view === "agenda" ? "agenda" : "month";
+      document.querySelectorAll("[data-calendar-view-panel]").forEach((panel) => {
+        panel.hidden = panel.dataset.calendarViewPanel !== selected;
+      });
+      modeBar?.querySelectorAll("[data-calendar-view]").forEach((button) => {
+        const active = button.dataset.calendarView === selected;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-pressed", String(active));
+      });
+      localStorage.setItem(viewKey, selected);
+    };
+    modeBar?.querySelectorAll("[data-calendar-view]").forEach((button) => {
+      button.addEventListener("click", () => applyView(button.dataset.calendarView));
+    });
+    if (density && calendarRoot) {
+      const savedDensity = localStorage.getItem(densityKey) === "compact"
+        ? "compact" : "comfortable";
+      density.value = savedDensity;
+      calendarRoot.classList.toggle("is-compact", savedDensity === "compact");
+      density.addEventListener("change", () => {
+        const compact = density.value === "compact";
+        calendarRoot.classList.toggle("is-compact", compact);
+        localStorage.setItem(densityKey, compact ? "compact" : "comfortable");
+      });
+    }
+    applyView(localStorage.getItem(viewKey) || "month");
     apply();
   }
   if (document.readyState === "loading") {

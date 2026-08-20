@@ -40,6 +40,8 @@
   <div><span>Completed</span><strong>{{ insights.completion_percent }}%</strong></div>
   {% if section == 'games' %}<div><span>Hours played</span><strong>{{ insights.total_hours }}</strong></div>{% endif %}
   <div><span>Backlog age</span><strong>{% if insights.average_backlog_age_days is not none %}{{ insights.average_backlog_age_days }}d{% else %}—{% endif %}</strong></div>
+  <div><span>Never started</span><strong>{{ insights.never_started_count }}</strong></div>
+  {% if section == 'games' %}<div><span>Playtime coverage</span><strong>{{ insights.playtime_coverage_percent }}%</strong></div>{% endif %}
 </section>
 
 <script type="application/json" id="media-insights-data">{{ {
@@ -83,6 +85,25 @@
     </tr>{% endfor %}
   </tbody></table></div>
   {% else %}<p class="empty">No highly rated unfinished items.</p>{% endif %}
+</section>
+
+<section class="insights-health-grid">
+  <article class="insights-detail-band">
+    <header><h2>Oldest backlog</h2><span class="muted-hint">By date added</span></header>
+    {% if insights.oldest_backlog %}
+    <div class="table-wrap"><table class="data-table"><thead><tr><th>Title</th><th>Age</th><th>Rating</th></tr></thead><tbody>
+      {% for item in insights.oldest_backlog %}<tr><td>{{ item.title }}</td><td>{{ item.age_days }}d</td><td>{{ item.rating if item.rating is not none else '—' }}</td></tr>{% endfor %}
+    </tbody></table></div>
+    {% else %}<p class="empty">No dated backlog items.</p>{% endif %}
+  </article>
+  <article class="insights-detail-band">
+    <header><h2>Stalled items</h2><span class="muted-hint">Paused/on hold by last activity</span></header>
+    {% if insights.stalled_items %}
+    <div class="table-wrap"><table class="data-table"><thead><tr><th>Title</th><th>Inactive</th><th>Status</th></tr></thead><tbody>
+      {% for item in insights.stalled_items %}<tr><td>{{ item.title }}</td><td>{{ item.inactive_days }}d</td><td>{{ status_labels.get(item.status, item.status) }}</td></tr>{% endfor %}
+    </tbody></table></div>
+    {% else %}<p class="empty">No paused/on-hold activity dates.</p>{% endif %}
+  </article>
 </section>
 {% endif %}
 {% endblock %}

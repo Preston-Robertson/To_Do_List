@@ -2329,6 +2329,57 @@ def list_recent_activity(limit: int = 15, days: int = 14) -> list[dict[str, Any]
         return _rows(conn.execute(q, {"ts": cutoff_ts, "day": cutoff_day}))
 
 
+def list_activity_timeline(
+    *,
+    days: int = 30,
+    event_type: str = "",
+    query: str = "",
+    limit: int = 200,
+) -> tuple[task_events.Capability, list[dict[str, Any]]]:
+    days = min(max(int(days), 1), 365)
+    start = (clock.local_now() - timedelta(days=days)).isoformat(timespec="seconds")
+    with get_engine().connect() as conn:
+        status = task_events.capability(conn)
+        if status.available:
+            rows = task_events.list_events(
+                conn,
+                start_timestamp=start,
+                event_type=event_type,
+                query=query,
+                limit=limit,
+            )
+            return status, [{
+                "when_ts": row["occurred_at"],
+                "effective_date": row.get("effective_date"),
+                "kind": row["event_type"],
+                "what": row["task_snapshot"],
+                "source": (
+                    "recurring" if row["source_table"] == "recurring_tasks"
+                    else "task"
+                ),
+                "uuid": row["source_task_uuid"],
+                "catagory": row.get("catagory_snapshot"),
+                "actor_source": row.get("actor_source"),
+                "event_uuid": row["event_uuid"],
+            } for row in rows]
+    legacy = list_recent_activity(limit=limit, days=days)
+    kind_map = {
+        "completed": "completed",
+        "created": "created",
+        "discipline": "discipline",
+    }
+    if event_type:
+        legacy_kind = kind_map.get(event_type)
+        legacy = (
+            [row for row in legacy if legacy_kind == row.get("kind")]
+            if legacy_kind else []
+        )
+    if query.strip():
+        needle = query.strip().casefold()
+        legacy = [row for row in legacy if needle in str(row.get("what") or "").casefold()]
+    return status, legacy
+
+
 def export_backup() -> dict[str, Any]:
     """Return a JSON-serializable snapshot of every luigi_todo table the GUI
     reads. Read-only; used by ``/admin/backup`` to produce a downloadable

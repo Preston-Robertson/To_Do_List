@@ -2064,6 +2064,40 @@ def calendar_page(request: Request, month: str | None = None):
     )
 
 
+@app.get("/activity", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def activity_page(
+    request: Request,
+    days: int = 30,
+    kind: str = "",
+    q: str = "",
+):
+    _require_v2()
+    allowed_kinds = {
+        "", task_events.COMPLETED, task_events.COMPLETION_REVERSED,
+        "created", "discipline",
+    }
+    if kind not in allowed_kinds:
+        raise HTTPException(400, "invalid activity type")
+    try:
+        days = min(max(int(days), 1), 365)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, "days must be an integer") from exc
+    status, rows = db.list_activity_timeline(
+        days=days, event_type=kind, query=q, limit=300
+    )
+    return templates.TemplateResponse("activity.html", {
+        "request": request,
+        "active_nav": "activity",
+        "page_title": "Task activity",
+        "rows": rows,
+        "days": days,
+        "kind": kind,
+        "query": q,
+        "history_complete": status.available,
+        "history_reason": status.reason,
+    })
+
+
 # --------------------------------------------------------------------------- #
 # HOME (customizable widget dashboard)
 # --------------------------------------------------------------------------- #

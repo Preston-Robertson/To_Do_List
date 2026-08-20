@@ -52,6 +52,11 @@ Calendar nevertheless shows currently completed legacy rows, converting naive
 legacy timestamps as UTC into the configured `LUIGI_WEB_TIMEZONE`; this is
 explicitly labeled limited history until the ledger is available.
 
+Calendar presentation state (layers, Month/Agenda mode, and density) is stored
+in browser-local preferences only. The Activity view reads generic shared
+events when available and falls back to current timestamp columns with a
+visible limited-history warning before migration.
+
 The current Discipline schema links completions by task text. The coordinated
 UUID migration plan is in `discipline-v2-plan.md` and must be delivered with
 LuigiBot.

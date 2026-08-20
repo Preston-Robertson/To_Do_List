@@ -200,6 +200,40 @@ class TaskEventsContractTests(unittest.TestCase):
         self.assertTrue(rows[0]["source_exists"])
         engine.dispose()
 
+    def test_generic_event_query_filters_type_and_task(self) -> None:
+        engine = self._task_engine(task_events_ddl=_TASK_EVENTS_DDL)
+        with engine.begin() as conn:
+            task_events.append_event(
+                conn,
+                event_type=task_events.COMPLETED,
+                source_task_uuid="task-1",
+                source_table="tasks",
+                task_snapshot="Example task",
+                occurred_at="2026-08-18T20:00:00-04:00",
+                effective_date="2026-08-18",
+                actor_source="web",
+                operation_uuid="event-query-example",
+            )
+            task_events.append_event(
+                conn,
+                event_type=task_events.COMPLETED,
+                source_task_uuid="task-2",
+                source_table="tasks",
+                task_snapshot="Different task",
+                occurred_at="2026-08-18T19:00:00-04:00",
+                effective_date="2026-08-18",
+                actor_source="assistant",
+                operation_uuid="event-query-different",
+            )
+            rows = task_events.list_events(
+                conn,
+                start_timestamp="2026-08-01T00:00:00-04:00",
+                event_type=task_events.COMPLETED,
+                query="example",
+            )
+        self.assertEqual([row["task_snapshot"] for row in rows], ["Example task"])
+        engine.dispose()
+
     def test_reversal_resolves_original_effective_date(self) -> None:
         engine = self._task_engine(task_events_ddl=_TASK_EVENTS_DDL)
         with engine.begin() as conn:

@@ -1,0 +1,21 @@
+{% set layer = t._calendar_layer or 'planned' %}
+{% if layer == 'completed' and not t.source_exists %}
+<span class="calendar-item calendar-item-snapshot is-completed"
+  data-calendar-layer="{{ layer }}"
+  title="Completed {{ t.completed_time }} · source task no longer exists">
+  <span aria-hidden="true">✓</span>
+  <span class="calendar-item-title">{{ t.task }}</span>
+</span>
+{% else %}
+<button type="button"
+  class="calendar-item status-{{ (t.status or 'not-started')|lower|replace(' ', '-') }}{% if t.completed %} is-completed{% endif %} layer-{{ layer }}"
+  data-calendar-layer="{{ layer }}"
+  hx-get="/{{ 'recurring' if t.source == 'recurring' else 'tasks' }}/{{ t.uuid }}/edit"
+  hx-target="#modal-body"
+  onclick="openModal()"
+  title="{{ t.task }} · {{ t.status }}{% if t.project %} · {{ t.project }}{% endif %}">
+  {% if layer == 'completed' %}<span aria-hidden="true">✓</span>{% endif %}
+  {% if t.source == 'recurring' %}<span aria-hidden="true">↻</span>{% endif %}
+  <span class="calendar-item-title">{{ t.task }}</span>
+</button>
+{% endif %}

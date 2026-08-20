@@ -544,6 +544,10 @@ def media_insights(
     backlog_ages: list[int] = []
     freshness_ages: list[int] = []
     highly_rated_unfinished: list[dict[str, Any]] = []
+    oldest_backlog: list[dict[str, Any]] = []
+    stalled_items: list[dict[str, Any]] = []
+    never_started_count = 0
+    playtime_recorded_count = 0
 
     for item in items:
         status = str(item.get("status") or "backlog")
@@ -560,13 +564,27 @@ def media_insights(
             if rating >= 8 and status not in complete_statuses:
                 highly_rated_unfinished.append(item)
         if section == "games":
-            total_hours += _metric_number(item.get("hours_played"))
+            hours = _metric_number(item.get("hours_played"))
+            total_hours += hours
+            if hours > 0:
+                playtime_recorded_count += 1
             freshness = _metric_date(item.get("last_played"))
             if freshness:
                 freshness_ages.append(max(0, (today - freshness).days))
         added = _metric_date(item.get("date_added"))
-        if status == "backlog" and added:
-            backlog_ages.append(max(0, (today - added).days))
+        started = _metric_date(item.get("date_started"))
+        if status == "backlog":
+            if not started:
+                never_started_count += 1
+            if added:
+                age_days = max(0, (today - added).days)
+                backlog_ages.append(age_days)
+                oldest_backlog.append({**item, "age_days": age_days})
+        if status in {"paused", "on_hold"}:
+            activity = _metric_date(item.get("last_played")) or started
+            if activity:
+                inactive_days = max(0, (today - activity).days)
+                stalled_items.append({**item, "inactive_days": inactive_days})
 
     completed_count = sum(status_counts.get(status, 0) for status in complete_statuses)
     total = len(items)
@@ -575,6 +593,12 @@ def media_insights(
             -int(item.get("rating") or 0),
             str(item.get("title") or "").casefold(),
         )
+    )
+    oldest_backlog.sort(
+        key=lambda item: (-int(item["age_days"]), str(item.get("title") or "").casefold())
+    )
+    stalled_items.sort(
+        key=lambda item: (-int(item["inactive_days"]), str(item.get("title") or "").casefold())
     )
     return {
         "section": section,
@@ -594,6 +618,12 @@ def media_insights(
             round(sum(freshness_ages) / len(freshness_ages))
             if freshness_ages else None
         ),
+        "never_started_count": never_started_count,
+        "playtime_recorded_count": playtime_recorded_count,
+        "playtime_coverage_percent": (
+            round((playtime_recorded_count / total) * 100)
+            if section == "games" and total else 0
+        ),
         "status_labels": [STATUS_LABELS.get(status, status) for status in status_counts],
         "status_values": list(status_counts.values()),
         "rating_labels": [str(score) for score in ratings],
@@ -610,6 +640,8 @@ def media_insights(
             )
         ],
         "highly_rated_unfinished": highly_rated_unfinished[:10],
+        "oldest_backlog": oldest_backlog[:10],
+        "stalled_items": stalled_items[:10],
     }
 
 
@@ -1109,6 +1141,34 @@ def set_status(section: str, profile: str, title: str, status: str) -> bool:
 # --------------------------------------------------------------------------- #
 # Weighted random picker (priority-weighted, like the bot's /random)
 # --------------------------------------------------------------------------- #
+def _random_pick_weight(
+    section: str,
+    item: dict[str, Any],
+    *,
+    today: date | None = None,
+) -> float:
+    """Bounded priority + backlog/freshness weight for Surprise me."""
+    today = today or clock.local_today()
+    weight = float(max(1, int(item.get("priority") or 1)))
+    status = str(item.get("status") or "backlog")
+    if status == "backlog":
+        added = _metric_date(item.get("date_added"))
+        if added:
+            age_days = max(0, (today - added).days)
+            weight *= 1.0 + min(age_days / 365.0, 1.0)
+    elif status == ACTIVE_STATUS[section]:
+        activity = (
+            _metric_date(item.get("last_played"))
+            or _metric_date(item.get("date_started"))
+        )
+        if activity:
+            inactive_days = max(0, (today - activity).days)
+            weight *= 1.0 + min(inactive_days / 180.0, 0.5)
+    times_picked = max(0, int(item.get("times_picked") or 0))
+    weight /= 1.0 + (times_picked * 0.15)
+    return max(0.1, round(weight, 4))
+
+
 def random_pick(section: str, profile: str | None = None,
                 statuses: list[str] | None = None,
                 bump: bool = True) -> dict[str, Any] | None:
@@ -1121,7 +1181,8 @@ def random_pick(section: str, profile: str | None = None,
     pool = [i for i in list_items(section, profile) if i["status"] in statuses]
     if not pool:
         return None
-    weights = [max(1, int(i.get("priority") or 1)) for i in pool]
+    today = clock.local_today()
+    weights = [_random_pick_weight(section, item, today=today) for item in pool]
     choice = random.choices(pool, weights=weights, k=1)[0]
     if bump:
         _bump_times_picked(section, choice["profile"], choice["title"])

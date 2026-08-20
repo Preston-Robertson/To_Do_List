@@ -342,7 +342,8 @@ class GameAndWatchTests(unittest.TestCase):
             {
                 "title": "Rated backlog", "status": "backlog", "rating": 9,
                 "platform": "Steam", "hours_played": "12.5",
-                "date_added": "2026-08-01", "last_played": "2026-08-10",
+                "date_added": "2026-08-01", "date_started": "",
+                "last_played": "2026-08-10",
             },
             {
                 "title": "Finished", "status": "completed", "rating": 7,
@@ -352,7 +353,8 @@ class GameAndWatchTests(unittest.TestCase):
             {
                 "title": "Unrated", "status": "paused", "rating": None,
                 "platform": None, "hours_played": "2",
-                "date_added": "", "last_played": "",
+                "date_added": "", "date_started": "2026-07-01",
+                "last_played": "",
             },
         ]
         insights = gnw.media_insights(
@@ -363,10 +365,34 @@ class GameAndWatchTests(unittest.TestCase):
         self.assertEqual(insights["completion_percent"], 33)
         self.assertEqual(insights["total_hours"], 14.5)
         self.assertEqual(insights["average_backlog_age_days"], 17)
+        self.assertEqual(insights["never_started_count"], 1)
+        self.assertEqual(insights["playtime_coverage_percent"], 67)
         self.assertEqual(insights["breakdown_labels"], ["Unknown", "Steam"])
         self.assertEqual(
             [item["title"] for item in insights["highly_rated_unfinished"]],
             ["Rated backlog"],
+        )
+        self.assertEqual(insights["oldest_backlog"][0]["age_days"], 17)
+        self.assertEqual(insights["stalled_items"][0]["title"], "Unrated")
+
+    def test_random_pick_weight_uses_health_without_changing_status_pool(self) -> None:
+        today = date(2026, 8, 20)
+        old = {
+            "priority": 3, "status": "backlog", "date_added": "2025-01-01",
+            "times_picked": 0,
+        }
+        fresh = {
+            "priority": 3, "status": "backlog", "date_added": "2026-08-19",
+            "times_picked": 0,
+        }
+        repeated = {**old, "times_picked": 8}
+        self.assertGreater(
+            gnw._random_pick_weight("games", old, today=today),
+            gnw._random_pick_weight("games", fresh, today=today),
+        )
+        self.assertGreater(
+            gnw._random_pick_weight("games", old, today=today),
+            gnw._random_pick_weight("games", repeated, today=today),
         )
 
     def test_media_insights_page_uses_local_charts_and_tables(self) -> None:
@@ -782,6 +808,11 @@ class GanttTests(unittest.TestCase):
         self.assertEqual(response.context["month_label"], "August 2026")
         self.assertGreaterEqual(len(response.context["weeks"]), 5)
         self.assertTrue(all(len(week) == 7 for week in response.context["weeks"]))
+        body = response.body.decode()
+        self.assertIn('data-calendar-view="month"', body)
+        self.assertIn('data-calendar-view="agenda"', body)
+        self.assertIn('data-calendar-density', body)
+        self.assertIn('data-calendar-view-panel="agenda"', body)
 
     def test_calendar_adds_projected_recurring_occurrences(self) -> None:
         request = Request({"type": "http", "method": "GET", "path": "/calendar",
@@ -926,6 +957,44 @@ class ConsolidatedTasksTests(unittest.TestCase):
                 ],
             }, headers={"X-CSRF-Token": "csrf-value"})
         self.assertEqual(response.status_code, 422)
+
+
+class ActivityTimelineTests(unittest.TestCase):
+    def test_activity_page_renders_event_filters_and_actor(self) -> None:
+        request = Request({
+            "type": "http", "method": "GET", "path": "/activity",
+            "query_string": b"", "headers": [],
+        })
+        rows = [{
+            "when_ts": "2026-08-18T20:00:00-04:00",
+            "effective_date": "2026-08-18",
+            "kind": "completed",
+            "what": "Example task",
+            "source": "task",
+            "uuid": "task-1",
+            "catagory": "Work",
+            "actor_source": "assistant",
+        }]
+        with (
+            patch.object(app, "_require_v2"),
+            patch.object(
+                db,
+                "list_activity_timeline",
+                return_value=(app.task_events.Capability(True, "available"), rows),
+            ) as activity,
+        ):
+            response = app.activity_page(
+                request, days=90, kind="completed", q="Example"
+            )
+        activity.assert_called_once_with(
+            days=90, event_type="completed", query="Example", limit=300
+        )
+        body = response.body.decode()
+        self.assertIn("Task activity", body)
+        self.assertIn("Example task", body)
+        self.assertIn("via assistant", body)
+        self.assertIn('name="kind"', body)
+        self.assertNotIn("Limited history", body)
 
 
 class CommandPaletteTests(unittest.TestCase):

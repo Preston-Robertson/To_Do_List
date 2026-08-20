@@ -346,3 +346,38 @@ def list_active_completions(
         "end_date": end_date,
     }).mappings().all()
     return [dict(row) for row in rows]
+
+
+def list_events(
+    conn: Any,
+    *,
+    start_timestamp: str,
+    event_type: str = "",
+    query: str = "",
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """Return generic task events with bounded server-side filters."""
+    if not capability(conn).available:
+        return []
+    where = ["occurred_at >= :start_timestamp"]
+    params: dict[str, Any] = {
+        "start_timestamp": start_timestamp,
+        "limit": min(max(int(limit), 1), 500),
+    }
+    if event_type:
+        where.append("event_type = :event_type")
+        params["event_type"] = event_type
+    if query.strip():
+        where.append("LOWER(task_snapshot) LIKE :query")
+        params["query"] = f"%{query.strip().lower()}%"
+    statement = text(f"""
+        SELECT event_uuid, operation_uuid, event_type, source_task_uuid,
+               source_table, task_snapshot, catagory_snapshot, occurred_at,
+               effective_date, due_date_snapshot, actor_source,
+               related_event_uuid, details_json
+        FROM task_events
+        WHERE {' AND '.join(where)}
+        ORDER BY occurred_at DESC, event_uuid DESC
+        LIMIT :limit
+    """)
+    return [dict(row) for row in conn.execute(statement, params).mappings().all()]
