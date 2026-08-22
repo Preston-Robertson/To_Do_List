@@ -78,6 +78,21 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h4l2-5 4 10 2-5h4"/><circle cx="12" cy="12" r="9"/></svg>
             <span>Activity</span>
           </a>
+          <a href="/review" class="nav-item {% if active_nav == 'review' %}active{% endif %}"
+             {% if active_nav == 'review' %}aria-current="page"{% endif %} title="Daily and weekly review">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v16H5Z"/><path d="m8 9 2 2 4-4M8 15h8"/></svg>
+            <span>Review</span>
+          </a>
+          <a href="/task-rules" class="nav-item {% if active_nav == 'task-rules' %}active{% endif %}"
+             {% if active_nav == 'task-rules' %}aria-current="page"{% endif %} title="Dependencies and reminder rules">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10M7 17h10M5 5v4M19 15v4M12 7v10"/></svg>
+            <span>Task rules</span>
+          </a>
+          <a href="/reminders" class="nav-item {% if active_nav == 'reminders' %}active{% endif %}"
+             {% if active_nav == 'reminders' %}aria-current="page"{% endif %} title="Reminder inbox">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9a6 6 0 0 1 12 0v5l2 3H4l2-3Z"/><path d="M10 20h4"/></svg>
+            <span>Reminders</span><span class="nav-count" hx-get="/reminders/count" hx-trigger="load, every 300s" hx-swap="innerHTML">0</span>
+          </a>
         </div>
 
         <div class="nav-group">

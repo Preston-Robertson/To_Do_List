@@ -88,6 +88,8 @@
         <a class="btn btn-primary" href="/admin/backup" download>
           Download backup (JSON)
         </a>
+        <button class="btn" type="button" hx-get="/admin/restore"
+          hx-target="#modal-body" onclick="openModal()">Restore backup</button>
         <span class="muted-hint">
           Filename: <code>luigi-backup-YYYYMMDD-HHMMSS.json</code>
         </span>

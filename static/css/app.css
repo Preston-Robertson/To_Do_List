@@ -463,6 +463,7 @@ kbd {
 }
 .nav-item.active svg { color: #79a5ff; }
 .nav-item svg { flex: 0 0 19px; }
+.nav-count { margin-left: auto; min-width: 18px; padding: 1px 5px; border: 1px solid var(--border); border-radius: 9px; color: var(--text); font-size: 10px; text-align: center; }
 .sidebar-footer { padding: 10px; border-top: 1px solid var(--border); }
 .sidebar-footer form { margin: 0; }
 .nav-signout { border: 0; background: transparent; text-align: left; }
@@ -2343,7 +2344,36 @@ kbd {
 .activity-timeline-row.kind-created .activity-timeline-dot { background: var(--accent); }
 .activity-timeline-row header { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .activity-timeline-row p { display: flex; flex-wrap: wrap; gap: 8px; margin: 3px 0 0; color: var(--text-dim); font-size: 11px; }
+.review-workspace { display: grid; grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); gap: 14px; align-items: start; }
+.review-checklist { position: sticky; top: 10px; display: grid; gap: 8px; padding: 14px; border: 1px solid var(--border); background: var(--bg-elev); }
+.review-checklist h2,.review-panels h2 { margin: 0; font-size: 14px; }
+.review-checklist > label:not(.review-notes) { display: flex; align-items: center; gap: 8px; padding: 7px; border: 1px solid var(--border); background: var(--bg-elev-2); }
+.review-checklist input[type="checkbox"] { accent-color: var(--accent); }
+.review-notes { color: var(--text-dim); font-size: 11px; }
+.review-notes textarea { display: block; width: 100%; margin-top: 4px; resize: vertical; background: var(--bg-elev-2); border: 1px solid var(--border); color: var(--text); }
+.review-panels { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.review-panels > article { min-width: 0; padding: 12px; border: 1px solid var(--border); background: var(--bg-elev); }
+.review-panels article > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
+.review-row { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-top: 1px solid var(--border); color: var(--text); font-size: 12px; }
+.review-row span { flex: 0 0 auto; color: var(--text-dim); }
+.review-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--border); }
+.review-stats > div { padding: 10px; background: var(--bg-elev-2); }
+.review-stats strong,.review-stats span { display: block; }
+.review-stats strong { font-size: 20px; }.review-stats span { color: var(--text-dim); font-size: 10px; }
+.chip-blocked { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); }
+.rules-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.rules-panel { padding: 14px; border: 1px solid var(--border); background: var(--bg-elev); }
+.rules-panel h2 { margin: 0 0 8px; font-size: 15px; }
+.rules-list { display: grid; gap: 5px; margin-top: 12px; }
+.rules-list > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 8px; border-top: 1px solid var(--border); font-size: 12px; }
+.reminder-list { display: grid; gap: 7px; max-width: 1000px; }
+.reminder-item { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 10px 12px; border: 1px solid var(--border); background: var(--bg-elev); }
+.reminder-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--text-muted); }.level-danger .reminder-dot{background:var(--danger)}.level-warning .reminder-dot{background:var(--warn)}.level-info .reminder-dot{background:var(--accent)}
+.reminder-item p { margin: 3px 0 0; color: var(--text-dim); font-size: 11px; }.reminder-actions { display: flex; gap: 6px; }.reminder-actions form{margin:0}
+.review-weekly { grid-column: 1 / -1; }
 @media (max-width: 620px) { .activity-timeline-row { grid-template-columns: 24px minmax(0, 1fr); } .activity-timeline-row > .btn { grid-column: 2; justify-self: start; } }
+@media (max-width: 900px) { .rules-grid { grid-template-columns: 1fr; }.reminder-item { grid-template-columns: 12px minmax(0, 1fr); }.reminder-actions { grid-column: 2; } }
+@media (max-width: 900px) { .review-workspace { grid-template-columns: 1fr; }.review-checklist { position: static; }.review-panels { grid-template-columns: 1fr; } }
 
 /* --------------------------------------------------------------------------
    Projects page — category picker + Gantt chart

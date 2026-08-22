@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="board-header"><div><h1>Reminders</h1><span class="muted-hint">In-app only · automatically refreshed while Luigi Web is in use</span></div><a class="btn" href="/task-rules">Manage rules</a></section>
+<section class="reminder-list">
+{% for item in rows %}
+  <article class="reminder-item level-{{ item.level }}"><span class="reminder-dot" aria-hidden="true"></span><div><strong>{{ item.message }}</strong><p>{{ item.fired_at }}</p></div><div class="reminder-actions"><form hx-post="/reminders/{{ item.uuid }}/snooze" hx-swap="none"><input type="hidden" name="days" value="1"><button class="btn btn-tiny" type="submit">Snooze 1d</button></form><button class="btn btn-tiny btn-primary" hx-post="/reminders/{{ item.uuid }}/dismiss" hx-swap="none">Dismiss</button></div></article>
+{% else %}<p class="empty">No active reminders.</p>{% endfor %}
+</section>
+{% endblock %}

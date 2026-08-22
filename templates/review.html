@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% set step_labels = {
+  'triage_overdue':'Triage overdue work', 'check_upcoming':'Check the next 24 hours',
+  'protect_streaks':'Protect at-risk streaks', 'choose_focus':'Choose today’s focus',
+  'review_completions':'Review completed work', 'review_carryover':'Resolve carryover',
+  'plan_next_week':'Plan the next seven days', 'review_feedback':'Review captured feedback'
+} %}
+{% block content %}
+<section class="board-header review-header">
+  <div><h1>{{ scope|title }} review</h1><span class="muted-hint">{{ review.session.review_date }}</span></div>
+  <div class="view-switcher" role="group" aria-label="Review scope">
+    <a class="view-switcher-btn{% if scope == 'daily' %} active{% endif %}" href="/review?scope=daily">Daily</a>
+    <a class="view-switcher-btn{% if scope == 'weekly' %} active{% endif %}" href="/review?scope=weekly">Weekly</a>
+  </div>
+</section>
+
+<form class="review-workspace" hx-post="/review/{{ scope }}" hx-swap="none">
+  <section class="review-checklist">
+    <h2>Checklist</h2>
+    {% for step in review.steps %}
+      <label><input type="checkbox" name="completed_steps" value="{{ step }}" {% if step in review.session.completed_steps %}checked{% endif %}><span>{{ step_labels[step] }}</span></label>
+    {% endfor %}
+    <label class="review-notes">Notes<textarea name="notes" rows="7" maxlength="10000" placeholder="Decisions, focus, carryover, or reflection…">{{ review.session.notes }}</textarea></label>
+    <button class="btn btn-primary" type="submit">Save review</button>
+  </section>
+
+  <section class="review-panels">
+    <article><header><h2>Overdue</h2><span class="chip chip-muted">{{ review.overdue|length }}</span></header>
+      {% for item in review.overdue %}<a class="review-row" href="/{{ 'recurring' if item.source == 'recurring' else 'tasks' }}/{{ item.uuid }}/edit"><strong>{{ item.task }}</strong><span>{{ item.due_date }}</span></a>{% else %}<p class="empty">Nothing overdue.</p>{% endfor %}
+    </article>
+    <article><header><h2>Upcoming</h2><span class="chip chip-muted">{{ review.upcoming|length }}</span></header>
+      {% for item in review.upcoming %}<a class="review-row" href="/{{ 'recurring' if item.source == 'recurring' else 'tasks' }}/{{ item.uuid }}/edit"><strong>{{ item.task }}</strong><span>{{ item.due_date or 'No date' }}</span></a>{% else %}<p class="empty">Nothing due in this window.</p>{% endfor %}
+    </article>
+    <article><header><h2>At-risk streaks</h2><span class="chip chip-muted">{{ review.at_risk|length }}</span></header>
+      {% for item in review.at_risk %}<a class="review-row" href="/discipline"><strong>{{ item.task }}</strong><span>{{ item.days_since }}d since completion</span></a>{% else %}<p class="empty">No streaks at risk.</p>{% endfor %}
+    </article>
+    <article><header><h2>Recent completions</h2><span class="chip chip-muted">{{ review.recent_completions|length }}</span></header>
+      {% for item in review.recent_completions %}<div class="review-row"><strong>{{ item.task }}</strong><span>{{ item.completed_time[:10] if item.completed_time else '' }}</span></div>{% else %}<p class="empty">No recent completions.</p>{% endfor %}
+    </article>
+    {% if scope == 'daily' %}
+    <article><header><h2>Pending disciplines</h2><span class="chip chip-muted">{{ review.pending_disciplines|length }}</span></header>
+      {% for item in review.pending_disciplines %}<a class="review-row" href="/discipline"><strong>{{ item.task }}</strong><span>{{ item.catagory or '' }}</span></a>{% else %}<p class="empty">All clear for today.</p>{% endfor %}
+    </article>
+    {% else %}
+    <article class="review-weekly"><header><h2>Last complete week</h2><span>{{ review.weekly.start_iso }} → {{ review.weekly.end_iso }}</span></header>
+      <div class="review-stats"><div><strong>{{ review.weekly.completed_total }}</strong><span>completed</span></div><div><strong>{{ review.weekly.discipline_total }}</strong><span>discipline hits</span></div><div><strong>{{ review.weekly.carried_over }}</strong><span>carried over</span></div><div><strong>{{ review.weekly.upcoming_next_week }}</strong><span>upcoming</span></div></div>
+    </article>
+    {% endif %}
+  </section>
+</form>
+{% endblock %}

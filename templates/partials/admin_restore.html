@@ -1,0 +1,28 @@
+<section class="admin-restore">
+  <h2>Restore task backup</h2>
+  <p class="muted-hint">Merge-only restore. Existing UUIDs are updated, missing UUIDs are inserted, and rows absent from the backup are never deleted. Review counts before committing.</p>
+  {% if error %}<div class="admin-banner-err">{{ error }}</div>{% endif %}
+  {% if result %}
+    <div class="admin-banner-ok">Restore committed and verified.</div>
+    <table class="data-table"><thead><tr><th>Table</th><th>Inserted</th><th>Updated</th></tr></thead><tbody>
+      {% for table, counts in result.items() %}<tr><td><code>{{ table }}</code></td><td>{{ counts.insert }}</td><td>{{ counts.update }}</td></tr>{% endfor %}
+    </tbody></table>
+    <div class="form-actions"><button type="button" class="btn" data-close-modal>Close</button></div>
+  {% elif plan %}
+    <div class="admin-banner-warn"><strong>Preview only:</strong> no writes have occurred. This one-time preview expires in 15 minutes.</div>
+    <table class="data-table"><thead><tr><th>Table</th><th>Insert</th><th>Update</th></tr></thead><tbody>
+      {% for table, counts in plan.tables.items() %}<tr><td><code>{{ table }}</code></td><td>{{ counts.insert }}</td><td>{{ counts.update }}</td></tr>{% endfor %}
+    </tbody></table>
+    <p class="muted-hint">Metadata rows to merge: {{ plan.metadata_rows }} · Total shared rows: {{ plan.total_rows }}</p>
+    <form hx-post="/admin/restore/commit" hx-target="#modal-body" hx-swap="innerHTML">
+      <input type="hidden" name="token" value="{{ token }}">
+      <div class="form-actions"><button type="button" class="btn btn-ghost" data-close-modal>Cancel</button><button class="btn btn-danger" type="submit" hx-confirm="Commit this merge restore? Existing matching rows will be updated.">Commit restore</button></div>
+    </form>
+  {% else %}
+    <form class="entity-form" hx-post="/admin/restore/preview"
+      hx-target="#modal-body" hx-swap="innerHTML" hx-encoding="multipart/form-data">
+      <label>Backup JSON<input type="file" name="backup" accept="application/json,.json" required></label>
+      <div class="form-actions"><button type="button" class="btn btn-ghost" data-close-modal>Cancel</button><button class="btn btn-primary" type="submit">Validate and preview</button></div>
+    </form>
+  {% endif %}
+</section>

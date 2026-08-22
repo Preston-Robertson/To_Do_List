@@ -49,6 +49,7 @@
         title="Recurrence schedule"
       >{{ _schedule_label }}</span>
     {% endif %}
+    {% if t._blockers %}<span class="chip chip-blocked" title="This task cannot start or complete until its blockers are done">Blocked by {{ t._blockers|join(', ') }}</span>{% endif %}
     {% if _reactivates %}
       {# Only rendered for completed recurring rows with a valid schedule;
          see db.reactivation_date. #}

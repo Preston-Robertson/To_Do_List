@@ -21,7 +21,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -30,6 +30,9 @@ from . import db
 from . import recurrence
 from . import task_events
 from . import clock
+from . import review
+from . import task_backup
+from . import operations
 from .auth import (
     COOKIE_NAME,
     CSRF_COOKIE_NAME,
@@ -229,6 +232,14 @@ def _startup_schema_check() -> None:
     try:
         from . import feedback
         feedback.init_db()
+    except Exception:
+        pass
+    try:
+        review.init_db()
+    except Exception:
+        pass
+    try:
+        operations.init_db()
     except Exception:
         pass
 
@@ -449,6 +460,17 @@ def tasks_page(request: Request):
         row["_endpoint_root"] = "/recurring"
         row["_source"] = "recurring"
     rows.extend(recurring_rows)
+    dependency_map: dict[tuple[str, str], list[str]] = {}
+    try:
+        for edge in operations.list_dependencies():
+            key = (edge["dependent_source"], edge["dependent_uuid"])
+            dependency_map.setdefault(key, []).append(edge["blocker_label"])
+    except Exception:
+        dependency_map = {}
+    for row in rows:
+        row["_blockers"] = dependency_map.get(
+            (row["_source"], str(row.get("uuid") or "")), []
+        )
     rows.sort(
         key=lambda row: (
             int(row.get("completed") or 0),
@@ -470,6 +492,122 @@ def tasks_page(request: Request):
             "consolidated": True,
         },
     )
+
+
+def _operation_task_rows() -> list[dict[str, Any]]:
+    rows = []
+    for source, found in (("task", db.list_tasks()), ("recurring", db.list_recurring())):
+        for row in found:
+            shaped = dict(row)
+            shaped["source"] = source
+            rows.append(shaped)
+    return rows
+
+
+def _operation_task(task_ref: str) -> dict[str, Any]:
+    try:
+        source, row_uuid = str(task_ref).split(":", 1)
+    except ValueError as exc:
+        raise ValueError("invalid task reference") from exc
+    if source not in operations.SOURCES or not row_uuid:
+        raise ValueError("invalid task reference")
+    row = db.get_recurring(row_uuid) if source == "recurring" else db.get_task(row_uuid)
+    if not row:
+        raise ValueError("task not found")
+    return {"uuid": row_uuid, "source": source, "task": row.get("task") or "Task"}
+
+
+def _evaluate_notifications() -> int:
+    return operations.evaluate_notifications(_operation_task_rows())
+
+
+@app.get("/task-rules", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def task_rules_page(request: Request):
+    _require_v2()
+    return templates.TemplateResponse("task_rules.html", {
+        "request": request, "active_nav": "task-rules", "page_title": "Task rules",
+        "tasks": _operation_task_rows(),
+        "dependencies": operations.list_dependencies(),
+        "reminder_rules": operations.list_reminder_rules(),
+    })
+
+
+@app.post("/task-rules/dependencies", dependencies=[Depends(require_auth)])
+async def dependency_create(request: Request):
+    form = dict(await request.form())
+    try:
+        dependent = _operation_task(str(form.get("dependent") or ""))
+        blocker = _operation_task(str(form.get("blocker") or ""))
+        operations.add_dependency(
+            dependent_uuid=dependent["uuid"], dependent_source=dependent["source"],
+            dependent_label=str(dependent["task"]), blocker_uuid=blocker["uuid"],
+            blocker_source=blocker["source"], blocker_label=str(blocker["task"]),
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return Response(status_code=204, headers={"HX-Refresh": "true"})
+
+
+@app.post("/task-rules/dependencies/{row_uuid}/delete", dependencies=[Depends(require_auth)])
+def dependency_delete(row_uuid: str):
+    if not operations.delete_dependency(row_uuid):
+        raise HTTPException(404, "dependency not found")
+    return Response(status_code=204, headers={"HX-Refresh": "true"})
+
+
+@app.post("/task-rules/reminders", dependencies=[Depends(require_auth)])
+async def reminder_rule_create(request: Request):
+    form = dict(await request.form())
+    try:
+        task = _operation_task(str(form.get("task_ref") or ""))
+        operations.create_reminder_rule({
+            **form, "task_uuid": task["uuid"], "task_source": task["source"],
+            "task_label": task["task"],
+        })
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return Response(status_code=204, headers={"HX-Refresh": "true"})
+
+
+@app.post("/task-rules/reminders/{row_uuid}/delete", dependencies=[Depends(require_auth)])
+def reminder_rule_delete(row_uuid: str):
+    if not operations.delete_reminder_rule(row_uuid):
+        raise HTTPException(404, "reminder rule not found")
+    return Response(status_code=204, headers={"HX-Refresh": "true"})
+
+
+@app.get("/reminders/count", dependencies=[Depends(require_auth)])
+def reminders_count():
+    try:
+        count = _evaluate_notifications()
+    except Exception:
+        logger.exception("Reminder evaluation failed")
+        count = 0
+    return Response(str(count), media_type="text/plain", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/reminders", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def reminders_page(request: Request):
+    _require_v2()
+    _evaluate_notifications()
+    return templates.TemplateResponse("reminders.html", {
+        "request": request, "active_nav": "reminders", "page_title": "Reminders",
+        "rows": operations.list_notifications(),
+    }, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/reminders/{row_uuid}/dismiss", dependencies=[Depends(require_auth)])
+def reminder_dismiss(row_uuid: str):
+    if not operations.dismiss_notification(row_uuid):
+        raise HTTPException(404, "reminder not found")
+    return Response(status_code=204, headers={"HX-Refresh": "true"})
+
+
+@app.post("/reminders/{row_uuid}/snooze", dependencies=[Depends(require_auth)])
+def reminder_snooze(row_uuid: str, days: int = Form(default=1)):
+    if not operations.snooze_notification(row_uuid, days):
+        raise HTTPException(404, "reminder not found")
+    return Response(status_code=204, headers={"HX-Refresh": "true"})
 
 
 @app.post("/tasks", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
@@ -2098,6 +2236,42 @@ def activity_page(
     })
 
 
+@app.get("/review", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def review_page(request: Request, scope: str = "daily"):
+    _require_v2()
+    try:
+        state = review.build(scope)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return templates.TemplateResponse("review.html", {
+        "request": request,
+        "active_nav": "review",
+        "page_title": "Review",
+        "review": state,
+        "scope": state["scope"],
+    })
+
+
+@app.post("/review/{scope}", dependencies=[Depends(require_auth)])
+async def review_save(scope: str, request: Request):
+    _require_v2()
+    form = await request.form()
+    try:
+        review.save_session(
+            scope,
+            completed_steps=form.getlist("completed_steps"),
+            notes=str(form.get("notes") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return Response(status_code=204, headers={
+        "HX-Trigger": _hx_trigger(
+            flashSuccess={"message": f"{scope.title()} review saved"}
+        ),
+        "HX-Refresh": "true",
+    })
+
+
 # --------------------------------------------------------------------------- #
 # HOME (customizable widget dashboard)
 # --------------------------------------------------------------------------- #
@@ -2402,6 +2576,9 @@ def admin_integrations(request: Request):
             raise RuntimeError("separate Finance token not configured")
         return finance.storage_health()
 
+    def check_operations():
+        return operations.storage_health()
+
     checks = [
         _integration_result("PostgreSQL", check_db),
         _integration_result("Discipline storage", check_discipline),
@@ -2415,6 +2592,7 @@ def admin_integrations(request: Request):
         _integration_result("Git checkout", check_git),
         _integration_result("Environment file", check_env),
         _integration_result("Finance storage", check_finance),
+        _integration_result("Task rules and reminders", check_operations),
     ]
     return templates.TemplateResponse(
         "partials/admin_integrations.html",
@@ -2672,6 +2850,63 @@ def admin_backup():
             "Content-Disposition": f'attachment; filename="{filename}"',
             "Cache-Control": "no-store",
         },
+    )
+
+
+@app.get(
+    "/admin/restore",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_auth)],
+)
+def admin_restore_form(request: Request):
+    return templates.TemplateResponse(
+        "partials/admin_restore.html",
+        {"request": request, "plan": None, "token": "", "error": "", "result": None},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.post(
+    "/admin/restore/preview",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def admin_restore_preview(
+    request: Request,
+    backup: UploadFile = File(...),
+):
+    raw = await backup.read(task_backup.MAX_UPLOAD_BYTES + 1)
+    try:
+        token, plan = task_backup.prepare(raw)
+        error = ""
+    except (task_backup.RestoreError, RuntimeError) as exc:
+        token, plan, error = "", None, str(exc)
+    return templates.TemplateResponse(
+        "partials/admin_restore.html",
+        {"request": request, "plan": plan, "token": token,
+         "error": error, "result": None},
+        headers={"Cache-Control": "no-store"},
+        status_code=200,
+    )
+
+
+@app.post(
+    "/admin/restore/commit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_auth)],
+)
+def admin_restore_commit(request: Request, token: str = Form(...)):
+    try:
+        result = task_backup.commit(token)
+        error = ""
+    except (task_backup.RestoreError, RuntimeError) as exc:
+        result, error = None, str(exc)
+    return templates.TemplateResponse(
+        "partials/admin_restore.html",
+        {"request": request, "plan": None, "token": "",
+         "error": error, "result": result},
+        headers={"Cache-Control": "no-store"},
+        status_code=200,
     )
 
 

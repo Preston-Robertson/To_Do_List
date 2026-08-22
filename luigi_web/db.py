@@ -753,6 +753,20 @@ class TaskTransition:
     history_available: bool = False
 
 
+def _assert_task_unblocked(table: str, row_uuid: str) -> None:
+    from . import operations
+
+    source = "recurring" if table == "recurring_tasks" else "task"
+
+    def resolve(blocker_source: str, blocker_uuid: str) -> dict[str, Any] | None:
+        blocker_table = (
+            "recurring_tasks" if blocker_source == "recurring" else "tasks"
+        )
+        return _get_task_like(blocker_table, blocker_uuid)
+
+    operations.assert_unblocked(row_uuid, source, resolve)
+
+
 def _select_task_for_update(conn, table: str, row_uuid: str):
     lock = "" if conn.dialect.name == "sqlite" else " FOR UPDATE"
     return conn.execute(text(f"""
@@ -846,6 +860,8 @@ def _set_task_like_status(
         current = _select_task_for_update(conn, table, row_uuid)
         if current is None:
             return TaskTransition(completed=0)
+        if status in {"In Progress", "Completed"} and not int(current.completed or 0):
+            _assert_task_unblocked(table, row_uuid)
         conn.execute(q, {"s": status, "c": completed, "ct": completed_time, "u": row_uuid})
         event_uuid, event_type, history_available = _record_task_transition_event(
             conn,
@@ -885,6 +901,8 @@ def _toggle_task_like_completed(
         if cur is None:
             raise LookupError(f"{table} row not found")
         new_val = 0 if int(cur.completed or 0) == 1 else 1
+        if new_val:
+            _assert_task_unblocked(table, row_uuid)
         occurred_at = now_iso()
         conn.execute(
             text(f"""
@@ -2393,6 +2411,7 @@ def export_backup() -> dict[str, Any]:
         "follow_up_tasks",
     )
     out: dict[str, Any] = {
+        "format": "luigi-task-backup-v1",
         "generated_at": now_iso(),
         "schema_version": check_schema_version(),
         "tables": {},

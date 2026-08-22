@@ -11,6 +11,8 @@ TEMPLATES_DIR = PROJECT_ROOT / "templates"
 DATA_DIR = PROJECT_ROOT / "data"
 COPILOT_DATA_DIR = DATA_DIR / "copilot"
 FEEDBACK_DB_PATH = DATA_DIR / "feedback.db"
+REVIEW_DB_PATH = DATA_DIR / "review.db"
+OPERATIONS_DB_PATH = DATA_DIR / "operations.db"
 TASK_METADATA_PATH = Path(
 	os.environ.get(
 		"LUIGI_WEB_TASK_METADATA_FILE",

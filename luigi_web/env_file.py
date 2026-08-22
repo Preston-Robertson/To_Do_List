@@ -77,6 +77,8 @@ KNOWN_KEYS: tuple[EnvKey, ...] = (
     EnvKey("LUIGI_WEB_FINANCE_DB", "Finance database", "App-owned SQLite path. Keep it outside the repository.", "Finance"),
     EnvKey("LUIGI_WEB_FINANCE_BASE_CURRENCY", "Base currency", "ISO currency code used for reports (default USD).", "Finance"),
     EnvKey("LUIGI_WEB_FEEDBACK_DB", "Feedback database", "App-owned local Feedback SQLite path.", "Feedback"),
+    EnvKey("LUIGI_WEB_REVIEW_DB", "Review database", "App-owned local Daily/Weekly Review SQLite path.", "Review"),
+    EnvKey("LUIGI_WEB_OPERATIONS_DB", "Task operations database", "App-owned task dependencies and reminder SQLite path.", "Tasks"),
     # LLM chat --------------------------------------------------------------
     EnvKey("LUIGI_WEB_LLM_PROVIDER",           "LLM provider",  "'copilot' (GitHub subscription), 'openai', or 'disabled'.", "LLM"),
     EnvKey("LUIGI_WEB_LLM_BASE_URL",           "LLM base URL",  "Used only for an OpenAI-compatible /chat/completions endpoint.", "LLM", input_type="url"),

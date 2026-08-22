@@ -40,6 +40,7 @@
             {% if t.recurring %}<span class="chip chip-recurring">↻ Recurring</span>{% endif %}
             {% if t.recurring and schedule_label %}<span>{{ schedule_label }}</span>{% endif %}
             {% if t.task_group %}<span>{{ t.task_group }}</span>{% endif %}
+            {% if t._blockers %}<span class="chip chip-blocked">Blocked by {{ t._blockers|join(', ') }}</span>{% endif %}
             {% if t.sub_group %}<span>· {{ t.sub_group }}</span>{% endif %}
           </div>
         </div>

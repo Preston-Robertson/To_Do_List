@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="board-header"><div><h1>Task rules</h1><span class="muted-hint">Dependencies prevent premature work; reminders stay local</span></div></section>
+<section class="rules-grid">
+  <article class="rules-panel"><h2>Add dependency</h2><p class="muted-hint">The dependent task cannot enter In Progress or Completed until the blocker is complete.</p>
+    <form class="entity-form" hx-post="/task-rules/dependencies" hx-swap="none">
+      <label>Dependent task<select name="dependent" required><option value="">Choose task</option>{% for item in tasks %}<option value="{{ item.source }}:{{ item.uuid }}">{{ item.task }} · {{ item.source }}</option>{% endfor %}</select></label>
+      <label>Blocked by<select name="blocker" required><option value="">Choose blocker</option>{% for item in tasks %}<option value="{{ item.source }}:{{ item.uuid }}">{{ item.task }} · {{ item.source }}</option>{% endfor %}</select></label>
+      <button class="btn btn-primary" type="submit">Add dependency</button>
+    </form>
+    <div class="rules-list">{% for edge in dependencies %}<div><span><strong>{{ edge.dependent_label }}</strong> blocked by {{ edge.blocker_label }}</span><button class="btn btn-tiny btn-danger" hx-post="/task-rules/dependencies/{{ edge.uuid }}/delete" hx-swap="none" hx-confirm="Remove this dependency?">Remove</button></div>{% else %}<p class="empty">No dependencies.</p>{% endfor %}</div>
+  </article>
+  <article class="rules-panel"><h2>Add reminder rule</h2><p class="muted-hint">Overdue, due-today/tomorrow, and blocked reminders are automatic. Add a custom date or earlier due-soon window here.</p>
+    <form class="entity-form" hx-post="/task-rules/reminders" hx-swap="none">
+      <label>Task<select name="task_ref" required><option value="">Choose task</option>{% for item in tasks %}<option value="{{ item.source }}:{{ item.uuid }}">{{ item.task }} · {{ item.source }}</option>{% endfor %}</select></label>
+      <div class="form-row"><label>Rule<select name="kind"><option value="due_soon">Due soon</option><option value="custom">Custom date</option></select></label><label>Lead days<input type="number" name="lead_days" min="0" max="365" value="3"></label><label>Custom date<input type="date" name="remind_on"></label></div>
+      <label>Message<input type="text" name="message" maxlength="1000" placeholder="Optional custom reminder text"></label>
+      <button class="btn btn-primary" type="submit">Add reminder</button>
+    </form>
+    <div class="rules-list">{% for rule in reminder_rules %}<div><span><strong>{{ rule.task_label }}</strong> · {{ rule.kind|replace('_',' ') }}{% if rule.remind_on %} · {{ rule.remind_on }}{% else %} · {{ rule.lead_days }}d{% endif %}</span><button class="btn btn-tiny btn-danger" hx-post="/task-rules/reminders/{{ rule.uuid }}/delete" hx-swap="none" hx-confirm="Delete this reminder rule?">Remove</button></div>{% else %}<p class="empty">No custom reminder rules.</p>{% endfor %}</div>
+  </article>
+</section>
+{% endblock %}
