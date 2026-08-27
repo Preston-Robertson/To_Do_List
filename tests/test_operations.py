@@ -43,6 +43,8 @@ class OperationsTests(unittest.TestCase):
             "a", "task",
             lambda source, row_uuid: {"completed": 1, "status": "Completed"},
         )
+        operations.assert_unblocked("a", "task", lambda source, row_uuid: None)
+        self.assertEqual(operations.list_dependencies(), [])
 
     def test_reminders_generate_deduplicate_snooze_and_dismiss(self) -> None:
         rule_uuid = operations.create_reminder_rule({
@@ -77,6 +79,60 @@ class OperationsTests(unittest.TestCase):
             operations.evaluate_notifications(resolved, today=date(2026, 8, 21)), 0
         )
         self.assertEqual(operations.list_notifications(), [])
+
+    def test_task_rule_cleanup_can_be_restored_for_undo(self) -> None:
+        edge_uuid = operations.add_dependency(
+            dependent_uuid="a", dependent_source="task", dependent_label="A",
+            blocker_uuid="b", blocker_source="task", blocker_label="B",
+        )
+        rule_uuid = operations.create_reminder_rule({
+            "task_uuid": "b", "task_source": "task", "task_label": "B",
+            "kind": "custom", "remind_on": "2026-08-21",
+        })
+        snapshot = operations.delete_task_records("b", "task")
+        self.assertEqual(operations.list_dependencies(), [])
+        self.assertEqual(operations.list_reminder_rules(), [])
+
+        operations.restore_task_records(snapshot)
+        self.assertEqual(operations.list_dependencies()[0]["uuid"], edge_uuid)
+        self.assertEqual(operations.list_reminder_rules()[0]["uuid"], rule_uuid)
+
+    def test_reconcile_prunes_external_deletes_and_refreshes_labels(self) -> None:
+        operations.add_dependency(
+            dependent_uuid="a", dependent_source="task", dependent_label="Old A",
+            blocker_uuid="b", blocker_source="task", blocker_label="Old B",
+        )
+        operations.create_reminder_rule({
+            "task_uuid": "b", "task_source": "task", "task_label": "Old B",
+            "kind": "custom", "remind_on": "2026-08-21",
+        })
+        operations.reconcile_task_records([
+            {"uuid": "a", "source": "task", "task": "Current A"},
+            {"uuid": "b", "source": "task", "task": "Current B"},
+        ])
+        edge = operations.list_dependencies()[0]
+        self.assertEqual(edge["dependent_label"], "Current A")
+        self.assertEqual(edge["blocker_label"], "Current B")
+        self.assertEqual(operations.list_reminder_rules()[0]["task_label"], "Current B")
+
+        removed = operations.reconcile_task_records([
+            {"uuid": "a", "source": "task", "task": "Current A"},
+        ])
+        self.assertEqual(removed, {"dependencies": 1, "reminder_rules": 1})
+        self.assertEqual(operations.list_dependencies(), [])
+        self.assertEqual(operations.list_reminder_rules(), [])
+
+    def test_edit_status_cannot_bypass_dependency_check(self) -> None:
+        with (
+            patch.object(db, "_get_task_like", return_value={"completed": 0}),
+            patch.object(
+                db, "_assert_task_unblocked", side_effect=ValueError("Blocked by: B")
+            ),
+            patch.object(db, "get_engine") as engine,
+        ):
+            with self.assertRaisesRegex(ValueError, "Blocked by: B"):
+                db._update_task_like("tasks", "a", {"status": "In Progress"})
+        engine.assert_not_called()
 
     def test_database_completion_uses_dependency_enforcement(self) -> None:
         with patch.object(operations, "assert_unblocked", side_effect=ValueError("Blocked by: B")):
@@ -135,6 +191,21 @@ class OperationsTests(unittest.TestCase):
                 headers={"X-CSRF-Token": "csrf-value"},
             )
         self.assertEqual(response.status_code, 400)
+        self.assertIn("Blocked by", response.text)
+
+    def test_blocked_edit_route_surfaces_reason(self) -> None:
+        client = TestClient(application.app)
+        client.cookies.set(auth.COOKIE_NAME, "main-secret")
+        client.cookies.set(auth.CSRF_COOKIE_NAME, "csrf-value")
+        with (
+            patch.dict(os.environ, {"LUIGI_WEB_UI_TOKEN": "main-secret"}),
+            patch.object(db, "update_task", side_effect=ValueError("Blocked by: Blocker")),
+        ):
+            response = client.post(
+                "/tasks/task-a", data={"task": "Dependent", "status": "In Progress"},
+                headers={"X-CSRF-Token": "csrf-value"},
+            )
+        self.assertEqual(response.status_code, 422)
         self.assertIn("Blocked by", response.text)
 
 

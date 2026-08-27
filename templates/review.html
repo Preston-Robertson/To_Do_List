@@ -26,10 +26,10 @@
 
   <section class="review-panels">
     <article><header><h2>Overdue</h2><span class="chip chip-muted">{{ review.overdue|length }}</span></header>
-      {% for item in review.overdue %}<a class="review-row" href="/{{ 'recurring' if item.source == 'recurring' else 'tasks' }}/{{ item.uuid }}/edit"><strong>{{ item.task }}</strong><span>{{ item.due_date }}</span></a>{% else %}<p class="empty">Nothing overdue.</p>{% endfor %}
+      {% for item in review.overdue %}<button type="button" class="review-row" hx-get="/{{ 'recurring' if item.source == 'recurring' else 'tasks' }}/{{ item.uuid }}/edit" hx-target="#modal-body" hx-swap="innerHTML" onclick="openModal()"><strong>{{ item.task }}</strong><span>{{ item.due_date }}</span></button>{% else %}<p class="empty">Nothing overdue.</p>{% endfor %}
     </article>
     <article><header><h2>Upcoming</h2><span class="chip chip-muted">{{ review.upcoming|length }}</span></header>
-      {% for item in review.upcoming %}<a class="review-row" href="/{{ 'recurring' if item.source == 'recurring' else 'tasks' }}/{{ item.uuid }}/edit"><strong>{{ item.task }}</strong><span>{{ item.due_date or 'No date' }}</span></a>{% else %}<p class="empty">Nothing due in this window.</p>{% endfor %}
+      {% for item in review.upcoming %}<button type="button" class="review-row" hx-get="/{{ 'recurring' if item.source == 'recurring' else 'tasks' }}/{{ item.uuid }}/edit" hx-target="#modal-body" hx-swap="innerHTML" onclick="openModal()"><strong>{{ item.task }}</strong><span>{{ item.due_date or 'No date' }}</span></button>{% else %}<p class="empty">Nothing due in this window.</p>{% endfor %}
     </article>
     <article><header><h2>At-risk streaks</h2><span class="chip chip-muted">{{ review.at_risk|length }}</span></header>
       {% for item in review.at_risk %}<a class="review-row" href="/discipline"><strong>{{ item.task }}</strong><span>{{ item.days_since }}d since completion</span></a>{% else %}<p class="empty">No streaks at risk.</p>{% endfor %}

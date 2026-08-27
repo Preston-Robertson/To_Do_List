@@ -9,22 +9,26 @@ the shared LuigiBot repository.
 
 - **Tasks:** Kanban and compact list views, Quick Add, filters, snooze, Undo,
   completion triggers, interval/weekday/monthly-position recurrence, projects,
-  archive, a migration-aware Activity timeline, and projected recurring
-  occurrences on Month/Agenda calendar views.
+  archive, dependencies, local reminders, a migration-aware Activity timeline,
+  and projected recurring occurrences on Month/Agenda calendar views.
 - **Discipline:** daily completion controls, yearly heatmaps, streaks, weekly
   progress, and shared data with LuigiBot.
 - **Projects:** named-project timeline with scheduled and unscheduled work.
 - **Games and shows:** shared Game'N'Watch Google Sheet, metadata search,
   covers, ratings, statuses, Steam playtime, achievements, and local Insights
   charts/tables with backlog health and health-aware weighted picks.
+- **Trading Cards:** MTG, Pokemon, and Riftbound catalogs; deck construction,
+  text import/export, tags, collection ownership, exact price tracking,
+  Scryfall refreshes, and optional draw.io deck diagrams.
 - **Finance:** separately unlocked accounts, transactions, budgets,
   investments, net worth, CSV import, reports, alerts, audit history, and
   exports. Finance data is isolated from LuigiBot and the LLM.
 - **Assistant:** optional GitHub Copilot subscription or OpenAI-compatible chat
   with an allow-listed task tool registry. Finance is intentionally excluded.
-- **Operations:** integration health, environment editor, backup/export,
-  self-update, local Feedback, bulk task actions, isolated branch Preview,
-  responsive navigation, and `Ctrl+K` global commands.
+- **Operations:** guided Daily/Weekly Review, verified preview-first shared-task
+  restore, integration health, environment editor, self-update, local Feedback,
+  bulk task actions, isolated branch Preview, responsive navigation, and
+  `Ctrl+K` global commands.
 
 ## Screenshots
 
@@ -65,6 +69,8 @@ Finance is designed around data minimization:
 - Finance records are excluded from chat tools, global search, URLs, logs,
   screenshots, and public fixtures;
 - Finance uses an app-owned SQLite database outside the repository;
+- Trading Cards uses a separate app-owned SQLite database for its catalog,
+  decks, collection, and integer-minor-unit price history;
 - browser mutations use same-origin CSRF protection;
 - secure cookies can be enforced behind HTTPS.
 
@@ -111,6 +117,10 @@ control. Core settings:
 | `LUIGI_WEB_DAY_CUTOFF` | Local `HH:MM` cutoff for previous-day completion (default `04:00`) |
 | `LUIGI_WEB_FINANCE_DB` | App-owned Finance SQLite path |
 | `LUIGI_WEB_FINANCE_BASE_CURRENCY` | ISO currency used for reports |
+| `LUIGI_WEB_REVIEW_DB` | App-owned Daily/Weekly Review SQLite path |
+| `LUIGI_WEB_OPERATIONS_DB` | App-owned task dependencies and reminders SQLite path |
+| `LUIGI_WEB_CARDS_DB` | App-owned trading-card catalog, decks, and collection SQLite path |
+| `LUIGI_WEB_CARDS_*` | Optional Scryfall refresh, temporary bulk directory, and draw.io settings |
 | `LUIGI_WEB_LLM_*` | Optional GitHub Copilot or OpenAI-compatible assistant |
 | `LUIGI_WEB_COPILOT_HOME` | Writable cache for the bundled Copilot runtime |
 | `LUIGI_WEB_GNW_*` | Optional Game'N'Watch Google Sheet |
@@ -126,6 +136,19 @@ The authenticated Admin page can edit allow-listed settings and run read-only
 integration checks. It deliberately cannot read or change
 `LUIGI_WEB_UI_TOKEN` or `LUIGI_WEB_FINANCE_TOKEN`: allowing the main session to
 replace either credential would defeat the Finance security boundary.
+
+Admin's shared-task backup uses a validated, merge-only restore: the upload is
+fully parsed before database access, a preview lists inserts and updates, and a
+one-time confirmation token gates the transactional commit. Rows absent from a
+backup are never deleted. This backup covers the five LuigiBot task tables and
+web-owned task metadata; it intentionally excludes Finance, Feedback, Review
+notes, dependency/reminder rules, credentials, and deployment settings.
+
+Task dependencies and reminders are local Luigi Web features. Every Luigi Web
+status/completion path enforces blockers, but LuigiBot requires a coordinated
+change before it can enforce the same rules. Reminder notifications are
+generated and deduplicated when the in-app count or inbox refreshes; no task
+content is sent to an external notification service.
 
 For the systemd deployment, store authentication tokens in
 `/etc/luigi-web/credentials.env`, owned by `root:root` with mode `0600`:
@@ -194,6 +217,8 @@ Repository guidance:
   validation requirements
 - [`docs/architecture.md`](docs/architecture.md) — storage boundaries and
   technical design
+- [`docs/trading-cards.md`](docs/trading-cards.md) — card schema, providers,
+  imports, and storage boundary
 - [`docs/discipline-v2-plan.md`](docs/discipline-v2-plan.md) — coordinated
   LuigiBot Discipline migration
 - [`docs/task-events-plan.md`](docs/task-events-plan.md) — shared completion

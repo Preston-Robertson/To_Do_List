@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block head_scripts %}
+  {{ super() }}
+  <meta name="referrer" content="no-referrer">
+  <link rel="stylesheet" href="/static/css/cards.css?v={{ asset_version }}">
+  <script src="/static/js/cards.js?v={{ asset_version }}" defer></script>
+{% endblock %}
+{% block content %}
+<section class="cards-workspace" data-cards-workspace data-game="{{ current_game or '' }}">
+  <header class="cards-nav-band">
+    <div class="cards-identity">
+      <span class="cards-identity-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="m8 8 4-2 4 2v7l-4 3-4-3Z"/></svg>
+      </span>
+      <div><strong>Trading Cards</strong><small>Catalog, decks, collection</small></div>
+    </div>
+    <nav class="cards-game-switcher" aria-label="Card game">
+      {% for card_game in games %}
+      <a href="/cards/{{ card_game.code }}/decks"
+         class="{% if current_game == card_game.code %}active{% endif %}"
+         {% if current_game == card_game.code %}aria-current="true"{% endif %}>
+        {{ card_game.name }}
+      </a>
+      {% endfor %}
+    </nav>
+    {% if current_game %}
+    <nav class="cards-section-tabs" aria-label="Trading card section">
+      <a href="/cards/{{ current_game }}/catalog"
+         class="{% if '/catalog' in request.url.path %}active{% endif %}">Catalog</a>
+      <a href="/cards/{{ current_game }}/decks"
+         class="{% if '/decks' in request.url.path %}active{% endif %}">Decks</a>
+      <a href="/cards/{{ current_game }}/collection"
+         class="{% if '/collection' in request.url.path %}active{% endif %}">Collection</a>
+      <a href="/cards/{{ current_game }}/data"
+         class="{% if '/data' in request.url.path %}active{% endif %}">Data</a>
+    </nav>
+    {% endif %}
+  </header>
+  <div class="cards-page">
+    {% block cards_content %}{% endblock %}
+  </div>
+</section>
+{% endblock %}

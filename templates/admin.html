@@ -72,7 +72,7 @@
   </article>
 
   <article class="widget">
-    <header class="widget-header"><h2>Backup</h2></header>
+    <header class="widget-header"><h2>Shared task backup</h2></header>
     <div class="widget-body">
       <p class="muted-hint">
         Download a full JSON snapshot of the tables the GUI touches:
@@ -81,6 +81,10 @@
         <code>follow_up_tasks</code>. Read-only — no DB writes and no schema
         changes. App-managed project/archive fallback metadata is included too.
         Save the file somewhere offline for safekeeping.
+      </p>
+      <p class="muted-hint">
+        This task backup does not include Finance, Feedback, Review notes,
+        dependency rules, reminder rules, credentials, or deployment settings.
       </p>
       <div class="form-actions" style="border-top:none;justify-content:flex-start;padding-top:0;">
         {# Plain <a> so the browser handles the file download natively;

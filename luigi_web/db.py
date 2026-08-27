@@ -658,6 +658,18 @@ def _update_task_like(table: str, row_uuid: str, data: dict[str, Any]) -> None:
         updates["recurring_month_ordinal"] = None
         updates["recurring_month_weekday"] = None
 
+    status_update = updates.pop("status", None)
+    if status_update is not None:
+        if status_update not in STATUS_VALUES:
+            raise ValueError(f"invalid status: {status_update}")
+        current = _get_task_like(table, row_uuid)
+        if (
+            current
+            and status_update in {"In Progress", "Completed"}
+            and not int(current.get("completed") or 0)
+        ):
+            _assert_task_unblocked(table, row_uuid)
+
     if "project" in updates and not has_web_column(table, "project"):
         _set_web_metadata(table, row_uuid, project=updates.pop("project"))
 
@@ -675,13 +687,21 @@ def _update_task_like(table: str, row_uuid: str, data: dict[str, Any]) -> None:
     allowed = set(_cols_for(table))
     updates = {k: v for k, v in updates.items() if k in allowed}
 
-    if not updates:
-        return
-    set_clause = ", ".join(f"{k} = :{k}" for k in updates)
-    updates["u"] = row_uuid
-    q = text(f"UPDATE {table} SET {set_clause} WHERE uuid = :u")
-    with get_engine().begin() as conn:
-        conn.execute(q, updates)
+    if updates:
+        set_clause = ", ".join(f"{k} = :{k}" for k in updates)
+        updates["u"] = row_uuid
+        q = text(f"UPDATE {table} SET {set_clause} WHERE uuid = :u")
+        with get_engine().begin() as conn:
+            conn.execute(q, updates)
+    if status_update is not None:
+        _set_task_like_status(table, row_uuid, status_update)
+    if "task" in data and str(data.get("task") or "").strip():
+        try:
+            from . import operations
+            source = "recurring" if table == "recurring_tasks" else "task"
+            operations.update_task_label(row_uuid, source, str(data["task"]).strip())
+        except Exception:
+            logger.exception("Failed to synchronize task-rule labels for %s", row_uuid)
 
 
 def _follow_up_task_payload(rule: dict[str, Any]) -> dict[str, Any]:
@@ -935,10 +955,31 @@ def _toggle_task_like_completed(
     )
 
 
-def _delete_task_like(table: str, row_uuid: str) -> None:
+def _delete_task_like(table: str, row_uuid: str) -> dict[str, Any]:
+    from . import operations
+
+    source = "recurring" if table == "recurring_tasks" else "task"
+    operation_records = operations.delete_task_records(row_uuid, source)
     q = text(f"DELETE FROM {table} WHERE uuid = :u")
-    with get_engine().begin() as conn:
-        conn.execute(q, {"u": row_uuid})
+    try:
+        with get_engine().begin() as conn:
+            result = conn.execute(q, {"u": row_uuid})
+    except Exception:
+        try:
+            operations.restore_task_records(operation_records)
+        except Exception:
+            logger.exception("Failed to restore task rules after delete rollback")
+        raise
+    if not result.rowcount:
+        return {}
+    try:
+        with _WEB_META_LOCK:
+            metadata = _read_web_metadata()
+            metadata.get(table, {}).pop(row_uuid, None)
+            _write_web_metadata(metadata)
+    except Exception:
+        logger.exception("Failed to clean task metadata for deleted task %s", row_uuid)
+    return operation_records
 
 
 def _set_task_like_archived(table: str, row_uuid: str, archived: bool) -> bool:
@@ -1147,8 +1188,8 @@ def toggle_task_completed(
     )
 
 
-def delete_task(row_uuid: str) -> None:
-    _delete_task_like("tasks", row_uuid)
+def delete_task(row_uuid: str) -> dict[str, Any]:
+    return _delete_task_like("tasks", row_uuid)
 
 
 def snooze_task(row_uuid: str, days: int) -> str | None:
@@ -1291,8 +1332,8 @@ def list_task_completion_events(
     return status, shaped
 
 
-def delete_recurring(row_uuid: str) -> None:
-    _delete_task_like("recurring_tasks", row_uuid)
+def delete_recurring(row_uuid: str) -> dict[str, Any]:
+    return _delete_task_like("recurring_tasks", row_uuid)
 
 
 def snooze_recurring(row_uuid: str, days: int) -> str | None:

@@ -33,6 +33,9 @@ from . import clock
 from . import review
 from . import task_backup
 from . import operations
+from . import cards
+from . import cards_scryfall
+from . import cards_templating
 from .auth import (
     COOKIE_NAME,
     CSRF_COOKIE_NAME,
@@ -56,6 +59,7 @@ from .paths import PROJECT_ROOT, STATIC_DIR, TEMPLATES_DIR
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+cards_templating.register_filters(templates.env)
 
 
 @app.middleware("http")
@@ -79,6 +83,10 @@ async def csrf_middleware(request: Request, call_next):
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
     if request.url.path.startswith("/feedback"):
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    if request.url.path.startswith("/cards") and not request.url.path.endswith(".svg"):
         response.headers["Cache-Control"] = "no-store"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
@@ -112,10 +120,12 @@ from . import gnw
 from .finance_routes import router as finance_router
 from .feedback_routes import router as feedback_router
 from .preview_routes import router as preview_router
+from .cards_routes import router as cards_router
 
 app.include_router(finance_router)
 app.include_router(feedback_router)
 app.include_router(preview_router)
+app.include_router(cards_router)
 
 
 def _asset_version() -> str:
@@ -242,6 +252,19 @@ def _startup_schema_check() -> None:
         operations.init_db()
     except Exception:
         pass
+    try:
+        cards.init_db()
+        cards.mark_interrupted_refreshes()
+        cards_scryfall.start_scheduler()
+    except Exception as exc:
+        # Cards is app-owned and optional; a local catalog failure must not
+        # make LuigiBot task pages unavailable.
+        logger.warning("Trading Cards startup failed: %s", exc)
+
+
+@app.on_event("shutdown")
+def _stop_card_scheduler() -> None:
+    cards_scryfall.stop_scheduler()
 
 
 def _require_v2() -> None:
@@ -295,6 +318,7 @@ def _stash_undo(
     generated_task_uuids: list[str] | None = None,
     task_event_uuid: str | None = None,
     task_event_type: str | None = None,
+    operation_records: dict[str, Any] | None = None,
 ) -> str:
     """Record a 'before' snapshot for a task-like mutation. Returns an
     opaque ``op_id`` the client uses to POST ``/undo/{op_id}`` within the
@@ -310,6 +334,7 @@ def _stash_undo(
             "generated_task_uuids": list(generated_task_uuids or []),
             "task_event_uuid": task_event_uuid,
             "task_event_type": task_event_type,
+            "operation_records": operation_records or {},
             "expires_at": now + _UNDO_TTL_SECONDS,
         }
     return op_id
@@ -462,6 +487,7 @@ def tasks_page(request: Request):
     rows.extend(recurring_rows)
     dependency_map: dict[tuple[str, str], list[str]] = {}
     try:
+        operations.reconcile_task_records(rows, prune_missing=False)
         for edge in operations.list_dependencies():
             key = (edge["dependent_source"], edge["dependent_uuid"])
             dependency_map.setdefault(key, []).append(edge["blocker_label"])
@@ -504,6 +530,28 @@ def _operation_task_rows() -> list[dict[str, Any]]:
     return rows
 
 
+def _reconcile_operation_records(rows: list[dict[str, Any]]) -> None:
+    known = {
+        (str(row.get("source") or ""), str(row.get("uuid") or "")): row
+        for row in rows
+    }
+    references = {
+        (edge["dependent_source"], edge["dependent_uuid"])
+        for edge in operations.list_dependencies()
+    } | {
+        (edge["blocker_source"], edge["blocker_uuid"])
+        for edge in operations.list_dependencies()
+    } | {
+        (rule["task_source"], rule["task_uuid"])
+        for rule in operations.list_reminder_rules()
+    }
+    for source, row_uuid in references - set(known):
+        row = db.get_recurring(row_uuid) if source == "recurring" else db.get_task(row_uuid)
+        if row:
+            known[(source, row_uuid)] = {**row, "source": source}
+    operations.reconcile_task_records(list(known.values()))
+
+
 def _operation_task(task_ref: str) -> dict[str, Any]:
     try:
         source, row_uuid = str(task_ref).split(":", 1)
@@ -524,9 +572,11 @@ def _evaluate_notifications() -> int:
 @app.get("/task-rules", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 def task_rules_page(request: Request):
     _require_v2()
+    rows = _operation_task_rows()
+    _reconcile_operation_records(rows)
     return templates.TemplateResponse("task_rules.html", {
         "request": request, "active_nav": "task-rules", "page_title": "Task rules",
-        "tasks": _operation_task_rows(),
+        "tasks": rows,
         "dependencies": operations.list_dependencies(),
         "reminder_rules": operations.list_reminder_rules(),
     })
@@ -781,7 +831,10 @@ def tasks_new_form(request: Request):
 async def tasks_update(request: Request, row_uuid: str):
     _require_v2()
     form = dict(await request.form())
-    db.update_task(row_uuid, form)
+    try:
+        db.update_task(row_uuid, form)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     row = db.get_task(row_uuid)
     if not row:
         raise HTTPException(404)
@@ -853,8 +906,11 @@ def tasks_delete(row_uuid: str):
     before = db.get_task(row_uuid)
     if not before:
         raise HTTPException(404)
-    db.delete_task(row_uuid)
-    op_id = _stash_undo("tasks", before, f"Deleted ‘{before.get('task','')}’")
+    operation_records = db.delete_task(row_uuid)
+    op_id = _stash_undo(
+        "tasks", before, f"Deleted ‘{before.get('task','')}’",
+        operation_records=operation_records,
+    )
     trigger = _hx_trigger(
         showUndo={"op_id": op_id, "label": f"Deleted ‘{before.get('task','')}’",
                   "ttl_ms": _UNDO_TTL_SECONDS * 1000},
@@ -997,7 +1053,10 @@ async def recurring_update(request: Request, row_uuid: str):
     _require_v2()
     form = await _form_dict(request)
     _validate_recurring_form(form)
-    db.update_recurring(row_uuid, form)
+    try:
+        db.update_recurring(row_uuid, form)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     row = db.get_recurring(row_uuid)
     if not row:
         raise HTTPException(404)
@@ -1069,9 +1128,10 @@ def recurring_delete(row_uuid: str):
     before = db.get_recurring(row_uuid)
     if not before:
         raise HTTPException(404)
-    db.delete_recurring(row_uuid)
+    operation_records = db.delete_recurring(row_uuid)
     op_id = _stash_undo("recurring_tasks", before,
-                        f"Deleted ‘{before.get('task','')}’")
+                        f"Deleted ‘{before.get('task','')}’",
+                        operation_records=operation_records)
     trigger = _hx_trigger(
         showUndo={"op_id": op_id, "label": f"Deleted ‘{before.get('task','')}’",
                   "ttl_ms": _UNDO_TTL_SECONDS * 1000},
@@ -1462,6 +1522,7 @@ def undo(op_id: str):
                 entry.get("task_event_uuid"),
                 entry.get("task_event_type"),
             )
+            operations.restore_task_records(entry.get("operation_records"))
     except Exception as exc:
         raise HTTPException(500, f"undo failed: {exc}")
     return Response(
@@ -2243,13 +2304,17 @@ def review_page(request: Request, scope: str = "daily"):
         state = review.build(scope)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    return templates.TemplateResponse("review.html", {
-        "request": request,
-        "active_nav": "review",
-        "page_title": "Review",
-        "review": state,
-        "scope": state["scope"],
-    })
+    return templates.TemplateResponse(
+        "review.html",
+        {
+            "request": request,
+            "active_nav": "review",
+            "page_title": "Review",
+            "review": state,
+            "scope": state["scope"],
+        },
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.post("/review/{scope}", dependencies=[Depends(require_auth)])
@@ -2265,6 +2330,7 @@ async def review_save(scope: str, request: Request):
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     return Response(status_code=204, headers={
+        "Cache-Control": "no-store",
         "HX-Trigger": _hx_trigger(
             flashSuccess={"message": f"{scope.title()} review saved"}
         ),

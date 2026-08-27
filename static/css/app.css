@@ -2355,6 +2355,7 @@ kbd {
 .review-panels > article { min-width: 0; padding: 12px; border: 1px solid var(--border); background: var(--bg-elev); }
 .review-panels article > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
 .review-row { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-top: 1px solid var(--border); color: var(--text); font-size: 12px; }
+.review-panels button.review-row { width: 100%; border-right: 0; border-bottom: 0; border-left: 0; background: transparent; text-align: left; cursor: pointer; }
 .review-row span { flex: 0 0 auto; color: var(--text-dim); }
 .review-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--border); }
 .review-stats > div { padding: 10px; background: var(--bg-elev-2); }

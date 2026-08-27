@@ -24,9 +24,17 @@ class TaskBackupTests(unittest.TestCase):
         task_backup._PREVIEWS.clear()
 
     @staticmethod
-    def _engine(*, reject_follow_up: bool = False):
+    def _engine(*, reject_follow_up: bool = False, missing_web: bool = False):
         engine = create_engine("sqlite+pysqlite:///:memory:")
-        task_columns = ", ".join(f"{column} TEXT" for column in db._TASK_COLUMNS)
+        web_columns = {
+            "project", "archived", "recurring_days",
+            "recurring_month_ordinal", "recurring_month_weekday",
+        }
+        columns = [
+            column for column in db._TASK_COLUMNS
+            if not missing_web or column not in web_columns
+        ]
+        task_columns = ", ".join(f"{column} TEXT" for column in columns)
         priority = "TEXT CHECK (CAST(priority AS INTEGER) <= 5)" if reject_follow_up else "TEXT"
         with engine.begin() as conn:
             conn.execute(text(f"CREATE TABLE tasks ({task_columns})"))
@@ -144,6 +152,37 @@ class TaskBackupTests(unittest.TestCase):
             self.assertEqual(conn.execute(text("SELECT COUNT(*) FROM tasks")).scalar_one(), 0)
             self.assertEqual(conn.execute(text("SELECT COUNT(*) FROM discipline_list")).scalar_one(), 0)
         self.assertFalse(self.metadata_path.exists())
+        engine.dispose()
+
+    def test_missing_web_columns_restore_to_metadata_fallback(self) -> None:
+        engine = self._engine(missing_web=True)
+        payload = self._payload()
+        payload["tables"]["tasks"][0].update({
+            "project": "Example Project", "archived": 1,
+            "recurring_days": "0,2", "recurring_month_ordinal": -1,
+            "recurring_month_weekday": 4,
+        })
+        raw = json.dumps(payload).encode()
+        missing = {
+            "project", "archived", "recurring_days",
+            "recurring_month_ordinal", "recurring_month_weekday",
+        }
+        with (
+            patch.object(db, "get_engine", return_value=engine),
+            patch.object(db, "_WEB_META_PATH", str(self.metadata_path)),
+            patch.dict(db._TABLES_MISSING_COLUMNS, {
+                "tasks": set(missing), "recurring_tasks": set(missing),
+            }, clear=True),
+        ):
+            task_backup.restore_backup(task_backup.parse_backup(raw))
+
+        metadata = json.loads(self.metadata_path.read_text(encoding="utf-8"))
+        restored = metadata["tasks"]["11111111-1111-4111-8111-111111111111"]
+        self.assertEqual(restored["project"], "Example Project")
+        self.assertEqual(restored["archived"], 1)
+        self.assertEqual(restored["recurring_days"], "0,2")
+        self.assertEqual(restored["recurring_month_ordinal"], -1)
+        self.assertEqual(restored["recurring_month_weekday"], 4)
         engine.dispose()
 
     def test_restore_routes_preview_then_commit(self) -> None:

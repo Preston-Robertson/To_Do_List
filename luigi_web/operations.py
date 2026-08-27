@@ -166,6 +166,150 @@ def delete_dependency(row_uuid: str) -> bool:
     return bool(result.rowcount)
 
 
+def update_task_label(task_uuid: str, source: str, label: str) -> None:
+    init_db()
+    task_uuid = str(task_uuid)
+    source = _source(source)
+    label = _label(label, "task label")
+    now = clock.local_now().isoformat(timespec="seconds")
+    with _connect() as conn:
+        conn.execute("""
+            UPDATE task_dependencies SET dependent_label = ?
+            WHERE dependent_uuid = ? AND dependent_source = ?
+        """, (label, task_uuid, source))
+        conn.execute("""
+            UPDATE task_dependencies SET blocker_label = ?
+            WHERE blocker_uuid = ? AND blocker_source = ?
+        """, (label, task_uuid, source))
+        conn.execute("""
+            UPDATE reminder_rules SET task_label = ?, updated_at = ?
+            WHERE task_uuid = ? AND task_source = ?
+        """, (label, now, task_uuid, source))
+
+
+def delete_task_records(task_uuid: str, source: str) -> dict[str, Any]:
+    """Delete local rules tied to a shared task and return an Undo snapshot."""
+    init_db()
+    task_uuid = str(task_uuid)
+    source = _source(source)
+    with _connect() as conn:
+        dependencies = [dict(row) for row in conn.execute("""
+            SELECT * FROM task_dependencies
+            WHERE (dependent_uuid = ? AND dependent_source = ?)
+               OR (blocker_uuid = ? AND blocker_source = ?)
+        """, (task_uuid, source, task_uuid, source)).fetchall()]
+        reminder_rules = [dict(row) for row in conn.execute("""
+            SELECT * FROM reminder_rules
+            WHERE task_uuid = ? AND task_source = ?
+        """, (task_uuid, source)).fetchall()]
+        conn.execute("""
+            DELETE FROM reminder_notifications
+            WHERE task_uuid = ? AND task_source = ?
+        """, (task_uuid, source))
+        conn.execute("""
+            DELETE FROM reminder_rules
+            WHERE task_uuid = ? AND task_source = ?
+        """, (task_uuid, source))
+        conn.execute("""
+            DELETE FROM task_dependencies
+            WHERE (dependent_uuid = ? AND dependent_source = ?)
+               OR (blocker_uuid = ? AND blocker_source = ?)
+        """, (task_uuid, source, task_uuid, source))
+    return {"dependencies": dependencies, "reminder_rules": reminder_rules}
+
+
+def restore_task_records(snapshot: dict[str, Any] | None) -> None:
+    if not snapshot:
+        return
+    init_db()
+    dependency_columns = (
+        "uuid", "dependent_uuid", "dependent_source", "dependent_label",
+        "blocker_uuid", "blocker_source", "blocker_label", "created_at",
+    )
+    reminder_columns = (
+        "uuid", "task_uuid", "task_source", "task_label", "kind", "lead_days",
+        "remind_on", "message", "active", "created_at", "updated_at",
+    )
+    with _connect() as conn:
+        for row in snapshot.get("dependencies", []):
+            conn.execute(
+                f"INSERT OR IGNORE INTO task_dependencies ({', '.join(dependency_columns)}) "
+                f"VALUES ({', '.join('?' for _ in dependency_columns)})",
+                tuple(row.get(column) for column in dependency_columns),
+            )
+        for row in snapshot.get("reminder_rules", []):
+            conn.execute(
+                f"INSERT OR IGNORE INTO reminder_rules ({', '.join(reminder_columns)}) "
+                f"VALUES ({', '.join('?' for _ in reminder_columns)})",
+                tuple(row.get(column) for column in reminder_columns),
+            )
+
+
+def reconcile_task_records(
+    rows: list[dict[str, Any]], *, prune_missing: bool = True
+) -> dict[str, int]:
+    """Refresh labels and prune rules orphaned by another shared-schema client."""
+    init_db()
+    task_labels: dict[tuple[str, str], str] = {}
+    for row in rows:
+        source = str(row.get("source") or row.get("_source") or "")
+        row_uuid = str(row.get("uuid") or "")
+        label = str(row.get("task") or "").strip()
+        if source in SOURCES and row_uuid and label:
+            task_labels[(source, row_uuid)] = label
+    removed_dependencies = 0
+    removed_rules = 0
+    with _connect() as conn:
+        for edge in conn.execute("SELECT * FROM task_dependencies").fetchall():
+            dependent = (edge["dependent_source"], edge["dependent_uuid"])
+            blocker = (edge["blocker_source"], edge["blocker_uuid"])
+            if prune_missing and (
+                dependent not in task_labels or blocker not in task_labels
+            ):
+                conn.execute(
+                    "DELETE FROM task_dependencies WHERE uuid = ?", (edge["uuid"],)
+                )
+                removed_dependencies += 1
+                continue
+            if dependent in task_labels:
+                conn.execute("""
+                    UPDATE task_dependencies SET dependent_label = ? WHERE uuid = ?
+                """, (task_labels[dependent], edge["uuid"]))
+            if blocker in task_labels:
+                conn.execute("""
+                    UPDATE task_dependencies SET blocker_label = ? WHERE uuid = ?
+                """, (task_labels[blocker], edge["uuid"]))
+        for rule in conn.execute("SELECT * FROM reminder_rules").fetchall():
+            key = (rule["task_source"], rule["task_uuid"])
+            if prune_missing and key not in task_labels:
+                conn.execute(
+                    "DELETE FROM reminder_notifications WHERE rule_uuid = ?",
+                    (rule["uuid"],),
+                )
+                conn.execute(
+                    "DELETE FROM reminder_rules WHERE uuid = ?", (rule["uuid"],)
+                )
+                removed_rules += 1
+            elif key in task_labels:
+                conn.execute("""
+                    UPDATE reminder_rules SET task_label = ?, updated_at = ?
+                    WHERE uuid = ?
+                """, (
+                    task_labels[key], clock.local_now().isoformat(timespec="seconds"),
+                    rule["uuid"],
+                ))
+        if prune_missing:
+            for notification in conn.execute("""
+                SELECT uuid, task_source, task_uuid FROM reminder_notifications
+            """).fetchall():
+                if (notification["task_source"], notification["task_uuid"]) not in task_labels:
+                    conn.execute(
+                        "DELETE FROM reminder_notifications WHERE uuid = ?",
+                        (notification["uuid"],),
+                    )
+    return {"dependencies": removed_dependencies, "reminder_rules": removed_rules}
+
+
 def blockers_for(task_uuid: str, source: str) -> list[dict[str, Any]]:
     init_db()
     with _connect() as conn:
@@ -185,7 +329,10 @@ def assert_unblocked(
     pending: list[str] = []
     for edge in blockers_for(task_uuid, source):
         blocker = resolver(edge["blocker_source"], edge["blocker_uuid"])
-        if not blocker or not (
+        if blocker is None:
+            delete_dependency(edge["uuid"])
+            continue
+        if not (
             int(blocker.get("completed") or 0) == 1
             or blocker.get("status") == "Completed"
         ):

@@ -1,0 +1,31 @@
+<div id="deck-card-panel" class="deck-card-panel">
+  <div class="deck-card-summary"><span><strong>{{ total_qty }}</strong> cards</span><span><strong>{{ total_price_minor | money_minor }}</strong> market value</span></div>
+  {% if by_category %}
+  {% for category, grouped_cards in by_category.items() %}
+  <details class="deck-card-group" open>
+    <summary><span>{{ category }}</span><b>{{ grouped_cards | sum(attribute='qty') }}</b></summary>
+    <div class="cards-table-scroll">
+      <table class="deck-card-table">
+        <thead><tr><th>Card</th><th>Qty</th><th>Category</th><th>Cost</th><th>Type</th><th>Price</th><th>Trend</th><th>Owned</th><th><span class="sr-only">Actions</span></th></tr></thead>
+        <tbody>
+        {% for card in grouped_cards %}
+        <tr>
+          <td><div class="deck-card-name">{% if card.image_small %}<img src="{{ card.image_small }}" alt="" loading="lazy" data-card-preview="{{ card.image_normal or card.image_small }}">{% endif %}<span><strong>{{ card.name }}</strong><small>{{ card.set_code|upper if card.set_code else 'No set' }}{% if card.collector_number %} · {{ card.collector_number }}{% endif %}</small></span></div></td>
+          <td colspan="2"><form class="deck-card-edit" method="post" action="/cards/{{ current_game }}/decks/{{ deck.id }}/cards/{{ card.id }}" hx-post="/cards/{{ current_game }}/decks/{{ deck.id }}/cards/{{ card.id }}" hx-target="#deck-card-panel" hx-swap="outerHTML"><input type="number" name="qty" value="{{ card.qty }}" min="0" max="9999" aria-label="Quantity for {{ card.name }}"><input name="category" value="{{ card.category or '' }}" maxlength="100" placeholder="Category" aria-label="Category for {{ card.name }}"><button class="btn btn-small" type="submit">Update</button></form></td>
+          <td><span class="card-mana-row">{{ card.mana_cost | card_mana | safe }}</span></td>
+          <td class="deck-card-type">{{ card.type_line or '-' }}</td>
+          <td>{{ card.price_usd_minor | money_minor }}</td>
+          <td><img class="cards-sparkline" src="/cards/{{ current_game }}/cards/{{ card.card_id }}/sparkline.svg?days=90" alt="" loading="lazy" width="120" height="32"></td>
+          <td><span class="owned-count {% if card.owned_qty >= card.qty %}complete{% endif %}">{{ card.owned_qty }} / {{ card.qty }}</span></td>
+          <td><form method="post" action="/cards/{{ current_game }}/decks/{{ deck.id }}/cards/{{ card.id }}/delete" hx-post="/cards/{{ current_game }}/decks/{{ deck.id }}/cards/{{ card.id }}/delete" hx-target="#deck-card-panel" hx-swap="outerHTML" hx-confirm="Remove {{ card.name }} from this deck?"><button type="submit" class="cards-icon-button" aria-label="Remove {{ card.name }}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg></button></form></td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+  {% endfor %}
+  {% else %}
+  <div class="cards-empty"><h2>This deck is empty</h2><p>Add a card or import a list.</p></div>
+  {% endif %}
+</div>

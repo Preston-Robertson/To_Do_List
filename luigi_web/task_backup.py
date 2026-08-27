@@ -30,6 +30,10 @@ _UUID_TABLE_COLUMNS = {
     "follow_up_tasks": db._FOLLOWUP_COLUMNS,
 }
 _TABLES = (*_UUID_TABLE_COLUMNS, "discipline_completions")
+_WEB_METADATA_FIELDS = (
+    "project", "archived", "recurring_days",
+    "recurring_month_ordinal", "recurring_month_weekday",
+)
 
 
 class RestoreError(ValueError):
@@ -224,9 +228,28 @@ def parse_backup(raw: bytes) -> dict[str, Any]:
             row_uuid = _uuid(raw_uuid, f"web_metadata.{table}.uuid")
             if not isinstance(values, dict):
                 raise RestoreError(f"web_metadata.{table}.{row_uuid} must be an object")
-            safe_metadata[table][row_uuid] = {
-                key: values[key] for key in ("project", "archived") if key in values
-            }
+            safe_values: dict[str, Any] = {}
+            if "project" in values:
+                safe_values["project"] = _text(
+                    values["project"], f"web_metadata.{table}.{row_uuid}.project",
+                    maximum=4000,
+                )
+            if "archived" in values:
+                safe_values["archived"] = _number(
+                    values["archived"], f"web_metadata.{table}.{row_uuid}.archived",
+                    integer=True,
+                )
+            if "recurring_days" in values:
+                safe_values["recurring_days"] = db.parse_recurring_days(
+                    values["recurring_days"]
+                )
+            for field in ("recurring_month_ordinal", "recurring_month_weekday"):
+                if field in values:
+                    safe_values[field] = _number(
+                        values[field], f"web_metadata.{table}.{row_uuid}.{field}",
+                        integer=True,
+                    )
+            safe_metadata[table][row_uuid] = safe_values
     return {
         "format": FORMAT,
         "schema_version": 2,
@@ -301,6 +324,19 @@ def restore_backup(payload: dict[str, Any]) -> dict[str, dict[str, int]]:
     merged_metadata = json.loads(json.dumps(old_metadata))
     for table, rows in payload["web_metadata"].items():
         merged_metadata.setdefault(table, {}).update(rows)
+    for table in ("tasks", "recurring_tasks"):
+        missing_fields = [
+            field for field in _WEB_METADATA_FIELDS
+            if not db.has_web_column(table, field)
+        ]
+        for row in payload["tables"][table]:
+            fallback = {
+                field: row[field] for field in missing_fields if field in row
+            }
+            if fallback:
+                merged_metadata.setdefault(table, {}).setdefault(
+                    row["uuid"], {}
+                ).update(fallback)
 
     connection = db.get_engine().connect()
     transaction = connection.begin()
@@ -349,8 +385,13 @@ def restore_backup(payload: dict[str, Any]) -> dict[str, dict[str, int]]:
     except Exception:
         transaction.rollback()
         if metadata_written:
-            with db._WEB_META_LOCK:
-                db._write_web_metadata(old_metadata)
+            try:
+                with db._WEB_META_LOCK:
+                    db._write_web_metadata(old_metadata)
+            except Exception as rollback_exc:
+                raise RuntimeError(
+                    "shared restore rolled back, but task metadata recovery failed"
+                ) from rollback_exc
         raise
     finally:
         connection.close()

@@ -79,6 +79,13 @@ KNOWN_KEYS: tuple[EnvKey, ...] = (
     EnvKey("LUIGI_WEB_FEEDBACK_DB", "Feedback database", "App-owned local Feedback SQLite path.", "Feedback"),
     EnvKey("LUIGI_WEB_REVIEW_DB", "Review database", "App-owned local Daily/Weekly Review SQLite path.", "Review"),
     EnvKey("LUIGI_WEB_OPERATIONS_DB", "Task operations database", "App-owned task dependencies and reminder SQLite path.", "Tasks"),
+    # Trading Cards ---------------------------------------------------------
+    EnvKey("LUIGI_WEB_CARDS_DB", "Cards database", "App-owned SQLite catalog, decks, and collection path.", "Trading Cards"),
+    EnvKey("LUIGI_WEB_CARDS_BULK_DIR", "Bulk download directory", "Temporary directory for streamed Scryfall imports.", "Trading Cards"),
+    EnvKey("LUIGI_WEB_CARDS_SCRYFALL_BULK", "Scryfall dataset", "default_cards, oracle_cards, or unique_artwork.", "Trading Cards"),
+    EnvKey("LUIGI_WEB_CARDS_REFRESH_HOURS", "Automatic refresh hours", "0 disables automatic Scryfall refresh (default).", "Trading Cards", input_type="number"),
+    EnvKey("LUIGI_WEB_CARDS_POKEMON_API_KEY", "Pokemon TCG API key", "Optional. Raises pokemontcg.io rate limits; blank on save keeps the current key.", "Trading Cards", is_secret=True),
+    EnvKey("LUIGI_WEB_CARDS_DRAWIO_URL", "Draw.io embed URL", "Trusted HTTPS draw.io embed URL. Blank disables deck diagrams.", "Trading Cards", input_type="url"),
     # LLM chat --------------------------------------------------------------
     EnvKey("LUIGI_WEB_LLM_PROVIDER",           "LLM provider",  "'copilot' (GitHub subscription), 'openai', or 'disabled'.", "LLM"),
     EnvKey("LUIGI_WEB_LLM_BASE_URL",           "LLM base URL",  "Used only for an OpenAI-compatible /chat/completions endpoint.", "LLM", input_type="url"),

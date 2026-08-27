@@ -1,0 +1,31 @@
+{% extends "cards/layout.html" %}
+{% block cards_content %}
+<header class="cards-page-header">
+  <div><p class="cards-kicker">{{ game.name }}</p><h1>Collection</h1><p>{{ totals.qty }} cards · {{ totals.value_usd_minor | money_minor }} market value</p></div>
+  <button type="button" class="btn btn-primary" data-cards-dialog-open="collection-add-dialog">Add card</button>
+</header>
+<form method="get" class="cards-filter-bar"><label class="cards-search-field"><span class="sr-only">Filter collection</span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input type="search" name="q" value="{{ q }}" placeholder="Filter by card name"></label><button class="btn" type="submit">Apply</button></form>
+<div class="cards-table-scroll">
+<table class="collection-table">
+  <thead><tr><th>Card</th><th>Set</th><th>Qty</th><th>Variant</th><th>Condition</th><th>Market</th><th>Acquired</th><th>Decks</th><th><span class="sr-only">Actions</span></th></tr></thead>
+  <tbody>
+  {% for item in rows %}
+  <tr>
+    <td><div class="deck-card-name">{% if item.image_small %}<img src="{{ item.image_small }}" alt="" loading="lazy" data-card-preview="{{ item.image_normal or item.image_small }}">{% endif %}<span><strong>{{ item.name }}</strong>{% if item.notes %}<small>{{ item.notes }}</small>{% endif %}</span></div></td>
+    <td>{{ item.set_code|upper if item.set_code else '-' }}{% if item.collector_number %} · {{ item.collector_number }}{% endif %}</td><td>{{ item.qty }}</td><td>{{ 'Foil' if item.foil else 'Regular' }}</td><td>{{ item.condition }}</td><td>{{ (item.price_usd_foil_minor if item.foil and item.price_usd_foil_minor is not none else item.price_usd_minor) | money_minor }}</td><td>{{ item.acquired_price_minor | money_minor(item.acquired_currency) }}{% if item.acquired_date %}<br><small>{{ item.acquired_date }}</small>{% endif %}</td><td>{{ item.in_decks }}</td>
+    <td><form method="post" action="/cards/{{ current_game }}/collection/{{ item.id }}/delete" hx-post="/cards/{{ current_game }}/collection/{{ item.id }}/delete" hx-swap="none" hx-confirm="Remove this collection entry?"><button type="submit" class="cards-icon-button" aria-label="Remove {{ item.name }}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg></button></form></td>
+  </tr>
+  {% else %}<tr><td colspan="9"><div class="cards-empty"><h2>Your collection is empty</h2><p>Add cards from the catalog or search below.</p></div></td></tr>{% endfor %}
+  </tbody>
+</table>
+</div>
+
+<dialog class="cards-dialog cards-dialog-wide" id="collection-add-dialog">
+  <div class="cards-dialog-body">
+    <header><h2>Add to collection</h2><button type="button" data-cards-dialog-close aria-label="Close">&times;</button></header>
+    <form class="cards-live-search" hx-get="/cards/{{ current_game }}/search" hx-target="#collection-search-results" hx-trigger="input changed delay:250ms from:input[name=q]"><input type="hidden" name="for_collection" value="true"><label><span class="sr-only">Search cards</span><input type="search" name="q" placeholder="Search card names" autocomplete="off" autofocus></label></form>
+    <div id="collection-search-results" class="cards-search-results"></div>
+    <footer><button type="button" class="btn" data-cards-dialog-close>Close</button></footer>
+  </div>
+</dialog>
+{% endblock %}

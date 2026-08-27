@@ -1,0 +1,113 @@
+{% extends "cards/layout.html" %}
+{% block cards_content %}
+<header class="cards-page-header">
+  <div>
+    <p class="cards-kicker">{{ game.name }}</p>
+    <h1>Card catalog</h1>
+    <p>{{ stats.card_count }} cards across {{ stats.set_count }} sets</p>
+  </div>
+  <button type="button" class="btn btn-primary" data-cards-dialog-open="manual-card-dialog">
+    New manual card
+  </button>
+</header>
+
+<form method="get" class="cards-filter-bar">
+  <label class="cards-search-field">
+    <span class="sr-only">Search card names</span>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+    <input type="search" name="q" value="{{ q }}" placeholder="Search card names">
+  </label>
+  <label>
+    <span class="sr-only">Filter by set</span>
+    <select name="set_code">
+      <option value="">All sets</option>
+      {% for card_set in sets %}
+      <option value="{{ card_set.set_code }}" {% if set_code|lower == card_set.set_code|lower %}selected{% endif %}>
+        {{ card_set.set_name or card_set.set_code|upper }} ({{ card_set.card_count }})
+      </option>
+      {% endfor %}
+    </select>
+  </label>
+  <button type="submit" class="btn">Apply</button>
+</form>
+
+{% if catalog.rows %}
+<div class="cards-catalog-grid">
+  {% for card in catalog.rows %}
+  <article class="catalog-card">
+    <div class="catalog-card-media">
+      {% if card.image_normal or card.image_small %}
+      <img src="{{ card.image_normal or card.image_small }}" alt="{{ card.name }}" loading="lazy">
+      {% else %}
+      <span aria-hidden="true">{{ card.name[:2]|upper }}</span>
+      {% endif %}
+    </div>
+    <div class="catalog-card-copy">
+      <div class="catalog-card-heading">
+        <h2>{{ card.name }}</h2>
+        <span>{{ card.rarity or 'Unspecified' }}</span>
+      </div>
+      <p>{{ card.set_name or card.set_code or 'No set' }}{% if card.collector_number %} · {{ card.collector_number }}{% endif %}</p>
+      <p class="catalog-card-type">{{ card.type_line or 'Type not recorded' }}</p>
+      <div class="catalog-card-footer">
+        <span>{{ card.price_usd_minor | money_minor }}</span>
+        <button type="button" class="btn btn-small" data-cards-quick-collect
+                data-card-id="{{ card.id }}" data-card-name="{{ card.name }}">
+          Add to collection
+        </button>
+      </div>
+    </div>
+  </article>
+  {% endfor %}
+</div>
+{% else %}
+<div class="cards-empty">
+  <h2>No catalog matches</h2>
+  <p>Add a manual card or change the active filters.</p>
+</div>
+{% endif %}
+
+{% if catalog.pages > 1 %}
+<nav class="cards-pagination" aria-label="Catalog pages">
+  {% if catalog.page > 1 %}<a class="btn" href="?q={{ q|urlencode }}&set_code={{ set_code|urlencode }}&page={{ catalog.page - 1 }}">Previous</a>{% endif %}
+  <span>Page {{ catalog.page }} of {{ catalog.pages }}</span>
+  {% if catalog.page < catalog.pages %}<a class="btn" href="?q={{ q|urlencode }}&set_code={{ set_code|urlencode }}&page={{ catalog.page + 1 }}">Next</a>{% endif %}
+</nav>
+{% endif %}
+
+<dialog class="cards-dialog" id="manual-card-dialog">
+  <form method="post" action="/cards/{{ current_game }}/catalog/manual"
+        hx-post="/cards/{{ current_game }}/catalog/manual" hx-swap="none">
+    <header><h2>New manual card</h2><button type="button" data-cards-dialog-close aria-label="Close">&times;</button></header>
+    <div class="cards-form-grid">
+      <label class="cards-field-wide">Name<input name="name" maxlength="300" required autofocus></label>
+      <label>Set code<input name="set_code" maxlength="20"></label>
+      <label>Collector number<input name="collector_number" maxlength="40"></label>
+      <label class="cards-field-wide">Set name<input name="set_name" maxlength="200"></label>
+      <label>Rarity<input name="rarity" maxlength="50"></label>
+      <label>Type<input name="type_line" maxlength="300"></label>
+      <label class="cards-field-wide">Card text<textarea name="oracle_text" rows="5" maxlength="10000"></textarea></label>
+    </div>
+    <footer><button type="button" class="btn" data-cards-dialog-close>Cancel</button><button class="btn btn-primary" type="submit">Create card</button></footer>
+  </form>
+</dialog>
+
+<dialog class="cards-dialog" id="quick-collect-dialog">
+  <form method="post" action="/cards/{{ current_game }}/collection"
+        hx-post="/cards/{{ current_game }}/collection" hx-swap="none">
+    <header><h2>Add to collection</h2><button type="button" data-cards-dialog-close aria-label="Close">&times;</button></header>
+    <p class="cards-selected-name" data-cards-selected-name></p>
+    <input type="hidden" name="card_id" data-cards-selected-id>
+    <div class="cards-form-grid">
+      <label>Quantity<input type="number" name="qty" value="1" min="1" max="9999" required></label>
+      <label>Condition<select name="condition"><option>NM</option><option>LP</option><option>MP</option><option>HP</option><option>DMG</option></select></label>
+      <label class="cards-check"><input type="checkbox" name="foil" value="1"> Foil</label>
+      <label>Acquired date<input type="date" name="acquired_date"></label>
+      <label>Acquired price<input type="number" name="acquired_price" min="0" step="0.01" inputmode="decimal"></label>
+      <label>Currency<select name="acquired_currency"><option>USD</option><option>EUR</option></select></label>
+      <label class="cards-field-wide">Notes<textarea name="notes" rows="3" maxlength="5000"></textarea></label>
+    </div>
+    <footer><button type="button" class="btn" data-cards-dialog-close>Cancel</button><button class="btn btn-primary" type="submit">Add card</button></footer>
+  </form>
+</dialog>
+{% endblock %}

@@ -13,6 +13,7 @@ COPILOT_DATA_DIR = DATA_DIR / "copilot"
 FEEDBACK_DB_PATH = DATA_DIR / "feedback.db"
 REVIEW_DB_PATH = DATA_DIR / "review.db"
 OPERATIONS_DB_PATH = DATA_DIR / "operations.db"
+CARDS_DB_PATH = DATA_DIR / "cards.db"
 TASK_METADATA_PATH = Path(
 	os.environ.get(
 		"LUIGI_WEB_TASK_METADATA_FILE",

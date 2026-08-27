@@ -22,6 +22,9 @@ data/review.db
 data/review.db-*
 data/operations.db
 data/operations.db-*
+data/cards.db
+data/cards.db-*
+data/cards-bulk/
 LOCAL_DEPLOYMENT.md
 LOCAL_FEATURE_REQUESTS.md
 

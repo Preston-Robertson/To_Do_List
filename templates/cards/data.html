@@ -1,0 +1,5 @@
+{% extends "cards/layout.html" %}
+{% block cards_content %}
+<header class="cards-page-header"><div><p class="cards-kicker">{{ game.name }}</p><h1>Card data</h1><p>Catalog source and refresh health</p></div></header>
+<section class="cards-data-status" hx-get="/cards/{{ current_game }}/data/status" hx-trigger="load, every 5s" hx-swap="innerHTML"><div class="cards-data-loading">Loading catalog status...</div></section>
+{% endblock %}

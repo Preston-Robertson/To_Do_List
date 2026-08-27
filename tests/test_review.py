@@ -81,6 +81,7 @@ class ReviewTests(unittest.TestCase):
         ):
             page = client.get("/review?scope=daily")
         self.assertEqual(page.status_code, 200)
+        self.assertEqual(page.headers["Cache-Control"], "no-store")
         self.assertIn("Daily review", page.text)
         self.assertIn("Triage overdue work", page.text)
 

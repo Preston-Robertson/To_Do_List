@@ -32,6 +32,10 @@ web-only features, including Finance.
   shared tables.
 - Finance uses a separate app-owned SQLite database configured by
   `LUIGI_WEB_FINANCE_DB`. It must not share tables with LuigiBot.
+- Trading Cards uses one separate app-owned SQLite database configured by
+  `LUIGI_WEB_CARDS_DB`. Its catalog, decks, collection, and price history stay
+  together for transactional joins, but never share tables with LuigiBot or
+  Finance.
 - The coordinated shared Discipline redesign is documented in
   `docs/discipline-v2-plan.md`.
 
@@ -47,6 +51,9 @@ web-only features, including Finance.
   or finance records to unauthenticated clients.
 - Finance exports and backups use `Cache-Control: no-store` and should be kept
   outside the repository.
+- Trading-card deck and collection records stay out of LLM tools and external
+  search. Scryfall bulk files are temporary, image URLs are allow-listed, and
+  all persisted prices use integer minor units plus currency.
 
 ## Architecture
 
@@ -56,6 +63,10 @@ web-only features, including Finance.
 - `luigi_web/db.py`: LuigiBot shared-schema adapter.
 - `luigi_web/finance.py`: app-owned Finance repository, imports, reports, and audit log.
 - `luigi_web/finance_routes.py`: separately authenticated Finance HTTP routes.
+- `luigi_web/cards.py`: app-owned trading-card catalog, deck, and collection repository.
+- `luigi_web/cards_routes.py`: authenticated Trading Cards HTTP routes.
+- `luigi_web/cards_importer.py` / `cards_scryfall.py` / `cards_pokemon.py`:
+  text-deck import and authenticated catalog refresh providers.
 - `luigi_web/feedback.py` / `feedback_routes.py`: local-only Feedback inbox.
 - `luigi_web/task_events.py`: adapter for the LuigiBot-owned shared event ledger.
 - `luigi_web/preview.py` / `preview_routes.py`: constrained Preview helper client/UI.

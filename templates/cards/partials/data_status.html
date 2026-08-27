@@ -1,0 +1,22 @@
+<div class="cards-stat-grid"><div><span>Catalog cards</span><strong>{{ stats.card_count }}</strong></div><div><span>Sets</span><strong>{{ stats.set_count }}</strong></div><div><span>Last price update</span><strong class="cards-stat-text">{{ stats.price_updated_at or 'Never' }}</strong></div></div>
+{% if current_game == 'mtg' %}
+<section class="cards-data-panel">
+  <div><h2>Scryfall catalog</h2><p>Dataset: {{ bulk_kind }} · Automatic refresh: {% if refresh_hours %}every {{ refresh_hours }} hours{% else %}off{% endif %}</p>{% if last_refresh %}<p>Last run: {{ last_refresh.status }} · {{ last_refresh.cards_upserted or 0 }} cards{% if last_refresh.error %}<br><span class="cards-data-error">{{ last_refresh.error }}</span>{% endif %}</p>{% endif %}</div>
+  {% if refresh_state.running %}
+  <div class="cards-refresh-progress"><strong>{{ refresh_state.phase|title }}</strong><span>{{ refresh_state.current }}{% if refresh_state.total %} / {{ refresh_state.total }}{% endif %}</span><progress value="{{ refresh_state.current }}" {% if refresh_state.total %}max="{{ refresh_state.total }}"{% endif %}></progress></div>
+  {% else %}
+  <form method="post" action="/cards/{{ current_game }}/data/scryfall/refresh" hx-post="/cards/{{ current_game }}/data/scryfall/refresh" hx-swap="none"><label>Bulk dataset<select name="kind"><option value="default_cards" {% if bulk_kind == 'default_cards' %}selected{% endif %}>Default cards</option><option value="oracle_cards" {% if bulk_kind == 'oracle_cards' %}selected{% endif %}>Oracle cards</option><option value="unique_artwork" {% if bulk_kind == 'unique_artwork' %}selected{% endif %}>Unique artwork</option></select></label><button type="submit" class="btn btn-primary">Refresh now</button></form>
+  {% endif %}
+</section>
+{% elif current_game == 'pokemon' %}
+<section class="cards-data-panel">
+  <div><h2>Pokemon TCG API catalog</h2><p>Paginated card, set, image, and market data from pokemontcg.io.</p>{% if last_refresh %}<p>Last run: {{ last_refresh.status }} · {{ last_refresh.cards_upserted or 0 }} cards{% if last_refresh.error %}<br><span class="cards-data-error">{{ last_refresh.error }}</span>{% endif %}</p>{% endif %}{% if not pokemon_api_key_set %}<p>An API key is optional; configuring one raises provider rate limits.</p>{% endif %}</div>
+  {% if refresh_state.running %}
+  <div class="cards-refresh-progress"><strong>Import</strong><span>{{ refresh_state.current }}{% if refresh_state.total %} / {{ refresh_state.total }}{% endif %}</span><progress value="{{ refresh_state.current }}" {% if refresh_state.total %}max="{{ refresh_state.total }}"{% endif %}></progress></div>
+  {% else %}
+  <form method="post" action="/cards/{{ current_game }}/data/pokemon/refresh" hx-post="/cards/{{ current_game }}/data/pokemon/refresh" hx-swap="none"><button type="submit" class="btn btn-primary">Refresh now</button></form>
+  {% endif %}
+</section>
+{% else %}
+<section class="cards-data-panel"><div><h2>Manual catalog</h2><p>This game currently uses local manual card records. Add them from the Catalog page.</p></div><a class="btn btn-primary" href="/cards/{{ current_game }}/catalog">Open catalog</a></section>
+{% endif %}
