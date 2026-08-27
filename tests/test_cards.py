@@ -1,6 +1,8 @@
 """Offline storage and import tests for the isolated Trading Cards domain."""
 from __future__ import annotations
 
+import gzip
+import json
 import os
 import sqlite3
 import tempfile
@@ -350,6 +352,35 @@ class CardRepositoryTests(unittest.TestCase):
             cards_scryfall._trusted_url(
                 "https://untrusted.example/cards.json", {"data.scryfall.io"}
             )
+
+    def test_scryfall_manifest_supports_jsonl_and_legacy_json(self) -> None:
+        current = {
+            "jsonl_download_uri": "https://data.scryfall.io/example.jsonl.gz",
+            "compressed_size": 123,
+        }
+        legacy = {
+            "download_uri": "https://data.scryfall.io/example.json",
+            "size": 456,
+        }
+        self.assertEqual(
+            cards_scryfall._download_spec(current),
+            (current["jsonl_download_uri"], 123, ".jsonl.gz"),
+        )
+        self.assertEqual(
+            cards_scryfall._download_spec(legacy),
+            (legacy["download_uri"], 456, ".json"),
+        )
+
+    def test_scryfall_jsonl_gzip_streams_records(self) -> None:
+        path = Path(self.temp_dir.name) / "cards.jsonl.gz"
+        expected = [
+            {"id": "one", "name": "Example One"},
+            {"id": "two", "name": "Example Two"},
+        ]
+        with gzip.open(path, "wb") as handle:
+            for row in expected:
+                handle.write(json.dumps(row).encode("utf-8") + b"\n")
+        self.assertEqual(list(cards_scryfall._iter_bulk(path)), expected)
 
     def test_refresh_lock_releases_when_audit_setup_fails(self) -> None:
         with (

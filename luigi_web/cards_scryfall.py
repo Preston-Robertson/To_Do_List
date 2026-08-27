@@ -1,6 +1,8 @@
 """Scryfall bulk catalog refresh for the isolated trading-card database."""
 from __future__ import annotations
 
+import gzip
+import json
 import logging
 import os
 import threading
@@ -20,6 +22,7 @@ BULK_INDEX_URL = "https://api.scryfall.com/bulk-data"
 BULK_KINDS = ("oracle_cards", "default_cards", "unique_artwork", "all_cards")
 _DOWNLOAD_HOSTS = {"data.scryfall.io"}
 _MAX_BULK_BYTES = 2_000_000_000
+_MAX_JSONL_LINE_BYTES = 10_000_000
 _HEADERS = {
     "User-Agent": "LuigiWeb/1.0 (+https://github.com/Preston-Robertson/To_Do_List)",
     "Accept": "application/json;q=0.9,*/*;q=0.8",
@@ -89,12 +92,26 @@ def _bulk_meta(kind: str) -> dict[str, Any]:
         payload = response.json()
     for entry in payload.get("data", []):
         if entry.get("type") == kind:
-            _trusted_url(entry.get("download_uri"), _DOWNLOAD_HOSTS)
-            size = int(entry.get("size") or 0)
-            if size and size > _MAX_BULK_BYTES:
-                raise ValueError("Scryfall bulk dataset exceeds the configured safety limit")
+            _download_spec(entry)
             return entry
     raise ValueError(f"Scryfall dataset {kind!r} was not found")
+
+
+def _download_spec(metadata: dict[str, Any]) -> tuple[str, int | None, str]:
+    """Normalize current JSONL and legacy JSON-array manifest entries."""
+    if metadata.get("jsonl_download_uri"):
+        url = _trusted_url(metadata["jsonl_download_uri"], _DOWNLOAD_HOSTS)
+        size = int(metadata.get("compressed_size") or 0) or None
+        suffix = ".jsonl.gz"
+    elif metadata.get("download_uri"):
+        url = _trusted_url(metadata["download_uri"], _DOWNLOAD_HOSTS)
+        size = int(metadata.get("size") or 0) or None
+        suffix = ".json"
+    else:
+        raise ValueError("Scryfall bulk metadata has no supported download URL")
+    if size and size > _MAX_BULK_BYTES:
+        raise ValueError("Scryfall bulk dataset exceeds the configured safety limit")
+    return url, size, suffix
 
 
 def _download(
@@ -128,6 +145,17 @@ def _download(
 
 
 def _iter_bulk(path: Path) -> Iterable[dict[str, Any]]:
+    if path.name.endswith(".jsonl.gz"):
+        with gzip.open(path, "rb") as handle:
+            for raw_line in handle:
+                if len(raw_line) > _MAX_JSONL_LINE_BYTES:
+                    raise ValueError("Scryfall JSONL record exceeds the safety limit")
+                if raw_line.strip():
+                    payload = json.loads(raw_line)
+                    if not isinstance(payload, dict):
+                        raise ValueError("Scryfall JSONL record must be an object")
+                    yield payload
+        return
     try:
         import ijson
     except ImportError as exc:  # pragma: no cover - deployment dependency check
@@ -165,13 +193,13 @@ def refresh_mtg(
     error: str | None = None
     try:
         refresh_id = cards.refresh_start("mtg", f"scryfall:{selected}")
-        destination = _bulk_dir() / f"scryfall-{selected}.json"
         metadata = _bulk_meta(selected)
-        size_hint = int(metadata.get("size") or 0) or None
+        download_url, size_hint, suffix = _download_spec(metadata)
+        destination = _bulk_dir() / f"scryfall-{selected}{suffix}"
         if progress:
             progress("download", 0, size_hint)
         _download(
-            metadata["download_uri"],
+            download_url,
             destination,
             lambda current, total: progress("download", current, total or size_hint)
             if progress else None,
