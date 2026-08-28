@@ -2,8 +2,12 @@
 <ul class="cards-search-list">
   {% for card in results %}
   <li>
-    {% if card.image_small %}<img src="{{ card.image_small }}" alt="" loading="lazy" data-card-preview="{{ card.image_normal or card.image_small }}">{% endif %}
-    <div><strong>{{ card.name }}</strong><span>{{ card.set_code|upper if card.set_code else 'No set' }}{% if card.collector_number %} · {{ card.collector_number }}{% endif %} · {{ card.type_line or 'Type not recorded' }} · {{ card.price_usd_minor | money_minor }}</span></div>
+    <button type="button" class="cards-search-card-button"
+            aria-label="View details for {{ card.name }}"
+            data-card-detail-url="/cards/{{ current_game }}/cards/{{ card.id }}/detail">
+      {% if card.image_small %}<img src="{{ card.image_small }}" alt="" loading="lazy" data-card-preview="{{ card.image_normal or card.image_small }}">{% endif %}
+      <span><strong>{{ card.name }}</strong><small>{{ card.set_code|upper if card.set_code else 'No set' }}{% if card.collector_number %} · {{ card.collector_number }}{% endif %} · {{ card.type_line or 'Type not recorded' }} · {{ card.price_usd_minor | money_minor }}</small></span>
+    </button>
     {% if for_deck %}
     <form method="post" action="/cards/{{ current_game }}/decks/{{ for_deck }}/cards" hx-post="/cards/{{ current_game }}/decks/{{ for_deck }}/cards" hx-target="#deck-card-panel" hx-swap="outerHTML">
       <input type="hidden" name="card_id" value="{{ card.id }}"><input type="number" name="qty" value="1" min="1" max="9999" aria-label="Quantity"><select name="board" aria-label="Board"><option value="main">Main</option><option value="side">Side</option><option value="maybe">Maybe</option></select><button class="btn btn-primary btn-small" type="submit">Add</button><button class="btn btn-small" type="submit" name="set_as_commander" value="1">Commander</button>

@@ -37,9 +37,23 @@ schema `user_version` are enabled by the repository adapter.
 
 - Game switcher for MTG, Pokemon TCG, and Riftbound.
 - Searchable, set-filtered catalog browser.
+- Rich card inspector with provider artwork, double-faced card switching,
+  rules, stats, legalities, printings, prices, trusted card links, local deck
+  usage, and collection records.
+- Visual Art & printings picker with transactional Use this printing actions
+  for existing deck slots and collection records. Swaps preserve deck
+  quantity/board/category and collection quantity/variant/acquisition metadata;
+  an existing destination printing is merged safely.
+- Scryfall-style advanced local search for rules/type text, colors, commander
+  identity, mana and numeric stats, games, format legality, set/group, rarity,
+  all current Scryfall card criteria, prices, artist/flavor/lore, language,
+  sorting, unique cards/art, and preferred printing. Extra cards are imported
+  by new Scryfall refreshes but remain hidden unless Include Extras or an
+  extra-specific criterion is selected.
 - Manual catalog records for games without a configured provider.
 - Deck create, edit, archive, delete, tag, and commander workflows.
 - Mainboard, sideboard, maybeboard, and commander card groups.
+- Persistent Table and grouped overlapping Stacks deck views.
 - Archidekt, Moxfield, MTGO, MTGA, and plain-text list parsing.
 - Dry-run import preview and one-transaction import application.
 - Plain-text deck export.

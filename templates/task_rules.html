@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="board-header"><div><h1>Task rules</h1><span class="muted-hint">Dependencies prevent premature work; reminders stay local</span></div></section>
+<section class="board-header"><div><h1>Task rules</h1><span class="muted-hint">Dependencies prevent premature work; reminders stay local</span></div><a class="btn btn-ghost" href="/tasks">Back to tasks</a></section>
 <section class="rules-grid">
   <article class="rules-panel"><h2>Add dependency</h2><p class="muted-hint">The dependent task cannot enter In Progress or Completed until the blocker is complete.</p>
     <form class="entity-form" hx-post="/task-rules/dependencies" hx-swap="none">

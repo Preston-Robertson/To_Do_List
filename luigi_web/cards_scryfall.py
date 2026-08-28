@@ -209,10 +209,6 @@ def refresh_mtg(
             progress("import", 0, None)
         batch: list[dict[str, Any]] = []
         for payload in _iter_bulk(destination):
-            if payload.get("layout") in {
-                "token", "double_faced_token", "emblem", "art_series",
-            }:
-                continue
             batch.append(payload)
             if len(batch) >= 500:
                 imported += cards.upsert_scryfall_cards(batch)

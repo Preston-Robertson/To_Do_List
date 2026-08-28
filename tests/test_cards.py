@@ -128,6 +128,251 @@ class CardRepositoryTests(unittest.TestCase):
         self.assertIsNone(row["image_normal"])
         self.assertIsNone(row["image_art_crop"])
 
+    def test_rich_card_detail_includes_faces_usage_and_trusted_links(self) -> None:
+        payload = _mtg_card("detail-card", "Front Example // Back Example")
+        payload.update({
+            "oracle_id": "detail-oracle",
+            "layout": "modal_dfc",
+            "legalities": {"commander": "legal", "standard": "not_legal"},
+            "scryfall_uri": "https://scryfall.com/card/tst/1/example",
+            "purchase_uris": {
+                "tcgplayer": "https://www.tcgplayer.com/product/1",
+                "cardmarket": "https://untrusted.example/card",
+            },
+            "card_faces": [
+                {
+                    "name": "Front Example", "type_line": "Creature",
+                    "oracle_text": "Front rules", "power": "2", "toughness": "2",
+                    "image_uris": {"normal": "https://cards.scryfall.io/normal/front/a/a/example.jpg"},
+                },
+                {
+                    "name": "Back Example", "type_line": "Creature",
+                    "oracle_text": "Back rules", "power": "4", "toughness": "4",
+                    "image_uris": {"normal": "https://cards.scryfall.io/normal/back/a/a/example.jpg"},
+                },
+            ],
+        })
+        cards.upsert_scryfall_cards([payload, {**payload, "id": "detail-card-2", "set": "ALT"}])
+        card = cards.find_card("mtg", payload["name"], set_code="TST")
+        deck_id = cards.create_deck("mtg", "Detail Deck")
+        cards.add_card_to_deck(deck_id, card["id"], qty=2)
+        cards.add_to_collection(card["id"], qty=1)
+
+        detail = cards.card_detail(card["id"], "mtg")
+
+        self.assertEqual([face["name"] for face in detail["faces"]], ["Front Example", "Back Example"])
+        self.assertEqual(detail["legal_groups"]["legal"], ["Commander"])
+        self.assertEqual(len(detail["printings"]), 2)
+        self.assertEqual(detail["decks"][0]["qty"], 2)
+        self.assertEqual(detail["collection"][0]["qty"], 1)
+        self.assertEqual([link["label"] for link in detail["links"]], ["Scryfall", "TCGplayer"])
+        self.assertNotIn("raw_json", detail)
+
+    def test_deck_printing_swap_preserves_and_merges_slots(self) -> None:
+        base = {
+            "name": "Swap Example", "oracle_id": "swap-oracle",
+            "set_name": "Synthetic Set", "type_line": "Artifact",
+            "prices": {"usd": "1.00"},
+        }
+        cards.upsert_scryfall_cards([
+            {**base, "id": "swap-a", "set": "aaa", "collector_number": "1"},
+            {**base, "id": "swap-b", "set": "bbb", "collector_number": "2"},
+            {**base, "id": "swap-c", "set": "ccc", "collector_number": "3"},
+            {**base, "id": "other", "oracle_id": "other", "name": "Other Card"},
+        ])
+        first = cards.find_card("mtg", "Swap Example", set_code="aaa")
+        second = cards.find_card("mtg", "Swap Example", set_code="bbb")
+        third = cards.find_card("mtg", "Swap Example", set_code="ccc")
+        unrelated = cards.find_card("mtg", "Other Card")
+        deck_id = cards.create_deck("mtg", "Swap Deck")
+        cards.add_card_to_deck(
+            deck_id, first["id"], qty=2, board="commander", category="Leader"
+        )
+        source = cards.list_deck_cards(deck_id)[0]
+
+        changed = cards.swap_deck_card_printing(
+            deck_id, source["id"], second["id"], "mtg"
+        )
+        row = cards.list_deck_cards(deck_id)[0]
+        self.assertFalse(changed["merged"])
+        self.assertEqual((row["card_id"], row["qty"], row["category"]), (second["id"], 2, "Leader"))
+        self.assertEqual(cards.get_deck(deck_id)["commander_card_id"], second["id"])
+
+        cards.add_card_to_deck(
+            deck_id, third["id"], qty=1, board="commander", category="Target"
+        )
+        merged = cards.swap_deck_card_printing(
+            deck_id, row["id"], third["id"], "mtg"
+        )
+        rows = cards.list_deck_cards(deck_id)
+        self.assertTrue(merged["merged"])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]["qty"], rows[0]["category"]), (3, "Leader"))
+        with self.assertRaisesRegex(ValueError, "alternate printing"):
+            cards.swap_deck_card_printing(
+                deck_id, rows[0]["id"], unrelated["id"], "mtg"
+            )
+
+    def test_collection_printing_swap_preserves_and_merges_records(self) -> None:
+        base = {
+            "name": "Collection Swap", "oracle_id": "collection-oracle",
+            "set_name": "Synthetic Set", "prices": {"usd": "1.00"},
+        }
+        cards.upsert_scryfall_cards([
+            {**base, "id": "collection-a", "set": "aaa"},
+            {**base, "id": "collection-b", "set": "bbb"},
+        ])
+        first = cards.find_card("mtg", "Collection Swap", set_code="aaa")
+        second = cards.find_card("mtg", "Collection Swap", set_code="bbb")
+        cards.add_to_collection(
+            first["id"], qty=2, acquired_date="2026-02-01",
+            acquired_price="2.00", notes="source",
+        )
+        cards.add_to_collection(
+            second["id"], qty=1, acquired_date="2026-01-01",
+            acquired_price="5.00", notes="destination",
+        )
+        source = next(
+            row for row in cards.list_collection("mtg")
+            if row["card_id"] == first["id"]
+        )
+
+        result = cards.swap_collection_printing(
+            source["id"], second["id"], "mtg"
+        )
+        record = cards.get_collection_entry(result["collection_id"], "mtg")
+
+        self.assertTrue(result["merged"])
+        self.assertEqual(record["qty"], 3)
+        self.assertEqual(record["acquired_price_minor"], 300)
+        self.assertEqual(record["acquired_date"], "2026-01-01")
+        self.assertEqual(record["notes"], "destination\nsource")
+
+    def test_advanced_catalog_filter_matrix(self) -> None:
+        base = {
+            "set_name": "Example Block Set", "layout": "normal", "lang": "en",
+            "games": ["paper"], "block": "Example Block", "set_type": "expansion",
+            "nonfoil": True, "booster": True,
+        }
+        red = {
+            **base, "id": "red-1", "oracle_id": "oracle-red",
+            "illustration_id": "art-red", "name": "Flame Scholar", "set": "red",
+            "collector_number": "10", "rarity": "rare",
+            "type_line": "Creature — Human Wizard", "mana_cost": "{1}{R}",
+            "cmc": 2, "colors": ["R"], "color_identity": ["R"],
+            "oracle_text": "Draw a card whenever you cast a spell.",
+            "power": "2", "toughness": "3", "artist": "Alice Example",
+            "flavor_text": "Fire remembers every name.", "full_art": True,
+            "legalities": {"commander": "legal", "standard": "not_legal"},
+            "released_at": "2025-01-01", "prices": {"usd": "5.00", "tix": "2.00"},
+        }
+        blue = {
+            **base, "id": "blue-1", "oracle_id": "oracle-blue",
+            "illustration_id": "art-blue", "name": "Quiet Denial", "set": "blu",
+            "collector_number": "2", "rarity": "uncommon", "type_line": "Instant",
+            "mana_cost": "{U}{U}", "cmc": 2, "colors": ["U"],
+            "color_identity": ["U"], "oracle_text": "Counter target spell.",
+            "artist": "Bob Example", "flavor_text": "Silence wins.",
+            "legalities": {"commander": "legal", "standard": "legal"},
+            "games": ["paper", "mtgo"], "released_at": "2024-01-01",
+            "prices": {"usd": "1.00", "tix": "0.10"},
+        }
+        cards.upsert_scryfall_cards([
+            red, {
+                **red, "id": "red-2", "set": "alt", "reprint": True,
+                "released_at": "2026-01-01", "prices": {"usd": "4.00", "tix": "1.50"},
+            }, blue,
+        ])
+
+        result = cards.browse_catalog("mtg", filters={
+            "q": "Flame", "oracle": "draw card", "type_line": "wizard",
+            "colors": ["R"], "color_mode": "exact", "identity": ["R"],
+            "mana_cost": "{1}{R}", "stat": "power", "stat_operator": ">=",
+            "stat_value": "2", "games": ["paper"], "format": "commander",
+            "legal_status": "legal", "group": "Example", "rarities": ["rare"],
+            "criteria": ["fullart"], "price_currency": "usd",
+            "price_operator": ">=", "price_value": "4.50", "artist": "Alice",
+            "flavor": "remembers", "lore": "Scholar", "language": "en",
+            "unique": "cards",
+        }, page_size=96)
+
+        self.assertEqual([row["name"] for row in result["rows"]], ["Flame Scholar"])
+        self.assertEqual(
+            [row["name"] for row in cards.browse_catalog(
+                "mtg", filters={"colors": ["U"], "color_mode": "at_most"},
+                page_size=96,
+            )["rows"]],
+            ["Quiet Denial"],
+        )
+        self.assertEqual(len(cards.browse_catalog(
+            "mtg", filters={"q": "Flame", "unique": "prints"}, page_size=96,
+        )["rows"]), 2)
+        self.assertEqual(
+            [row["set_code"] for row in cards.browse_catalog(
+                "mtg", filters={"set_code": "alt", "unique": "cards"},
+                page_size=96,
+            )["rows"]],
+            ["alt"],
+        )
+        self.assertEqual(
+            [row["name"] for row in cards.browse_catalog(
+                "mtg", filters={"games": ["mtgo"], "games_mode": "not", "unique": "cards"},
+                page_size=96,
+            )["rows"]],
+            ["Flame Scholar"],
+        )
+        with self.assertRaisesRegex(ValueError, "non-negative"):
+            cards.browse_catalog("mtg", filters={"price_value": "-1"})
+        preferred = cards.browse_catalog(
+            "mtg", filters={"q": "Flame", "unique": "cards", "prefer": "newest"},
+            page_size=96,
+        )["rows"]
+        self.assertEqual(preferred[0]["set_code"], "alt")
+        self.assertEqual(
+            [row["name"] for row in cards.browse_catalog(
+                "mtg", filters={
+                    "price_currency": "tix", "price_operator": ">=",
+                    "price_value": "1", "unique": "cards",
+                }, page_size=96,
+            )["rows"]],
+            ["Flame Scholar"],
+        )
+
+    def test_extra_cards_are_imported_but_hidden_by_default(self) -> None:
+        regular = _mtg_card("regular-card", "Regular Card")
+        token = {
+            **_mtg_card("token-card", "Example Token"),
+            "layout": "token", "set_type": "token",
+        }
+        cards.upsert_scryfall_cards([regular, token])
+        self.assertEqual(
+            [row["name"] for row in cards.browse_catalog("mtg", page_size=96)["rows"]],
+            ["Regular Card"],
+        )
+        self.assertEqual(
+            {row["name"] for row in cards.browse_catalog(
+                "mtg", filters={"include_extras": "1"}, page_size=96,
+            )["rows"]},
+            {"Regular Card", "Example Token"},
+        )
+        self.assertEqual(
+            [row["name"] for row in cards.browse_catalog(
+                "mtg", filters={"criteria": ["token"]}, page_size=96,
+            )["rows"]],
+            ["Example Token"],
+        )
+
+    def test_every_scryfall_criterion_has_valid_local_sql(self) -> None:
+        cards.upsert_scryfall_cards([_mtg_card("criteria-card", "Criteria Card")])
+        for criterion in cards.MTG_CRITERIA:
+            with self.subTest(criterion=criterion):
+                result = cards.browse_catalog(
+                    "mtg",
+                    filters={"criteria": [criterion], "include_extras": "1"},
+                    page_size=12,
+                )
+                self.assertIn("rows", result)
+
     def test_deck_collection_and_export_lifecycle(self) -> None:
         relic, _ = self.seed()
         deck_id = cards.create_deck("mtg", "Example Deck", "commander")
@@ -343,7 +588,7 @@ class CardRepositoryTests(unittest.TestCase):
             result = cards_scryfall.refresh_mtg("default_cards")
 
         self.assertIsNone(result["error"])
-        self.assertEqual(result["cards_upserted"], 1)
+        self.assertEqual(result["cards_upserted"], 2)
         self.assertEqual(cards.last_refresh("mtg")["status"], "ok")
         self.assertFalse(list(Path(self.temp_dir.name).rglob("*.json*")))
 

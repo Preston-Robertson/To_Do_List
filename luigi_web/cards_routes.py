@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 import re
 from typing import Any
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -143,6 +143,35 @@ def _value_error(exc: ValueError) -> HTTPException:
     return HTTPException(422, str(exc))
 
 
+def _catalog_filter_values(request: Request) -> dict[str, Any]:
+    query = request.query_params
+    values: dict[str, Any] = {
+        key: query.get(key, "")
+        for key in (
+            "q", "oracle", "type_line", "type_mode", "color_mode",
+            "mana_cost", "stat", "stat_operator", "stat_value", "games_mode", "format",
+            "legal_status", "set_code", "group", "price_currency",
+            "price_operator", "price_value", "artist", "flavor", "lore",
+            "language", "order", "direction", "unique", "prefer",
+            "include_extras",
+        )
+    }
+    for key in ("colors", "identity", "games", "rarities", "criteria"):
+        values[key] = query.getlist(key)
+    return values
+
+
+def _catalog_page_url(request: Request, page: int) -> str:
+    pairs = [
+        (key, value) for key, value in request.query_params.multi_items()
+        if key != "page"
+    ]
+    if page > 1:
+        pairs.append(("page", str(page)))
+    encoded = urlencode(pairs)
+    return f"{request.url.path}?{encoded}" if encoded else request.url.path
+
+
 @router.get("")
 def cards_root() -> RedirectResponse:
     return RedirectResponse("/cards/mtg/decks", status_code=303)
@@ -164,8 +193,9 @@ def catalog_page(
 ) -> Response:
     game = _require_game(game_code)
     try:
+        requested_filters = _catalog_filter_values(request)
         catalog = cards.browse_catalog(
-            game_code, query=q, set_code=set_code, page=page
+            game_code, query=q, set_code=set_code, filters=requested_filters, page=page
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -179,8 +209,26 @@ def catalog_page(
             catalog=catalog,
             sets=cards.list_sets(game_code),
             stats=cards.catalog_stats(game_code),
-            q=q,
-            set_code=set_code,
+            q=catalog["filters"]["q"],
+            set_code=catalog["filters"]["set_code"],
+            filters=catalog["filters"],
+            active_filter_count=catalog["active_filter_count"],
+            previous_page_url=(
+                _catalog_page_url(request, catalog["page"] - 1)
+                if catalog["page"] > 1 else None
+            ),
+            next_page_url=(
+                _catalog_page_url(request, catalog["page"] + 1)
+                if catalog["page"] < catalog["pages"] else None
+            ),
+            mtg_colors=cards.MTG_COLORS,
+            mtg_games=cards.MTG_GAMES,
+            mtg_formats=cards.MTG_FORMATS,
+            mtg_rarities=cards.MTG_RARITIES,
+            mtg_criteria_options=cards.MTG_CRITERIA_OPTIONS,
+            mtg_languages=cards.MTG_LANGUAGES,
+            catalog_sorts=cards.CATALOG_SORTS,
+            catalog_prefers=cards.CATALOG_PREFERS,
         ),
     )
 
@@ -197,6 +245,82 @@ async def catalog_manual_create(request: Request, game_code: str) -> Response:
     return _redirect(
         request,
         f"/cards/{game_code}/catalog?q={quote(str(card['name']))}",
+    )
+
+
+@router.get("/{game_code}/cards/{card_id}/detail", response_class=HTMLResponse)
+def card_detail(
+    request: Request,
+    game_code: str,
+    card_id: int,
+    deck_id: int | None = None,
+    deck_card_id: int | None = None,
+    collection_id: int | None = None,
+) -> Response:
+    _require_game(game_code)
+    detail = cards.card_detail(card_id, game_code)
+    if not detail:
+        raise HTTPException(404, "Card not found")
+    swap_context: dict[str, Any] | None = None
+    context_pairs: list[tuple[str, str]] = []
+    has_deck_context = deck_id is not None or deck_card_id is not None
+    if has_deck_context and collection_id is not None:
+        raise HTTPException(400, "Choose a deck or collection printing context")
+    if has_deck_context:
+        if deck_id is None or deck_card_id is None:
+            raise HTTPException(400, "Deck printing context is incomplete")
+        _require_deck(game_code, deck_id)
+        slot = cards.get_deck_card(deck_id, deck_card_id, game_code)
+        if not slot:
+            raise HTTPException(404, "Deck card not found")
+        if not cards.printings_are_compatible(
+            int(slot["card_id"]), card_id, game_code
+        ):
+            raise HTTPException(422, "Selected card is not an alternate printing")
+        context_pairs = [
+            ("deck_id", str(deck_id)),
+            ("deck_card_id", str(deck_card_id)),
+        ]
+        swap_context = {
+            "kind": "deck",
+            "label": f"{slot['qty']}x in {slot['board'].title()}",
+            "current_card_id": int(slot["card_id"]),
+            "action_url": (
+                f"/cards/{game_code}/decks/{deck_id}/cards/"
+                f"{deck_card_id}/printing"
+            ),
+        }
+    elif collection_id is not None:
+        record = cards.get_collection_entry(collection_id, game_code)
+        if not record:
+            raise HTTPException(404, "Collection entry not found")
+        if not cards.printings_are_compatible(
+            int(record["card_id"]), card_id, game_code
+        ):
+            raise HTTPException(422, "Selected card is not an alternate printing")
+        context_pairs = [("collection_id", str(collection_id))]
+        swap_context = {
+            "kind": "collection",
+            "label": (
+                f"{record['qty']}x · "
+                f"{'Foil' if record['foil'] else 'Regular'} · "
+                f"{record['condition']}"
+            ),
+            "current_card_id": int(record["card_id"]),
+            "action_url": (
+                f"/cards/{game_code}/collection/{collection_id}/printing"
+            ),
+        }
+    return _render(
+        "cards/partials/card_detail.html",
+        _ctx(
+            request,
+            game_code,
+            page_title=detail["name"],
+            card=detail,
+            swap_context=swap_context,
+            detail_context_query=urlencode(context_pairs),
+        ),
     )
 
 
@@ -432,6 +556,24 @@ def deck_card_delete(
     return _redirect(request, f"/cards/{game_code}/decks/{deck_id}")
 
 
+@router.post("/{game_code}/decks/{deck_id}/cards/{deck_card_id}/printing")
+def deck_card_printing_update(
+    request: Request,
+    game_code: str,
+    deck_id: int,
+    deck_card_id: int,
+    target_card_id: int = Form(...),
+) -> Response:
+    _require_deck(game_code, deck_id)
+    try:
+        cards.swap_deck_card_printing(
+            deck_id, deck_card_id, target_card_id, game_code
+        )
+    except ValueError as exc:
+        raise _value_error(exc) from exc
+    return _refresh(request, f"/cards/{game_code}/decks/{deck_id}")
+
+
 @router.get("/{game_code}/decks/{deck_id}/notes")
 def deck_notes_load(game_code: str, deck_id: int) -> JSONResponse:
     deck = _require_deck(game_code, deck_id)
@@ -595,6 +737,23 @@ def collection_delete(
         raise _value_error(exc) from exc
     if not deleted:
         raise HTTPException(404, "Collection entry not found")
+    return _refresh(request, f"/cards/{game_code}/collection")
+
+
+@router.post("/{game_code}/collection/{collection_id}/printing")
+def collection_printing_update(
+    request: Request,
+    game_code: str,
+    collection_id: int,
+    target_card_id: int = Form(...),
+) -> Response:
+    _require_game(game_code)
+    try:
+        cards.swap_collection_printing(
+            collection_id, target_card_id, game_code
+        )
+    except ValueError as exc:
+        raise _value_error(exc) from exc
     return _refresh(request, f"/cards/{game_code}/collection")
 
 

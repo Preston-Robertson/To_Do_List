@@ -21,32 +21,32 @@
     >+ New trigger</button>
   </header>
 
-  <div class="table-wrap">
-    <table class="data-table">
+  <div class="table-wrap followups-table-wrap">
+    <table class="data-table followups-table">
       <thead>
         <tr>
-          <th>Trigger</th>
-          <th>Follow-up</th>
-          <th>Category</th>
-          <th>Group</th>
-          <th>Sub-group</th>
-          <th>Priority</th>
-          <th>Est.h</th>
-          <th>Offset d</th>
-          <th></th>
+          <th scope="col">Trigger</th>
+          <th scope="col">Follow-up</th>
+          <th scope="col">Category</th>
+          <th scope="col">Group</th>
+          <th scope="col">Sub-group</th>
+          <th scope="col">Priority</th>
+          <th scope="col">Est.h</th>
+          <th scope="col">Offset d</th>
+          <th scope="col"><span class="sr-only">Actions</span></th>
         </tr>
       </thead>
       <tbody>
         {% for f in rows %}
           <tr id="row-{{ f.uuid }}">
-            <td>{{ f.trigger_task }}</td>
-            <td>{{ f.follow_up_task }}</td>
-            <td>{{ f.catagory or '' }}</td>
-            <td>{{ f.task_group or '' }}</td>
-            <td>{{ f.subgroup or '' }}</td>
-            <td>{{ f.priority or 0 }}</td>
-            <td>{{ f.estimated_time or '' }}</td>
-            <td>{{ f.due_offset_days if f.due_offset_days is not none else '' }}</td>
+            <td class="followups-primary" data-label="Trigger">{{ f.trigger_task }}</td>
+            <td class="followups-primary" data-label="Follow-up">{{ f.follow_up_task }}</td>
+            <td data-label="Category">{{ f.catagory or '' }}</td>
+            <td data-label="Group">{{ f.task_group or '' }}</td>
+            <td data-label="Sub-group">{{ f.subgroup or '' }}</td>
+            <td data-label="Priority">{{ f.priority or 0 }}</td>
+            <td data-label="Estimated hours">{{ f.estimated_time or '' }}</td>
+            <td data-label="Due offset">{{ f.due_offset_days if f.due_offset_days is not none else '' }}</td>
             <td class="row-actions">
               <button class="btn btn-tiny"
                 hx-get="/follow-ups/{{ f.uuid }}/edit"

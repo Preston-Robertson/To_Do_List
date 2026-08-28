@@ -1,5 +1,21 @@
 {% set layer = t._calendar_layer or 'planned' %}
-{% if layer == 'completed' and not t.source_exists %}
+{% if layer == 'activity' %}
+{% if t.source_exists %}<button type="button"
+  class="calendar-item layer-activity activity-{{ t._activity_kind|replace('_', '-') }}"
+  data-calendar-layer="{{ layer }}"
+  hx-get="/{{ 'recurring' if t.source == 'recurring' else 'tasks' }}/{{ t.uuid }}/edit"
+  hx-target="#modal-body"
+  onclick="openModal()"
+  title="{{ t._activity_label }} {{ t._activity_when }} · {{ t.task }}">
+{% else %}<span class="calendar-item calendar-item-snapshot layer-activity"
+  data-calendar-layer="{{ layer }}"
+  title="{{ t._activity_label }} {{ t._activity_when }} · source task no longer exists">
+{% endif %}
+  <span class="calendar-item-kind">{{ t._activity_label }}</span>
+  {% if t.source == 'recurring' %}<span aria-hidden="true">↻</span>{% endif %}
+  <span class="calendar-item-title">{{ t.task }}</span>
+{% if t.source_exists %}</button>{% else %}</span>{% endif %}
+{% elif layer == 'completed' and not t.source_exists %}
 <span class="calendar-item calendar-item-snapshot is-completed"
   data-calendar-layer="{{ layer }}"
   title="Completed {{ t.completed_time }} · source task no longer exists">

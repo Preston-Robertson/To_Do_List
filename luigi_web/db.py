@@ -1332,6 +1332,79 @@ def list_task_completion_events(
     return status, shaped
 
 
+def list_calendar_activity_events(
+    start: date,
+    end: date,
+) -> tuple[task_events.Capability, list[dict[str, Any]]]:
+    with get_engine().connect() as conn:
+        status = task_events.capability(conn)
+        if status.available:
+            rows = task_events.list_calendar_activity(
+                conn,
+                start_date=start.isoformat(),
+                end_date=end.isoformat(),
+            )
+        else:
+            rows = _rows(conn.execute(text("""
+                SELECT uuid AS source_task_uuid, 'tasks' AS source_table,
+                       task AS task_snapshot, catagory AS catagory_snapshot,
+                       task_creation AS occurred_at, 'created' AS event_type,
+                       1 AS source_exists, NULL AS event_uuid,
+                       NULL AS effective_date, NULL AS actor_source
+                FROM tasks
+                WHERE task_creation IS NOT NULL
+                  AND SUBSTR(task_creation, 1, 10) BETWEEN :start AND :end
+                UNION ALL
+                SELECT uuid, 'recurring_tasks', task, catagory, task_creation,
+                       'created', 1, NULL, NULL, NULL
+                FROM recurring_tasks
+                WHERE task_creation IS NOT NULL
+                  AND SUBSTR(task_creation, 1, 10) BETWEEN :start AND :end
+                ORDER BY occurred_at, task_snapshot
+            """), {"start": start.isoformat(), "end": end.isoformat()}))
+    labels = {
+        "created": "Created",
+        task_events.COMPLETION_REVERSED: "Reopened",
+    }
+    shaped: list[dict[str, Any]] = []
+    for row in rows:
+        if row["source_table"] not in {"tasks", "recurring_tasks"}:
+            continue
+        event_date = row.get("effective_date")
+        if not event_date:
+            try:
+                event_date = clock.local_date_from_timestamp(
+                    str(row["occurred_at"])
+                )
+            except ValueError:
+                event_date = str(row["occurred_at"])[:10]
+        if not start.isoformat() <= str(event_date) <= end.isoformat():
+            continue
+        kind = str(row["event_type"])
+        label = labels.get(kind, kind.replace("_", " ").title())
+        shaped.append({
+            "uuid": row["source_task_uuid"],
+            "task": row["task_snapshot"],
+            "catagory": row.get("catagory_snapshot"),
+            "priority": 0,
+            "status": label,
+            "completed": 0,
+            "due_date": event_date,
+            "source": (
+                "recurring" if row["source_table"] == "recurring_tasks"
+                else "task"
+            ),
+            "source_exists": bool(row.get("source_exists")),
+            "_event_uuid": row.get("event_uuid"),
+            "_activity_kind": kind,
+            "_activity_label": label,
+            "_activity_when": row["occurred_at"],
+            "_calendar_layer": "activity",
+            "_history_limited": not status.available,
+        })
+    return status, shaped
+
+
 def delete_recurring(row_uuid: str) -> dict[str, Any]:
     return _delete_task_like("recurring_tasks", row_uuid)
 

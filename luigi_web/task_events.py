@@ -348,6 +348,50 @@ def list_active_completions(
     return [dict(row) for row in rows]
 
 
+def list_calendar_activity(
+    conn: Any,
+    *,
+    start_date: str,
+    end_date: str,
+) -> list[dict[str, Any]]:
+    """Return non-completion task events for an inclusive calendar range."""
+    if not capability(conn).available:
+        return []
+    rows = conn.execute(text("""
+        SELECT
+            event.event_uuid,
+            event.event_type,
+            event.source_task_uuid,
+            event.source_table,
+            event.task_snapshot,
+            event.catagory_snapshot,
+            event.occurred_at,
+            event.effective_date,
+            event.actor_source,
+            CASE
+                WHEN event.source_table = 'tasks' THEN EXISTS (
+                    SELECT 1 FROM tasks WHERE uuid = event.source_task_uuid
+                )
+                WHEN event.source_table = 'recurring_tasks' THEN EXISTS (
+                    SELECT 1 FROM recurring_tasks
+                    WHERE uuid = event.source_task_uuid
+                )
+                ELSE 0
+            END AS source_exists
+        FROM task_events AS event
+        WHERE event.event_type != :completed_type
+          AND COALESCE(event.effective_date, SUBSTR(event.occurred_at, 1, 10))
+              BETWEEN :start_date AND :end_date
+        ORDER BY COALESCE(event.effective_date, event.occurred_at),
+                 event.occurred_at, event.task_snapshot
+    """), {
+        "completed_type": COMPLETED,
+        "start_date": start_date,
+        "end_date": end_date,
+    }).mappings().all()
+    return [dict(row) for row in rows]
+
+
 def list_events(
     conn: Any,
     *,

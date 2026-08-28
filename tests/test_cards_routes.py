@@ -69,6 +69,85 @@ class CardRouteTests(unittest.TestCase):
                 self.assertEqual(response.headers["Cache-Control"], "no-store")
                 self.assertIn("Trading Cards", response.text)
 
+    def test_rich_card_detail_route_and_stack_markup(self) -> None:
+        deck_id = cards.create_deck("mtg", "Visual Deck")
+        cards.add_card_to_deck(deck_id, self.card["id"], qty=2, category="Engine")
+        detail = self.client.get(
+            f"/cards/mtg/cards/{self.card['id']}/detail"
+        )
+        deck = self.client.get(f"/cards/mtg/decks/{deck_id}")
+        self.assertEqual(detail.status_code, 200)
+        self.assertIn("Card info", detail.text)
+        self.assertIn("Art & printings", detail.text)
+        self.assertEqual(detail.headers["Cache-Control"], "no-store")
+        self.assertIn('data-deck-view="stacks"', deck.text)
+        self.assertIn("deck-stack-card", deck.text)
+
+    def test_inspector_can_swap_deck_and_collection_printings(self) -> None:
+        alternate_payload = {
+            "id": "route-card-alt", "oracle_id": "route-oracle",
+            "name": "Route Example", "set": "ALT",
+            "set_name": "Alternate Set", "collector_number": "10",
+            "type_line": "Artifact", "prices": {"usd": "3.00"},
+        }
+        original_payload = {
+            "id": "route-card", "oracle_id": "route-oracle",
+            "name": "Route Example", "set": "TST",
+            "set_name": "Synthetic Set", "collector_number": "9",
+            "type_line": "Artifact", "prices": {"usd": "2.50"},
+        }
+        cards.upsert_scryfall_cards([original_payload, alternate_payload])
+        self.card = cards.find_card("mtg", "Route Example", set_code="TST")
+        alternate = cards.find_card("mtg", "Route Example", set_code="ALT")
+        deck_id = cards.create_deck("mtg", "Printing Route Deck")
+        cards.add_card_to_deck(deck_id, self.card["id"], qty=2)
+        slot = cards.list_deck_cards(deck_id)[0]
+        cards.add_to_collection(self.card["id"], qty=1)
+        collection = cards.list_collection("mtg")[0]
+        headers = self.csrf_headers()
+
+        detail = self.client.get(
+            f"/cards/mtg/cards/{alternate['id']}/detail",
+            params={"deck_id": deck_id, "deck_card_id": slot["id"]},
+        )
+        self.assertEqual(detail.status_code, 200)
+        self.assertIn("Use this printing", detail.text)
+        self.assertIn(f"deck_id={deck_id}", detail.text)
+        self.assertIn("card-printing-grid", detail.text)
+
+        deck_swap = self.client.post(
+            f"/cards/mtg/decks/{deck_id}/cards/{slot['id']}/printing",
+            data={"target_card_id": alternate["id"]},
+            headers=headers,
+        )
+        self.assertEqual(deck_swap.status_code, 204)
+        self.assertEqual(cards.list_deck_cards(deck_id)[0]["card_id"], alternate["id"])
+
+        collection_swap = self.client.post(
+            f"/cards/mtg/collection/{collection['id']}/printing",
+            data={"target_card_id": alternate["id"]},
+            headers=headers,
+        )
+        self.assertEqual(collection_swap.status_code, 204)
+        self.assertEqual(cards.list_collection("mtg")[0]["card_id"], alternate["id"])
+
+    def test_advanced_catalog_route_preserves_repeated_filters(self) -> None:
+        response = self.client.get(
+            "/cards/mtg/catalog",
+            params=[
+                ("q", "Route"), ("colors", "R"), ("colors", "U"),
+                ("rarities", "rare"), ("order", "usd"),
+                ("direction", "desc"),
+            ],
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Advanced filters", response.text)
+        self.assertIn('name="colors" value="R" checked', response.text)
+        self.assertIn('name="colors" value="U" checked', response.text)
+        self.assertIn('name="order"', response.text)
+        self.assertIn('name="criteria" value="borderless"', response.text)
+        self.assertIn('name="include_extras" value="1"', response.text)
+
     def test_mutations_require_csrf(self) -> None:
         rejected = self.client.post(
             "/cards/mtg/decks", data={"name": "Rejected Deck"}

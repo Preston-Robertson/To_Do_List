@@ -1,8 +1,12 @@
 {% extends "base.html" %}
 {% block content %}
 <section class="board-header">
-  <div><h1>Task activity</h1><span class="muted-hint">Completion, reversal, creation, and Discipline history</span></div>
+  <div><h1>Calendar</h1><span class="muted-hint">Task activity · Completion, reversal, creation, and Discipline history</span></div>
 </section>
+<nav class="view-switcher calendar-section-tabs" aria-label="Calendar sections">
+  <a class="view-switcher-btn" href="/calendar">Calendar</a>
+  <a class="view-switcher-btn active" href="/activity" aria-current="page">Activity</a>
+</nav>
 {% if not history_complete %}
   <div class="admin-banner-warn">Limited history from current table timestamps. The shared <code>task_events</code> migration is required for durable completion/reversal history. <span title="{{ history_reason }}">Details</span></div>
 {% endif %}

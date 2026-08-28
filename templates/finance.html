@@ -83,13 +83,13 @@
     <header class="widget-header"><h2>Transactions · {{ state.month }}</h2><span class="widget-count">{{ state.transactions|length }}</span></header>
     <div class="widget-body finance-table-wrap">
       <table class="data-table finance-table">
-        <thead><tr><th>Date</th><th>Account</th><th>Category</th><th>Memo</th><th>Amount</th><th></th></tr></thead>
+        <thead><tr><th scope="col">Date</th><th scope="col">Account</th><th scope="col">Category</th><th scope="col">Memo</th><th scope="col">Amount</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
         <tbody>
           {% for item in state.transactions %}
             <tr>
-              <td>{{ item.transaction_date }}</td><td>{{ item.account_name }}</td><td>{{ item.category }}</td><td>{{ item.memo or '—' }}</td>
-              <td class="finance-amount {% if item.amount_minor >= 0 %}is-positive{% else %}is-negative{% endif %}">{{ item.currency }} {{ item.amount }}</td>
-              <td><button class="btn btn-tiny btn-ghost" hx-post="/finance/transactions/{{ item.id }}/delete" hx-confirm="Delete this transaction?">Delete</button></td>
+              <td data-label="Date">{{ item.transaction_date }}</td><td data-label="Account">{{ item.account_name }}</td><td data-label="Category">{{ item.category }}</td><td class="finance-transaction-memo" data-label="Memo">{{ item.memo or '—' }}</td>
+              <td data-label="Amount" class="finance-amount {% if item.amount_minor >= 0 %}is-positive{% else %}is-negative{% endif %}">{{ item.currency }} {{ item.amount }}</td>
+              <td class="finance-transaction-action"><button class="btn btn-tiny btn-ghost" hx-post="/finance/transactions/{{ item.id }}/delete" hx-confirm="Delete this transaction?">Delete</button></td>
             </tr>
           {% else %}<tr><td colspan="6" class="empty">No transactions in this month.</td></tr>{% endfor %}
         </tbody>

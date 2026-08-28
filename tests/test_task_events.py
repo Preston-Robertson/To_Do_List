@@ -234,6 +234,50 @@ class TaskEventsContractTests(unittest.TestCase):
         self.assertEqual([row["task_snapshot"] for row in rows], ["Example task"])
         engine.dispose()
 
+    def test_calendar_activity_excludes_duplicate_completion_events(self) -> None:
+        engine = self._task_engine(task_events_ddl=_TASK_EVENTS_DDL)
+        with engine.begin() as conn:
+            task_events.append_event(
+                conn,
+                event_type="created",
+                source_task_uuid="task-1",
+                source_table="tasks",
+                task_snapshot="Example task",
+                occurred_at="2026-08-12T09:00:00-04:00",
+                actor_source="web",
+                operation_uuid="calendar-created",
+            )
+            completed = task_events.append_event(
+                conn,
+                event_type=task_events.COMPLETED,
+                source_task_uuid="task-1",
+                source_table="tasks",
+                task_snapshot="Example task",
+                occurred_at="2026-08-18T20:00:00-04:00",
+                effective_date="2026-08-18",
+                actor_source="web",
+                operation_uuid="calendar-completed",
+            )
+            task_events.append_reversal(
+                conn,
+                completion_event_uuid=completed or "",
+                source_task_uuid="task-1",
+                source_table="tasks",
+                task_snapshot="Example task",
+                occurred_at="2026-08-19T08:00:00-04:00",
+                actor_source="web",
+                operation_uuid="calendar-reopened",
+            )
+            rows = task_events.list_calendar_activity(
+                conn, start_date="2026-08-01", end_date="2026-08-31"
+            )
+        self.assertEqual(
+            {row["event_type"] for row in rows},
+            {"created", task_events.COMPLETION_REVERSED},
+        )
+        self.assertTrue(all(row["source_exists"] for row in rows))
+        engine.dispose()
+
     def test_reversal_resolves_original_effective_date(self) -> None:
         engine = self._task_engine(task_events_ddl=_TASK_EVENTS_DDL)
         with engine.begin() as conn:

@@ -40,4 +40,31 @@
     {% block cards_content %}{% endblock %}
   </div>
 </section>
+
+<dialog class="cards-dialog card-detail-dialog" id="card-detail-dialog">
+  <div id="card-detail-content" class="card-detail-loading" aria-live="polite">
+    Select a card to inspect it.
+  </div>
+</dialog>
+
+{% if current_game %}
+<dialog class="cards-dialog" id="quick-collect-dialog">
+  <form method="post" action="/cards/{{ current_game }}/collection"
+        hx-post="/cards/{{ current_game }}/collection" hx-swap="none">
+    <header><h2>Add to collection</h2><button type="button" data-cards-dialog-close aria-label="Close">&times;</button></header>
+    <p class="cards-selected-name" data-cards-selected-name></p>
+    <input type="hidden" name="card_id" data-cards-selected-id>
+    <div class="cards-form-grid">
+      <label>Quantity<input type="number" name="qty" value="1" min="1" max="9999" required></label>
+      <label>Condition<select name="condition"><option>NM</option><option>LP</option><option>MP</option><option>HP</option><option>DMG</option></select></label>
+      <label class="cards-check"><input type="checkbox" name="foil" value="1"> Foil</label>
+      <label>Acquired date<input type="date" name="acquired_date"></label>
+      <label>Acquired price<input type="number" name="acquired_price" min="0" step="0.01" inputmode="decimal"></label>
+      <label>Currency<select name="acquired_currency"><option>USD</option><option>EUR</option></select></label>
+      <label class="cards-field-wide">Notes<textarea name="notes" rows="3" maxlength="5000"></textarea></label>
+    </div>
+    <footer><button type="button" class="btn" data-cards-dialog-close>Cancel</button><button class="btn btn-primary" type="submit">Add card</button></footer>
+  </form>
+</dialog>
+{% endif %}
 {% endblock %}

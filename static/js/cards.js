@@ -9,11 +9,24 @@
     return dialog instanceof HTMLDialogElement ? dialog : null;
   }
 
+  const dialogOpeners = new WeakMap();
+
+  function openDialog(dialog, opener) {
+    if (!dialog) return;
+    if (
+      opener instanceof HTMLElement
+      && (!dialog.open || !dialogOpeners.has(dialog))
+    ) {
+      dialogOpeners.set(dialog, opener);
+    }
+    if (!dialog.open) dialog.showModal();
+  }
+
   document.addEventListener("click", (event) => {
     const opener = event.target.closest("[data-cards-dialog-open]");
     if (opener) {
       const dialog = dialogById(opener.dataset.cardsDialogOpen);
-      if (dialog && !dialog.open) dialog.showModal();
+      openDialog(dialog, opener);
       return;
     }
     const closer = event.target.closest("[data-cards-dialog-close]");
@@ -24,15 +37,97 @@
     dialog.addEventListener("click", (event) => {
       if (event.target === dialog) dialog.close();
     });
+    dialog.addEventListener("close", () => {
+      const opener = dialogOpeners.get(dialog);
+      if (opener?.isConnected) opener.focus();
+      dialogOpeners.delete(dialog);
+    });
   });
 
   const quickCollect = dialogById("quick-collect-dialog");
   document.addEventListener("click", (event) => {
     const button = event.target.closest("[data-cards-quick-collect]");
     if (!button || !quickCollect) return;
+    const returnFocus = cardDetailDialog?.open
+      ? dialogOpeners.get(cardDetailDialog)
+      : button;
+    dialogById("card-detail-dialog")?.close();
     quickCollect.querySelector("[data-cards-selected-id]").value = button.dataset.cardId || "";
     quickCollect.querySelector("[data-cards-selected-name]").textContent = button.dataset.cardName || "Selected card";
-    quickCollect.showModal();
+    openDialog(quickCollect, returnFocus || button);
+  });
+
+  const cardDetailDialog = dialogById("card-detail-dialog");
+  const cardDetailContent = document.getElementById("card-detail-content");
+
+  async function openCardDetail(trigger) {
+    if (!cardDetailDialog || !cardDetailContent || !trigger?.dataset.cardDetailUrl) return;
+    openDialog(cardDetailDialog, trigger);
+    cardDetailContent.className = "card-detail-loading";
+    cardDetailContent.textContent = "Loading card details...";
+    try {
+      const response = await fetch(trigger.dataset.cardDetailUrl, {
+        headers: { "Accept": "text/html" },
+      });
+      if (!response.ok) throw new Error(`Could not load card details (${response.status})`);
+      cardDetailContent.className = "";
+      cardDetailContent.innerHTML = await response.text();
+      window.htmx?.process(cardDetailContent);
+      cardDetailContent.querySelector("[data-cards-dialog-close]")?.focus();
+    } catch (error) {
+      cardDetailContent.className = "card-detail-loading card-detail-error";
+      cardDetailContent.textContent = error.message || "Could not load card details";
+      window.showError?.(cardDetailContent.textContent);
+    }
+  }
+
+  function cardDetailTrigger(event) {
+    const trigger = event.target.closest("[data-card-detail-url]");
+    if (!trigger) return null;
+    const interactive = event.target.closest("button, a, input, select, textarea, form");
+    if (interactive && interactive !== trigger) return null;
+    return trigger;
+  }
+
+  document.addEventListener("click", (event) => {
+    const trigger = cardDetailTrigger(event);
+    if (!trigger) return;
+    event.preventDefault();
+    openCardDetail(trigger);
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (!['Enter', ' '].includes(event.key)) return;
+    const trigger = cardDetailTrigger(event);
+    if (!trigger) return;
+    event.preventDefault();
+    openCardDetail(trigger);
+  });
+
+  document.addEventListener("click", (event) => {
+    const tab = event.target.closest("[data-card-info-tab]");
+    if (tab) {
+      const root = tab.closest("[data-card-detail-root]");
+      root?.querySelectorAll("[data-card-info-tab]").forEach((item) => {
+        item.classList.toggle("active", item === tab);
+        item.setAttribute("aria-selected", String(item === tab));
+      });
+      root?.querySelectorAll(".card-info-panel").forEach((panel) => {
+        panel.classList.toggle("active", panel.id === tab.dataset.cardInfoTab);
+      });
+      return;
+    }
+    const faceButton = event.target.closest("[data-card-face-button]");
+    if (!faceButton) return;
+    const root = faceButton.closest("[data-card-detail-root]");
+    const faceIndex = faceButton.dataset.cardFaceButton;
+    root?.querySelectorAll("[data-card-face-button]").forEach((item) => {
+      item.classList.toggle("active", item === faceButton);
+    });
+    root?.querySelectorAll("[data-card-face], [data-card-face-copy]").forEach((item) => {
+      const itemIndex = item.dataset.cardFace ?? item.dataset.cardFaceCopy;
+      item.hidden = itemIndex !== faceIndex;
+    });
   });
 
   const preview = document.createElement("div");
@@ -84,6 +179,40 @@
       if (button.dataset.cardsTab === "notes-panel") mountNotes();
     });
   }
+
+  const DECK_VIEW_KEY = "luigi.cards.deckView";
+  const deckViewMedia = window.matchMedia("(max-width: 700px)");
+  const deckViewKey = () => `${DECK_VIEW_KEY}.${deckViewMedia.matches ? "mobile" : "desktop"}`;
+
+  function applyDeckView(root = document) {
+    const panel = root.querySelector?.("#deck-card-panel") || document.getElementById("deck-card-panel");
+    if (!panel) return;
+    let selected = deckViewMedia.matches ? "stacks" : "table";
+    try {
+      selected = localStorage.getItem(deckViewKey())
+        || (deckViewMedia.matches ? "stacks" : localStorage.getItem(DECK_VIEW_KEY))
+        || "table";
+    } catch {}
+    if (!['table', 'stacks'].includes(selected)) selected = "table";
+    panel.querySelectorAll("[data-deck-view]").forEach((button) => {
+      const active = button.dataset.deckView === selected;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", String(active));
+    });
+    panel.querySelectorAll("[data-deck-view-panel]").forEach((view) => {
+      view.hidden = view.dataset.deckViewPanel !== selected;
+    });
+  }
+
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-deck-view]");
+    if (!button) return;
+    try { localStorage.setItem(deckViewKey(), button.dataset.deckView); } catch {}
+    applyDeckView(button.closest("#deck-card-panel"));
+  });
+
+  applyDeckView();
+  document.body.addEventListener("htmx:afterSwap", (event) => applyDeckView(event.target));
 
   function appendList(details, title, values, formatter) {
     if (!values.length) return;

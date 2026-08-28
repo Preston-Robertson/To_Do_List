@@ -11,51 +11,135 @@
   </button>
 </header>
 
-<form method="get" class="cards-filter-bar">
-  <label class="cards-search-field">
-    <span class="sr-only">Search card names</span>
-    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
-    <input type="search" name="q" value="{{ q }}" placeholder="Search card names">
-  </label>
-  <label>
-    <span class="sr-only">Filter by set</span>
-    <select name="set_code">
-      <option value="">All sets</option>
-      {% for card_set in sets %}
-      <option value="{{ card_set.set_code }}" {% if set_code|lower == card_set.set_code|lower %}selected{% endif %}>
-        {{ card_set.set_name or card_set.set_code|upper }} ({{ card_set.card_count }})
-      </option>
-      {% endfor %}
-    </select>
-  </label>
-  <button type="submit" class="btn">Apply</button>
+<form method="get" class="cards-catalog-search">
+  <div class="cards-filter-bar">
+    <label class="cards-search-field">
+      <span class="sr-only">Search card names</span>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+      <input type="search" name="q" value="{{ q }}" placeholder="Card name">
+    </label>
+    <label>
+      <span class="sr-only">Filter by set</span>
+      <select name="set_code">
+        <option value="">All sets</option>
+        {% for card_set in sets %}
+        <option value="{{ card_set.set_code }}" {% if set_code|lower == card_set.set_code|lower %}selected{% endif %}>
+          {{ card_set.set_name or card_set.set_code|upper }} ({{ card_set.card_count }})
+        </option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit" class="btn btn-primary">Search</button>
+    {% if active_filter_count %}<a class="btn" href="/cards/{{ current_game }}/catalog">Clear</a>{% endif %}
+  </div>
+
+  <details class="cards-advanced-search" {% if active_filter_count > (1 if q else 0) + (1 if set_code else 0) %}open{% endif %}>
+    <summary><span>Advanced filters</span>{% if active_filter_count %}<b>{{ active_filter_count }}</b>{% endif %}</summary>
+    <div class="cards-advanced-grid">
+      <fieldset class="cards-advanced-section cards-advanced-wide">
+        <legend>Card text</legend>
+        <label>Rules text<input name="oracle" value="{{ filters.oracle }}" maxlength="500" placeholder="Words in the rules box"></label>
+        <label>Type line<span class="cards-inline-control"><select name="type_mode"><option value="is" {% if filters.type_mode == 'is' %}selected{% endif %}>Is</option><option value="not" {% if filters.type_mode == 'not' %}selected{% endif %}>Not</option></select><input name="type_line" value="{{ filters.type_line }}" maxlength="200" placeholder="Creature, Elf, Saga..."></span></label>
+      </fieldset>
+
+      {% if current_game == 'mtg' %}
+      <fieldset class="cards-advanced-section">
+        <legend>Colors</legend>
+        <div class="cards-color-options">
+          {% for color in mtg_colors %}<label class="card-color-option card-color-{{ color|lower }}"><input type="checkbox" name="colors" value="{{ color }}" {% if color|lower in filters.colors %}checked{% endif %}><span>{{ color }}</span></label>{% endfor %}
+        </div>
+        <select name="color_mode" aria-label="Color comparison"><option value="including" {% if filters.color_mode == 'including' %}selected{% endif %}>Including selected</option><option value="exact" {% if filters.color_mode == 'exact' %}selected{% endif %}>Exactly selected</option><option value="at_most" {% if filters.color_mode == 'at_most' %}selected{% endif %}>At most selected</option></select>
+      </fieldset>
+
+      <fieldset class="cards-advanced-section">
+        <legend>Commander identity</legend>
+        <div class="cards-color-options">
+          {% for color in mtg_colors %}<label class="card-color-option card-color-{{ color|lower }}"><input type="checkbox" name="identity" value="{{ color }}" {% if color|lower in filters.identity %}checked{% endif %}><span>{{ color }}</span></label>{% endfor %}
+        </div>
+        <label>Mana cost<input name="mana_cost" value="{{ filters.mana_cost }}" maxlength="100" placeholder="{2}{W}{U}"></label>
+      </fieldset>
+
+      <fieldset class="cards-advanced-section">
+        <legend>Numeric stats</legend>
+        <div class="cards-stat-filter">
+          <select name="stat" aria-label="Card statistic"><option value="">Any stat</option>{% for value, label in [('cmc','Mana value'),('power','Power'),('toughness','Toughness'),('loyalty','Loyalty'),('defense','Defense')] %}<option value="{{ value }}" {% if filters.stat == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+          <select name="stat_operator" aria-label="Stat comparison">{% for value in ['=','!=','<','<=','>','>='] %}<option value="{{ value }}" {% if filters.stat_operator == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select>
+          <input type="number" step="any" name="stat_value" value="{{ filters.stat_value }}" aria-label="Stat value">
+        </div>
+      </fieldset>
+
+      <fieldset class="cards-advanced-section">
+        <legend>Games and format</legend>
+        <select name="games_mode" aria-label="Games comparison"><option value="is" {% if filters.games_mode == 'is' %}selected{% endif %}>Appears in</option><option value="not" {% if filters.games_mode == 'not' %}selected{% endif %}>Does not appear in</option></select>
+        <div class="cards-check-row">{% for game_name in mtg_games %}<label class="cards-check"><input type="checkbox" name="games" value="{{ game_name }}" {% if game_name in filters.games %}checked{% endif %}> {{ game_name|upper }}</label>{% endfor %}</div>
+        <div class="cards-inline-control"><select name="legal_status" aria-label="Format status"><option value="legal" {% if filters.legal_status == 'legal' %}selected{% endif %}>Legal</option><option value="restricted" {% if filters.legal_status == 'restricted' %}selected{% endif %}>Restricted</option><option value="banned" {% if filters.legal_status == 'banned' %}selected{% endif %}>Banned</option><option value="not_legal" {% if filters.legal_status == 'not_legal' %}selected{% endif %}>Not legal</option></select><select name="format" aria-label="Format"><option value="">Any format</option>{% for format_name in mtg_formats %}<option value="{{ format_name }}" {% if filters.format == format_name %}selected{% endif %}>{{ format_name.replace('_',' ')|title }}</option>{% endfor %}</select></div>
+      </fieldset>
+
+      <fieldset class="cards-advanced-section">
+        <legend>Set group and rarity</legend>
+        <label>Block or group<input name="group" value="{{ filters.group }}" maxlength="100"></label>
+        <div class="cards-check-row cards-check-wrap">{% for rarity in mtg_rarities %}<label class="cards-check"><input type="checkbox" name="rarities" value="{{ rarity }}" {% if rarity in filters.rarities %}checked{% endif %}> {{ rarity|title }}</label>{% endfor %}</div>
+      </fieldset>
+
+      <fieldset class="cards-advanced-section cards-advanced-wide">
+        <legend>Card criteria</legend>
+        <div class="cards-check-row cards-check-wrap">{% for value, label in mtg_criteria_options %}<label class="cards-check"><input type="checkbox" name="criteria" value="{{ value }}" {% if value in filters.criteria %}checked{% endif %}> {{ label }}</label>{% endfor %}</div>
+        <label class="cards-check cards-extras-toggle"><input type="checkbox" name="include_extras" value="1" {% if filters.include_extras %}checked{% endif %}> Include extra cards such as tokens, emblems, art series, planes, and schemes</label>
+      </fieldset>
+
+      <fieldset class="cards-advanced-section">
+        <legend>Price</legend>
+        <div class="cards-stat-filter"><select name="price_currency" aria-label="Price currency"><option value="usd" {% if filters.price_currency == 'usd' %}selected{% endif %}>USD</option><option value="usd_foil" {% if filters.price_currency == 'usd_foil' %}selected{% endif %}>USD foil</option><option value="eur" {% if filters.price_currency == 'eur' %}selected{% endif %}>EUR</option><option value="tix" {% if filters.price_currency == 'tix' %}selected{% endif %}>MTGO tickets</option></select><select name="price_operator" aria-label="Price comparison">{% for value in ['=','!=','<','<=','>','>='] %}<option value="{{ value }}" {% if filters.price_operator == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select><input type="number" min="0" step="0.01" name="price_value" value="{{ filters.price_value }}" aria-label="Price value"></div>
+      </fieldset>
+
+      <fieldset class="cards-advanced-section cards-advanced-wide">
+        <legend>Creative fields</legend>
+        <label>Artist<input name="artist" value="{{ filters.artist }}" maxlength="200"></label>
+        <label>Flavor text<input name="flavor" value="{{ filters.flavor }}" maxlength="300"></label>
+        <label>Lore finder<input name="lore" value="{{ filters.lore }}" maxlength="300"></label>
+        <label>Language<select name="language"><option value="">Default</option>{% for code, label in [('en','English'),('es','Spanish'),('fr','French'),('de','German'),('it','Italian'),('pt','Portuguese'),('ja','Japanese'),('ko','Korean'),('ru','Russian'),('zhs','Simplified Chinese'),('zht','Traditional Chinese'),('he','Hebrew'),('la','Latin'),('grc','Ancient Greek'),('ar','Arabic'),('sa','Sanskrit'),('ph','Phyrexian'),('qya','Quenya'),('dw','Dwarvish'),('tlh','Klingon')] %}<option value="{{ code }}" {% if filters.language == code %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+      </fieldset>
+      {% endif %}
+
+      <fieldset class="cards-advanced-section cards-advanced-wide">
+        <legend>Results</legend>
+        <div class="cards-result-options"><label>Order<select name="order">{% for value in catalog_sorts %}<option value="{{ value }}" {% if filters.order == value %}selected{% endif %}>{{ value|title }}</option>{% endfor %}</select></label><label>Direction<select name="direction"><option value="asc" {% if filters.direction == 'asc' %}selected{% endif %}>Ascending</option><option value="desc" {% if filters.direction == 'desc' %}selected{% endif %}>Descending</option></select></label>{% if current_game == 'mtg' %}<label>Unique by<select name="unique"><option value="prints" {% if filters.unique == 'prints' %}selected{% endif %}>Every printing</option><option value="cards" {% if filters.unique == 'cards' %}selected{% endif %}>Card name</option><option value="art" {% if filters.unique == 'art' %}selected{% endif %}>Artwork</option></select></label><label>Preferred printing<select name="prefer">{% for value in catalog_prefers %}<option value="{{ value }}" {% if filters.prefer == value %}selected{% endif %}>{{ value.replace('_',' ')|title }}</option>{% endfor %}</select></label>{% endif %}</div>
+        {% if current_game == 'mtg' %}<p class="cards-filter-note">All filters apply before the preferred printing is selected for each unique card or artwork.</p>{% endif %}
+      </fieldset>
+    </div>
+    <footer><a class="btn" href="/cards/{{ current_game }}/catalog">Reset</a><button type="submit" class="btn btn-primary">Apply filters</button></footer>
+  </details>
 </form>
 
 {% if catalog.rows %}
 <div class="cards-catalog-grid">
   {% for card in catalog.rows %}
   <article class="catalog-card">
-    <div class="catalog-card-media">
-      {% if card.image_normal or card.image_small %}
-      <img src="{{ card.image_normal or card.image_small }}" alt="{{ card.name }}" loading="lazy">
-      {% else %}
-      <span aria-hidden="true">{{ card.name[:2]|upper }}</span>
-      {% endif %}
-    </div>
-    <div class="catalog-card-copy">
-      <div class="catalog-card-heading">
-        <h2>{{ card.name }}</h2>
-        <span>{{ card.rarity or 'Unspecified' }}</span>
-      </div>
-      <p>{{ card.set_name or card.set_code or 'No set' }}{% if card.collector_number %} · {{ card.collector_number }}{% endif %}</p>
-      <p class="catalog-card-type">{{ card.type_line or 'Type not recorded' }}</p>
-      <div class="catalog-card-footer">
-        <span>{{ card.price_usd_minor | money_minor }}</span>
-        <button type="button" class="btn btn-small" data-cards-quick-collect
-                data-card-id="{{ card.id }}" data-card-name="{{ card.name }}">
-          Add to collection
-        </button>
-      </div>
+    <button type="button" class="catalog-card-open"
+            aria-label="View details for {{ card.name }}"
+            data-card-detail-url="/cards/{{ current_game }}/cards/{{ card.id }}/detail">
+      <span class="catalog-card-media">
+        {% if card.image_normal or card.image_small %}
+        <img src="{{ card.image_normal or card.image_small }}" alt="" loading="lazy">
+        {% else %}
+        <span aria-hidden="true">{{ card.name[:2]|upper }}</span>
+        {% endif %}
+      </span>
+      <span class="catalog-card-copy">
+        <span class="catalog-card-heading">
+          <strong>{{ card.name }}</strong>
+          <span>{{ card.rarity or 'Unspecified' }}</span>
+        </span>
+        <span>{{ card.set_name or card.set_code or 'No set' }}{% if card.collector_number %} · {{ card.collector_number }}{% endif %}</span>
+        <span class="catalog-card-type">{{ card.type_line or 'Type not recorded' }}</span>
+      </span>
+    </button>
+    <div class="catalog-card-footer">
+      <span>{{ card.price_usd_minor | money_minor }}</span>
+      <button type="button" class="btn btn-small" data-cards-quick-collect
+              data-card-id="{{ card.id }}" data-card-name="{{ card.name }}">
+        Add to collection
+      </button>
     </div>
   </article>
   {% endfor %}
@@ -69,9 +153,9 @@
 
 {% if catalog.pages > 1 %}
 <nav class="cards-pagination" aria-label="Catalog pages">
-  {% if catalog.page > 1 %}<a class="btn" href="?q={{ q|urlencode }}&set_code={{ set_code|urlencode }}&page={{ catalog.page - 1 }}">Previous</a>{% endif %}
+  {% if previous_page_url %}<a class="btn" href="{{ previous_page_url }}">Previous</a>{% endif %}
   <span>Page {{ catalog.page }} of {{ catalog.pages }}</span>
-  {% if catalog.page < catalog.pages %}<a class="btn" href="?q={{ q|urlencode }}&set_code={{ set_code|urlencode }}&page={{ catalog.page + 1 }}">Next</a>{% endif %}
+  {% if next_page_url %}<a class="btn" href="{{ next_page_url }}">Next</a>{% endif %}
 </nav>
 {% endif %}
 
@@ -92,22 +176,4 @@
   </form>
 </dialog>
 
-<dialog class="cards-dialog" id="quick-collect-dialog">
-  <form method="post" action="/cards/{{ current_game }}/collection"
-        hx-post="/cards/{{ current_game }}/collection" hx-swap="none">
-    <header><h2>Add to collection</h2><button type="button" data-cards-dialog-close aria-label="Close">&times;</button></header>
-    <p class="cards-selected-name" data-cards-selected-name></p>
-    <input type="hidden" name="card_id" data-cards-selected-id>
-    <div class="cards-form-grid">
-      <label>Quantity<input type="number" name="qty" value="1" min="1" max="9999" required></label>
-      <label>Condition<select name="condition"><option>NM</option><option>LP</option><option>MP</option><option>HP</option><option>DMG</option></select></label>
-      <label class="cards-check"><input type="checkbox" name="foil" value="1"> Foil</label>
-      <label>Acquired date<input type="date" name="acquired_date"></label>
-      <label>Acquired price<input type="number" name="acquired_price" min="0" step="0.01" inputmode="decimal"></label>
-      <label>Currency<select name="acquired_currency"><option>USD</option><option>EUR</option></select></label>
-      <label class="cards-field-wide">Notes<textarea name="notes" rows="3" maxlength="5000"></textarea></label>
-    </div>
-    <footer><button type="button" class="btn" data-cards-dialog-close>Cancel</button><button class="btn btn-primary" type="submit">Add card</button></footer>
-  </form>
-</dialog>
 {% endblock %}

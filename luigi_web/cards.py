@@ -20,7 +20,97 @@ SCHEMA_VERSION = 1
 BOARDS = ("commander", "main", "side", "maybe")
 CONDITIONS = ("NM", "LP", "MP", "HP", "DMG")
 SUPPORTED_CURRENCIES = ("USD", "EUR")
+MTG_COLORS = ("W", "U", "B", "R", "G", "C")
+MTG_GAMES = ("paper", "arena", "mtgo")
+MTG_FORMATS = (
+    "standard", "future", "historic", "timeless", "gladiator", "pioneer",
+    "explorer", "modern", "legacy", "pauper", "vintage", "penny",
+    "commander", "oathbreaker", "standardbrawl", "brawl", "alchemy",
+    "paupercommander", "duel", "oldschool", "premodern", "predh",
+)
+MTG_RARITIES = ("common", "uncommon", "rare", "mythic", "special", "bonus")
+MTG_CRITERIA_OPTIONS = (
+    ("adventure", "Adventure"), ("arenaid", "Arena ID"),
+    ("artseries", "Art Series"), ("artist", "Artist"),
+    ("artistmisprint", "Artist Misprint"), ("lights", "Attraction Lights"),
+    ("atypical", "Atypical"), ("augmentation", "Augment"),
+    ("back", "Back"), ("bear", "Bear"), ("beginnerbox", "Beginner Box"),
+    ("booster", "Booster"), ("borderless", "Borderless"),
+    ("brawlcommander", "Brawl Commander"), ("buyabox", "Buy-a-Box"),
+    ("cardmarket", "Cardmarket ID"), ("class", "Class Layout"),
+    ("ci", "Color Indicator"), ("colorshifted", "Colorshifted"),
+    ("commander", "Commander"), ("companion", "Companion"),
+    ("contentwarning", "Content Warning"), ("covered", "Covered"),
+    ("manland", "Creature Land"), ("datestamped", "Datestamped"),
+    ("default", "Default"), ("digital", "Digital"),
+    ("doublesided", "Double Sided"), ("duelcommander", "Duel Commander"),
+    ("etb", "ETB"), ("englishart", "English Art"), ("etch", "Etched"),
+    ("extended", "Extended Art"), ("extra", "Extra"),
+    ("ff", "Final Fantasy"), ("firstprint", "First Printing"),
+    ("flavorname", "Flavor Name"), ("flavor", "Flavor Text"),
+    ("flip", "Flip"), ("foil", "Foil"), ("fbb", "Foreign Black Border"),
+    ("fwb", "Foreign White Border"), ("frenchvanilla", "French Vanilla"),
+    ("fullart", "Full Art"), ("funny", "Funny"), ("future", "Future"),
+    ("gamechanger", "Game Changer"), ("gameday", "Game Day"),
+    ("hires", "High Resolution"), ("historic", "Historic"),
+    ("splitmana", "Hybrid Mana"), ("illustration", "Illustration"),
+    ("intropack", "Intro Pack"), ("invitational", "Invitational Card"),
+    ("leveler", "Leveler"), ("localizedname", "Localized Name"),
+    ("mtgoid", "MTGO ID"), ("masterpiece", "Masterpiece"),
+    ("meld", "Meld"), ("modal", "Modal"),
+    ("mdfc", "Modal Double Faced"), ("modern", "Modern"),
+    ("multiverse", "Multiverse ID"), ("new", "New"),
+    ("nonfoil", "Nonfoil"), ("notuniversesbeyond", "Not Universes Beyond"),
+    ("oathbreaker", "Oathbreaker"), ("old", "Old Frame"),
+    ("outlaw", "Outlaw"), ("oversized", "Oversized"),
+    ("partner", "Paired Commander"), ("paperart", "Paper Art"),
+    ("party", "Party"), ("permanent", "Permanent"),
+    ("phyrexia", "Phyrexian Mana"), ("planar", "Planar"),
+    ("planeswalkerdeck", "Planeswalker Deck"), ("prepare", "Prepare"),
+    ("prerelease", "Prerelease Promo"), ("printedtext", "Printed Text"),
+    ("promo", "Promo"), ("related", "Related Cards"),
+    ("release", "Release Promo"), ("reprint", "Reprint"),
+    ("reserved", "Reserved List"), ("resource", "Resource ID"),
+    ("reversible", "Reversible"), ("stamp", "Security Stamp"),
+    ("showcase", "Showcase"), ("spell", "Spell"),
+    ("spellbook", "Spellbook"), ("spikey", "Spikey"),
+    ("split", "Split Card"), ("stamped", "Stamped"),
+    ("startercollection", "Starter Collection"),
+    ("starterdeck", "Starter Deck"), ("story", "Story Spotlight"),
+    ("tcgplayer", "TCGplayer ID"), ("textless", "Textless"),
+    ("token", "Token"), ("tombstone", "Tombstone"),
+    ("transform", "Transform"), ("translucent", "Translucent"),
+    ("onlyprint", "Unique Printing"), ("universesbeyond", "Universes Beyond"),
+    ("vanilla", "Vanilla"), ("variation", "Variation"),
+    ("watermark", "Watermark"), ("worthy", "Worthy"),
+)
+MTG_CRITERIA = tuple(value for value, _label in MTG_CRITERIA_OPTIONS)
+CATALOG_SORTS = (
+    "name", "released", "set", "rarity", "color", "usd", "tix", "eur",
+    "cmc", "power", "toughness", "artist", "collector",
+)
+CATALOG_PREFERS = (
+    "best", "newest", "oldest", "promo", "default", "atypical",
+    "universesbeyond", "notuniversesbeyond", "usdlow", "usdhigh",
+    "eurlow", "eurhigh", "tixlow", "tixhigh",
+)
+MTG_LANGUAGES = (
+    "en", "es", "fr", "de", "it", "pt", "ja", "ko", "ru", "zhs",
+    "zht", "he", "la", "grc", "ar", "sa", "ph", "qya", "dw", "tlh",
+)
 _TRUSTED_IMAGE_HOSTS = {"cards.scryfall.io", "images.pokemontcg.io"}
+_EXTRA_CARD_LAYOUTS = (
+    "token", "double_faced_token", "emblem", "art_series", "scheme",
+    "planar", "vanguard",
+)
+_TRUSTED_CARD_LINK_HOSTS = {
+    "scryfall.com",
+    "www.scryfall.com",
+    "www.tcgplayer.com",
+    "shop.tcgplayer.com",
+    "www.cardmarket.com",
+    "gatherer.wizards.com",
+}
 
 
 def db_path() -> Path:
@@ -311,37 +401,47 @@ def browse_catalog(
     *,
     query: str = "",
     set_code: str = "",
+    filters: dict[str, Any] | None = None,
     page: int = 1,
     page_size: int = 48,
 ) -> dict[str, Any]:
     init_db()
-    clean_query = _text(query, "search", maximum=100)
-    clean_set = _text(set_code, "set code", maximum=20)
+    requested = dict(filters or {})
+    if query and not requested.get("q"):
+        requested["q"] = query
+    if set_code and not requested.get("set_code"):
+        requested["set_code"] = set_code
+    normalized = normalize_catalog_filters(game_code, requested)
     safe_page = max(int(page), 1)
     safe_size = min(max(int(page_size), 12), 96)
-    clauses = ["game_code = ?"]
+    clauses = ["c.game_code = ?"]
     values: list[Any] = [game_code]
-    if clean_query:
-        escaped = clean_query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        clauses.append("name LIKE ? ESCAPE '\\' COLLATE NOCASE")
-        values.append(f"%{escaped}%")
-    if clean_set:
-        clauses.append("set_code = ? COLLATE NOCASE")
-        values.append(clean_set)
+    _catalog_filter_clauses(normalized, clauses, values)
     where = " AND ".join(clauses)
+    partition = {
+        "cards": "COALESCE(json_extract(c.raw_json, '$.oracle_id'), LOWER(c.name))",
+        "art": "COALESCE(json_extract(c.raw_json, '$.illustration_id'), json_extract(c.raw_json, '$.oracle_id'), LOWER(c.name))",
+    }.get(normalized["unique"])
+    rank_sql = (
+        f"ROW_NUMBER() OVER (PARTITION BY {partition} ORDER BY {_catalog_prefer_sql(normalized['prefer'])}, c.id)"
+        if partition else "1"
+    )
+    source_sql = f"(SELECT c.*, {rank_sql} AS catalog_rank FROM cards c WHERE {where}) c"
+    order_sql = _catalog_order_sql(normalized["order"], normalized["direction"])
     with _connect() as conn:
         total = int(conn.execute(
-            f"SELECT COUNT(*) FROM cards WHERE {where}", values
+            f"SELECT COUNT(*) FROM {source_sql} WHERE c.catalog_rank = 1", values
         ).fetchone()[0])
         max_page = max(1, (total + safe_size - 1) // safe_size)
         safe_page = min(safe_page, max_page)
         rows = conn.execute(
             f"""
-            SELECT id, name, set_code, set_name, collector_number, rarity,
-                   type_line, mana_cost, image_small, image_normal,
-                   price_usd_minor, price_usd_foil_minor, source
-              FROM cards WHERE {where}
-             ORDER BY name COLLATE NOCASE, set_code, collector_number
+            SELECT c.id, c.name, c.set_code, c.set_name, c.collector_number,
+                   c.rarity, c.type_line, c.mana_cost, c.image_small,
+                   c.image_normal, c.price_usd_minor,
+                   c.price_usd_foil_minor, c.source
+                FROM {source_sql} WHERE c.catalog_rank = 1
+             ORDER BY {order_sql}, c.id
              LIMIT ? OFFSET ?
             """,
             (*values, safe_size, (safe_page - 1) * safe_size),
@@ -352,7 +452,429 @@ def browse_catalog(
         "page": safe_page,
         "pages": max_page,
         "page_size": safe_size,
+        "filters": normalized,
+        "active_filter_count": _active_catalog_filter_count(normalized),
     }
+
+
+def _filter_list(value: Any, allowed: tuple[str, ...]) -> list[str]:
+    source = value if isinstance(value, (list, tuple, set)) else [value]
+    allowed_values = {option.lower() for option in allowed}
+    return list(dict.fromkeys(
+        text for item in source
+        if (text := str(item or "").strip().lower()) in allowed_values
+    ))
+
+
+def _filter_text(value: Any, field: str, maximum: int = 200) -> str:
+    return _text(value, field, maximum=maximum)
+
+
+def _filter_decimal(value: Any, field: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = Decimal(text)
+    except InvalidOperation as exc:
+        raise ValueError(f"{field} must be a number") from exc
+    if not parsed.is_finite():
+        raise ValueError(f"{field} must be a finite number")
+    return str(parsed)
+
+
+def normalize_catalog_filters(game_code: str, values: dict[str, Any]) -> dict[str, Any]:
+    """Validate public catalog filters into a fixed query contract."""
+    operator = str(values.get("stat_operator") or "=").strip()
+    price_operator = str(values.get("price_operator") or "<=").strip()
+    legal_status = str(values.get("legal_status") or "legal").strip().lower()
+    color_mode = str(values.get("color_mode") or "including").strip().lower()
+    normalized = {
+        "q": _filter_text(values.get("q"), "card name", 100),
+        "oracle": _filter_text(values.get("oracle"), "rules text", 500),
+        "type_line": _filter_text(values.get("type_line"), "type line", 200),
+        "type_mode": "not" if str(values.get("type_mode") or "is").lower() == "not" else "is",
+        "colors": _filter_list(values.get("colors"), MTG_COLORS),
+        "color_mode": color_mode if color_mode in {"including", "exact", "at_most"} else "including",
+        "identity": _filter_list(values.get("identity"), MTG_COLORS),
+        "mana_cost": _filter_text(values.get("mana_cost"), "mana cost", 100),
+        "stat": str(values.get("stat") or "").strip().lower(),
+        "stat_operator": operator if operator in {"=", "!=", "<", "<=", ">", ">="} else "=",
+        "stat_value": _filter_decimal(values.get("stat_value"), "stat value"),
+        "games": _filter_list(values.get("games"), MTG_GAMES),
+        "games_mode": "not" if str(values.get("games_mode") or "is").lower() == "not" else "is",
+        "format": str(values.get("format") or "").strip().lower(),
+        "legal_status": legal_status if legal_status in {"legal", "restricted", "banned", "not_legal"} else "legal",
+        "set_code": _filter_text(values.get("set_code"), "set code", 20).lower(),
+        "group": _filter_text(values.get("group"), "block or group", 100),
+        "rarities": _filter_list(values.get("rarities"), MTG_RARITIES),
+        "criteria": _filter_list(values.get("criteria"), MTG_CRITERIA),
+        "include_extras": str(values.get("include_extras") or "").strip().lower()
+            in {"1", "true", "yes", "on"},
+        "price_currency": str(values.get("price_currency") or "usd").strip().lower(),
+        "price_operator": price_operator if price_operator in {"=", "!=", "<", "<=", ">", ">="} else "<=",
+        "price_value": _filter_decimal(values.get("price_value"), "price"),
+        "artist": _filter_text(values.get("artist"), "artist", 200),
+        "flavor": _filter_text(values.get("flavor"), "flavor text", 300),
+        "lore": _filter_text(values.get("lore"), "lore", 300),
+        "language": _filter_text(values.get("language"), "language", 10).lower(),
+        "order": str(values.get("order") or "name").strip().lower(),
+        "direction": "desc" if str(values.get("direction") or "asc").lower() == "desc" else "asc",
+        "unique": str(values.get("unique") or "prints").strip().lower(),
+        "prefer": str(values.get("prefer") or "best").strip().lower(),
+    }
+    if normalized["stat"] not in {"cmc", "power", "toughness", "loyalty", "defense"}:
+        normalized["stat"] = ""
+    if normalized["format"] not in MTG_FORMATS:
+        normalized["format"] = ""
+    if normalized["price_currency"] not in {"usd", "usd_foil", "eur", "tix"}:
+        normalized["price_currency"] = "usd"
+    if normalized["price_value"] and Decimal(normalized["price_value"]) < 0:
+        raise ValueError("price must be non-negative")
+    if normalized["order"] not in CATALOG_SORTS:
+        normalized["order"] = "name"
+    if normalized["unique"] not in {"prints", "cards", "art"}:
+        normalized["unique"] = "prints"
+    if normalized["prefer"] not in CATALOG_PREFERS:
+        normalized["prefer"] = "best"
+    if normalized["unique"] == "prints":
+        normalized["prefer"] = "best"
+    if set(normalized["criteria"]) & {"extra", "token", "artseries", "planar"}:
+        normalized["include_extras"] = True
+    if normalized["language"] not in MTG_LANGUAGES:
+        normalized["language"] = ""
+    if not normalized["type_line"]:
+        normalized["type_mode"] = "is"
+    if not normalized["colors"]:
+        normalized["color_mode"] = "including"
+    if not normalized["games"]:
+        normalized["games_mode"] = "is"
+    if not normalized["format"]:
+        normalized["legal_status"] = "legal"
+    if not normalized["stat"] or not normalized["stat_value"]:
+        normalized["stat"] = ""
+        normalized["stat_operator"] = "="
+        normalized["stat_value"] = ""
+    if not normalized["price_value"]:
+        normalized["price_currency"] = "usd"
+        normalized["price_operator"] = "<="
+    if game_code != "mtg":
+        for key in (
+            "colors", "identity", "mana_cost", "games", "format", "group",
+            "criteria", "artist", "flavor", "lore", "language",
+        ):
+            normalized[key] = [] if key in {"colors", "identity", "games", "criteria"} else ""
+        normalized["unique"] = "prints"
+        normalized["prefer"] = "best"
+        normalized["include_extras"] = True
+    return normalized
+
+
+def _like_terms(value: str) -> list[str]:
+    return [term for term in value.split() if term][:20]
+
+
+def _escaped_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _catalog_filter_clauses(filters: dict[str, Any], clauses: list[str], values: list[Any]) -> None:
+    if not filters["include_extras"]:
+        clauses.append(f"NOT ({_extra_card_sql('c')})")
+    text_fields = {
+        "q": "c.name",
+        "oracle": "COALESCE(c.oracle_text, '')",
+        "artist": "COALESCE(json_extract(c.raw_json, '$.artist'), '')",
+        "flavor": "COALESCE(json_extract(c.raw_json, '$.flavor_text'), '')",
+    }
+    for key, expression in text_fields.items():
+        for term in _like_terms(filters[key]):
+            clauses.append(f"{expression} LIKE ? ESCAPE '\\' COLLATE NOCASE")
+            values.append(f"%{_escaped_like(term)}%")
+    if filters["type_line"]:
+        clause = "COALESCE(c.type_line, '') LIKE ? ESCAPE '\\' COLLATE NOCASE"
+        clauses.append(f"NOT ({clause})" if filters["type_mode"] == "not" else clause)
+        values.append(f"%{_escaped_like(filters['type_line'])}%")
+    _catalog_color_clauses("c.colors_json", filters["colors"], filters["color_mode"], clauses, values)
+    _catalog_identity_clauses(filters["identity"], clauses, values)
+    if filters["mana_cost"]:
+        clauses.append("COALESCE(c.mana_cost, '') = ? COLLATE NOCASE")
+        values.append(filters["mana_cost"])
+    if filters["stat"] and filters["stat_value"]:
+        stat_expressions = {
+            "cmc": "c.cmc",
+            "power": "CAST(json_extract(c.raw_json, '$.power') AS REAL)",
+            "toughness": "CAST(json_extract(c.raw_json, '$.toughness') AS REAL)",
+            "loyalty": "CAST(json_extract(c.raw_json, '$.loyalty') AS REAL)",
+            "defense": "CAST(json_extract(c.raw_json, '$.defense') AS REAL)",
+        }
+        clauses.append(f"{stat_expressions[filters['stat']]} IS NOT NULL AND {stat_expressions[filters['stat']]} {filters['stat_operator']} ?")
+        values.append(filters["stat_value"])
+    for game in filters["games"]:
+        game_clause = "EXISTS (SELECT 1 FROM json_each(c.raw_json, '$.games') WHERE value = ?)"
+        clauses.append(f"NOT ({game_clause})" if filters["games_mode"] == "not" else game_clause)
+        values.append(game)
+    if filters["format"]:
+        clauses.append("json_extract(c.raw_json, ?) = ?")
+        values.extend((f"$.legalities.{filters['format']}", filters["legal_status"]))
+    if filters["set_code"]:
+        clauses.append("c.set_code = ? COLLATE NOCASE")
+        values.append(filters["set_code"])
+    if filters["group"]:
+        pattern = f"%{_escaped_like(filters['group'])}%"
+        clauses.append("(COALESCE(json_extract(c.raw_json, '$.block'), '') LIKE ? ESCAPE '\\' COLLATE NOCASE OR COALESCE(json_extract(c.raw_json, '$.set_type'), '') LIKE ? ESCAPE '\\' COLLATE NOCASE)")
+        values.extend((pattern, pattern))
+    if filters["rarities"]:
+        placeholders = ",".join("?" for _ in filters["rarities"])
+        clauses.append(f"LOWER(COALESCE(c.rarity, '')) IN ({placeholders})")
+        values.extend(filters["rarities"])
+    _catalog_criteria_clauses(filters["criteria"], clauses)
+    if filters["price_value"]:
+        columns = {
+            "usd": ("c.price_usd_minor", True),
+            "usd_foil": ("c.price_usd_foil_minor", True),
+            "eur": ("c.price_eur_minor", True),
+            "tix": ("CAST(json_extract(c.raw_json, '$.prices.tix') AS REAL)", False),
+        }
+        expression, minor_units = columns[filters["price_currency"]]
+        clauses.append(f"{expression} IS NOT NULL AND {expression} {filters['price_operator']} ?")
+        values.append(to_minor(filters["price_value"]) if minor_units else filters["price_value"])
+    if filters["lore"]:
+        for term in _like_terms(filters["lore"]):
+            pattern = f"%{_escaped_like(term)}%"
+            clauses.append("(c.name LIKE ? ESCAPE '\\' COLLATE NOCASE OR COALESCE(c.type_line, '') LIKE ? ESCAPE '\\' COLLATE NOCASE OR COALESCE(c.oracle_text, '') LIKE ? ESCAPE '\\' COLLATE NOCASE OR c.raw_json LIKE ? ESCAPE '\\' COLLATE NOCASE)")
+            values.extend((pattern, pattern, pattern, pattern))
+    if filters["language"]:
+        clauses.append("json_extract(c.raw_json, '$.lang') = ?")
+        values.append(filters["language"])
+
+
+def _catalog_color_clauses(expression: str, selected: list[str], mode: str, clauses: list[str], values: list[Any]) -> None:
+    colors = [color.upper() for color in selected if color.upper() != "C"]
+    wants_colorless = "c" in selected
+    if not selected:
+        return
+    if wants_colorless and not colors:
+        clauses.append(f"json_array_length({expression}) = 0")
+        return
+    if mode in {"including", "exact"}:
+        for color in colors:
+            clauses.append(f"EXISTS (SELECT 1 FROM json_each({expression}) WHERE value = ?)")
+            values.append(color)
+    if mode == "exact":
+        clauses.append(f"json_array_length({expression}) = ?")
+        values.append(len(colors))
+    elif mode == "at_most":
+        placeholders = ",".join("?" for _ in colors)
+        if colors:
+            clauses.append(f"NOT EXISTS (SELECT 1 FROM json_each({expression}) WHERE value NOT IN ({placeholders}))")
+            values.extend(colors)
+        else:
+            clauses.append(f"json_array_length({expression}) = 0")
+
+
+def _catalog_identity_clauses(selected: list[str], clauses: list[str], values: list[Any]) -> None:
+    if not selected:
+        return
+    colors = [color.upper() for color in selected if color.upper() != "C"]
+    if not colors:
+        clauses.append("json_array_length(c.color_identity_json) = 0")
+        return
+    placeholders = ",".join("?" for _ in colors)
+    clauses.append(f"NOT EXISTS (SELECT 1 FROM json_each(c.color_identity_json) WHERE value NOT IN ({placeholders}))")
+    values.extend(colors)
+
+
+def _catalog_criteria_clauses(criteria: list[str], clauses: list[str]) -> None:
+    expressions = {
+        "adventure": _layout_sql("adventure"),
+        "arenaid": _json_present("arena_id"),
+        "artseries": _layout_sql("art_series"),
+        "artist": _json_present("artist"),
+        "artistmisprint": _array_has("promo_types", "artist_misprint"),
+        "lights": "json_array_length(json_extract(c.raw_json, '$.attraction_lights')) > 0",
+        "atypical": "(json_array_length(json_extract(c.raw_json, '$.frame_effects')) > 0 OR json_extract(c.raw_json, '$.frame') NOT IN ('1993','1997','2003','2015'))",
+        "augmentation": _layout_sql("augment"),
+        "back": "json_extract(c.raw_json, '$.layout') IN ('transform','modal_dfc','double_faced_token','reversible_card')",
+        "bear": "c.type_line LIKE '%Creature%' AND c.cmc = 2 AND json_extract(c.raw_json, '$.power') = '2' AND json_extract(c.raw_json, '$.toughness') = '2'",
+        "beginnerbox": _array_has("promo_types", "beginner_box"),
+        "booster": _json_true("booster"),
+        "borderless": "json_extract(c.raw_json, '$.border_color') = 'borderless'",
+        "brawlcommander": _array_has("promo_types", "brawlcommander"),
+        "buyabox": _array_has("promo_types", "buyabox"),
+        "cardmarket": _json_present("cardmarket_id"),
+        "class": _layout_sql("class"),
+        "ci": "json_array_length(json_extract(c.raw_json, '$.color_indicator')) > 0",
+        "colorshifted": _array_has("frame_effects", "colorshifted"),
+        "commander": "json_extract(c.raw_json, '$.legalities.commander') = 'legal' AND (c.type_line LIKE '%Legendary%Creature%' OR COALESCE(c.oracle_text, '') LIKE '%can be your commander%')",
+        "companion": _array_has("keywords", "Companion"),
+        "contentwarning": _json_true("content_warning"),
+        "covered": _array_has("promo_types", "covered"),
+        "manland": "c.type_line LIKE '%Land%' AND COALESCE(c.oracle_text, '') LIKE '%becomes%creature%'",
+        "datestamped": _array_has("promo_types", "datestamped"),
+        "default": "json_array_length(json_extract(c.raw_json, '$.frame_effects')) IS NULL AND COALESCE(json_extract(c.raw_json, '$.border_color'), 'black') = 'black'",
+        "digital": _json_true("digital"),
+        "doublesided": "json_array_length(json_extract(c.raw_json, '$.card_faces')) > 1",
+        "duelcommander": "json_extract(c.raw_json, '$.legalities.duel') = 'legal'",
+        "etb": "COALESCE(c.oracle_text, '') LIKE '%enters%'",
+        "englishart": "json_extract(c.raw_json, '$.lang') = 'en'",
+        "etch": _array_has("finishes", "etched"),
+        "extended": _array_has("frame_effects", "extendedart"),
+        "extra": _extra_card_sql("c"),
+        "ff": "(LOWER(c.set_code) IN ('fin','fic','fca') OR COALESCE(json_extract(c.raw_json, '$.block'), '') LIKE '%Final Fantasy%')",
+        "firstprint": "COALESCE(json_extract(c.raw_json, '$.reprint'), 0) = 0",
+        "flavorname": _json_present("flavor_name"),
+        "flavor": _json_present("flavor_text"),
+        "flip": _layout_sql("flip"),
+        "foil": _json_true("foil"),
+        "fbb": "json_extract(c.raw_json, '$.lang') != 'en' AND json_extract(c.raw_json, '$.border_color') = 'black'",
+        "fwb": "json_extract(c.raw_json, '$.lang') != 'en' AND json_extract(c.raw_json, '$.border_color') = 'white'",
+        "frenchvanilla": "c.type_line LIKE '%Creature%' AND COALESCE(c.oracle_text, '') != '' AND COALESCE(c.oracle_text, '') NOT LIKE '%Whenever%' AND COALESCE(c.oracle_text, '') NOT LIKE '%When %' AND COALESCE(c.oracle_text, '') NOT LIKE '%:%'",
+        "fullart": _json_true("full_art"),
+        "funny": "(json_extract(c.raw_json, '$.security_stamp') = 'acorn' OR json_extract(c.raw_json, '$.border_color') = 'silver')",
+        "future": "json_extract(c.raw_json, '$.frame') = 'future'",
+        "gamechanger": _json_true("game_changer"),
+        "gameday": _array_has("promo_types", "gameday"),
+        "hires": _json_true("highres_image"),
+        "historic": "json_extract(c.raw_json, '$.legalities.historic') = 'legal'",
+        "splitmana": "COALESCE(c.mana_cost, '') LIKE '%/%'",
+        "illustration": "json_extract(c.raw_json, '$.image_uris.art_crop') IS NOT NULL",
+        "intropack": _array_has("promo_types", "intropack"),
+        "invitational": _array_has("promo_types", "invitational"),
+        "leveler": _layout_sql("leveler"),
+        "localizedname": _json_present("printed_name"),
+        "mtgoid": _json_present("mtgo_id"),
+        "masterpiece": "json_extract(c.raw_json, '$.set_type') = 'masterpiece'",
+        "meld": _layout_sql("meld"),
+        "modal": "json_extract(c.raw_json, '$.layout') IN ('modal_dfc','adventure','split')",
+        "mdfc": _layout_sql("modal_dfc"),
+        "modern": "json_extract(c.raw_json, '$.legalities.modern') = 'legal'",
+        "multiverse": "json_array_length(json_extract(c.raw_json, '$.multiverse_ids')) > 0",
+        "new": "COALESCE(json_extract(c.raw_json, '$.reprint'), 0) = 0",
+        "nonfoil": _json_true("nonfoil"),
+        "notuniversesbeyond": "COALESCE(json_extract(c.raw_json, '$.set_type'), '') != 'universes_beyond'",
+        "oathbreaker": "json_extract(c.raw_json, '$.legalities.oathbreaker') = 'legal'",
+        "old": "json_extract(c.raw_json, '$.frame') IN ('1993','1997')",
+        "outlaw": "c.type_line LIKE '%Assassin%' OR c.type_line LIKE '%Mercenary%' OR c.type_line LIKE '%Pirate%' OR c.type_line LIKE '%Rogue%' OR c.type_line LIKE '%Warlock%'",
+        "oversized": _json_true("oversized"),
+        "partner": "COALESCE(c.oracle_text, '') LIKE '%Partner%' OR COALESCE(c.oracle_text, '') LIKE '%Friends forever%'",
+        "paperart": "EXISTS (SELECT 1 FROM json_each(c.raw_json, '$.games') WHERE value = 'paper') AND c.image_normal IS NOT NULL",
+        "party": "c.type_line LIKE '%Cleric%' OR c.type_line LIKE '%Rogue%' OR c.type_line LIKE '%Warrior%' OR c.type_line LIKE '%Wizard%'",
+        "permanent": "c.type_line NOT LIKE '%Instant%' AND c.type_line NOT LIKE '%Sorcery%'",
+        "phyrexia": "COALESCE(c.mana_cost, '') LIKE '%/P}%'",
+        "planar": "c.type_line LIKE '%Plane%' OR c.type_line LIKE '%Phenomenon%'",
+        "planeswalkerdeck": _array_has("promo_types", "planeswalkerdeck"),
+        "prepare": "c.name LIKE 'Prepare //%'",
+        "prerelease": _array_has("promo_types", "prerelease"),
+        "printedtext": _json_present("printed_text"),
+        "promo": _json_true("promo"),
+        "related": "json_array_length(json_extract(c.raw_json, '$.all_parts')) > 0",
+        "release": _array_has("promo_types", "release"),
+        "reprint": _json_true("reprint"),
+        "reserved": _json_true("reserved"),
+        "resource": _json_present("resource_id"),
+        "reversible": _layout_sql("reversible_card"),
+        "stamp": _json_present("security_stamp"),
+        "showcase": _array_has("frame_effects", "showcase"),
+        "spell": "c.type_line NOT LIKE '%Land%'",
+        "spellbook": _array_has("promo_types", "spellbook"),
+        "spikey": "c.name LIKE '%Spike,%' OR c.name LIKE '%Spikey%'",
+        "split": _layout_sql("split"),
+        "stamped": _json_present("security_stamp"),
+        "startercollection": _array_has("promo_types", "starter_collection"),
+        "starterdeck": _array_has("promo_types", "starter_deck"),
+        "story": _json_true("story_spotlight"),
+        "tcgplayer": _json_present("tcgplayer_id"),
+        "textless": _json_true("textless"),
+        "token": "json_extract(c.raw_json, '$.layout') IN ('token','double_faced_token')",
+        "tombstone": _array_has("frame_effects", "tombstone"),
+        "transform": _layout_sql("transform"),
+        "translucent": _array_has("frame_effects", "translucent"),
+        "onlyprint": "(SELECT COUNT(*) FROM cards c3 WHERE c3.game_code = c.game_code AND COALESCE(json_extract(c3.raw_json, '$.oracle_id'), LOWER(c3.name)) = COALESCE(json_extract(c.raw_json, '$.oracle_id'), LOWER(c.name))) = 1",
+        "universesbeyond": "json_extract(c.raw_json, '$.set_type') = 'universes_beyond'",
+        "vanilla": "c.type_line LIKE '%Creature%' AND COALESCE(c.oracle_text, '') = ''",
+        "variation": _json_true("variation"),
+        "watermark": _json_present("watermark"),
+        "worthy": "COALESCE(json_extract(c.raw_json, '$.edhrec_rank'), 999999999) <= 1000",
+    }
+    clauses.extend(f"({expressions[item]})" for item in criteria)
+
+
+def _json_true(field: str) -> str:
+    return f"json_extract(c.raw_json, '$.{field}') = 1"
+
+
+def _json_present(field: str) -> str:
+    return f"json_extract(c.raw_json, '$.{field}') IS NOT NULL"
+
+
+def _layout_sql(layout: str) -> str:
+    return f"json_extract(c.raw_json, '$.layout') = '{layout}'"
+
+
+def _array_has(field: str, value: str) -> str:
+    return f"EXISTS (SELECT 1 FROM json_each(c.raw_json, '$.{field}') WHERE value = '{value}')"
+
+
+def _extra_card_sql(alias: str) -> str:
+    layouts = ",".join(f"'{layout}'" for layout in _EXTRA_CARD_LAYOUTS)
+    return (
+        f"COALESCE(json_extract({alias}.raw_json, '$.layout') IN ({layouts}), 0) = 1 "
+        f"OR COALESCE(json_extract({alias}.raw_json, '$.set_type'), '') = 'token'"
+    )
+
+
+def _catalog_order_sql(order: str, direction: str) -> str:
+    expressions = {
+        "name": "c.name COLLATE NOCASE",
+        "set": "COALESCE(c.set_name, c.set_code, '') COLLATE NOCASE",
+        "released": "COALESCE(json_extract(c.raw_json, '$.released_at'), '')",
+        "rarity": "CASE LOWER(c.rarity) WHEN 'common' THEN 1 WHEN 'uncommon' THEN 2 WHEN 'rare' THEN 3 WHEN 'mythic' THEN 4 ELSE 5 END",
+        "color": "c.colors_json",
+        "usd": "COALESCE(c.price_usd_minor, -1)",
+        "eur": "COALESCE(c.price_eur_minor, -1)",
+        "tix": "COALESCE(CAST(json_extract(c.raw_json, '$.prices.tix') AS REAL), -1)",
+        "cmc": "COALESCE(c.cmc, -1)",
+        "power": "CAST(json_extract(c.raw_json, '$.power') AS REAL)",
+        "toughness": "CAST(json_extract(c.raw_json, '$.toughness') AS REAL)",
+        "artist": "COALESCE(json_extract(c.raw_json, '$.artist'), '') COLLATE NOCASE",
+        "collector": "COALESCE(CAST(c.collector_number AS INTEGER), 999999999), c.collector_number COLLATE NOCASE",
+    }
+    return f"{expressions[order]} {'DESC' if direction == 'desc' else 'ASC'}"
+
+
+def _catalog_prefer_sql(prefer: str) -> str:
+    expressions = {
+        "best": "0",
+        "newest": "COALESCE(json_extract(c.raw_json, '$.released_at'), '') DESC",
+        "oldest": "COALESCE(json_extract(c.raw_json, '$.released_at'), '9999-99-99') ASC",
+        "promo": "COALESCE(json_extract(c.raw_json, '$.promo'), 0) DESC",
+        "default": "CASE WHEN json_array_length(json_extract(c.raw_json, '$.frame_effects')) IS NULL THEN 0 ELSE 1 END",
+        "atypical": "CASE WHEN json_array_length(json_extract(c.raw_json, '$.frame_effects')) IS NULL THEN 1 ELSE 0 END",
+        "universesbeyond": "CASE WHEN json_extract(c.raw_json, '$.set_type') = 'universes_beyond' THEN 0 ELSE 1 END",
+        "notuniversesbeyond": "CASE WHEN json_extract(c.raw_json, '$.set_type') = 'universes_beyond' THEN 1 ELSE 0 END",
+        "usdlow": "CASE WHEN c.price_usd_minor IS NULL THEN 1 ELSE 0 END, c.price_usd_minor ASC",
+        "usdhigh": "CASE WHEN c.price_usd_minor IS NULL THEN 1 ELSE 0 END, c.price_usd_minor DESC",
+        "eurlow": "CASE WHEN c.price_eur_minor IS NULL THEN 1 ELSE 0 END, c.price_eur_minor ASC",
+        "eurhigh": "CASE WHEN c.price_eur_minor IS NULL THEN 1 ELSE 0 END, c.price_eur_minor DESC",
+        "tixlow": "CASE WHEN json_extract(c.raw_json, '$.prices.tix') IS NULL THEN 1 ELSE 0 END, CAST(json_extract(c.raw_json, '$.prices.tix') AS REAL) ASC",
+        "tixhigh": "CASE WHEN json_extract(c.raw_json, '$.prices.tix') IS NULL THEN 1 ELSE 0 END, CAST(json_extract(c.raw_json, '$.prices.tix') AS REAL) DESC",
+    }
+    return expressions[prefer]
+
+
+def _active_catalog_filter_count(filters: dict[str, Any]) -> int:
+    defaults = {
+        "type_mode": "is", "color_mode": "including", "stat_operator": "=",
+        "legal_status": "legal", "price_currency": "usd",
+        "price_operator": "<=", "order": "name", "direction": "asc",
+        "unique": "prints", "prefer": "best", "games_mode": "is",
+        "include_extras": False,
+    }
+    return sum(
+        1 for key, value in filters.items()
+        if value not in ("", [], None) and value != defaults.get(key)
+    )
 
 
 def list_decks(game_code: str, *, include_archived: bool = False) -> list[dict[str, Any]]:
@@ -483,6 +1005,156 @@ def get_card(card_id: int, game_code: str | None = None) -> dict[str, Any] | Non
             f"SELECT * FROM cards WHERE id = ?{game_clause}", values
         ).fetchone()
     return dict(row) if row else None
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(str(value))
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _trusted_card_link(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text or any(char in text for char in "\"'()\\\r\n\t"):
+        return None
+    parsed = urlsplit(text)
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname not in _TRUSTED_CARD_LINK_HOSTS
+        or parsed.username
+        or parsed.password
+        or port not in (None, 443)
+    ):
+        return None
+    return text
+
+
+def _card_faces(card: dict[str, Any], raw: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_faces = raw.get("card_faces")
+    if not isinstance(raw_faces, list) or not raw_faces:
+        raw_faces = [raw]
+    faces: list[dict[str, Any]] = []
+    for index, value in enumerate(raw_faces):
+        face = value if isinstance(value, dict) else {}
+        images = face.get("image_uris") or raw.get("image_uris") or raw.get("images") or {}
+        image_normal = trusted_image_url(
+            images.get("normal") or images.get("large") or card.get("image_normal")
+        )
+        image_small = trusted_image_url(images.get("small") or card.get("image_small"))
+        faces.append({
+            "name": face.get("name") or card["name"],
+            "mana_cost": face.get("mana_cost") or (card.get("mana_cost") if index == 0 else None),
+            "type_line": face.get("type_line") or card.get("type_line"),
+            "oracle_text": face.get("oracle_text") or (card.get("oracle_text") if index == 0 else None),
+            "flavor_text": face.get("flavor_text") or (
+                (raw.get("flavor_text") or raw.get("flavorText"))
+                if index == 0 else None
+            ),
+            "artist": face.get("artist") or raw.get("artist"),
+            "power": face.get("power") or (raw.get("power") if index == 0 else None),
+            "toughness": face.get("toughness") or (raw.get("toughness") if index == 0 else None),
+            "loyalty": face.get("loyalty") or (raw.get("loyalty") if index == 0 else None),
+            "defense": face.get("defense") or (raw.get("defense") if index == 0 else None),
+            "image_normal": image_normal or image_small,
+            "image_small": image_small or image_normal,
+        })
+    return faces
+
+
+def card_detail(card_id: int, game_code: str) -> dict[str, Any] | None:
+    """Return rich provider data plus local deck and collection usage."""
+    card = get_card(card_id, game_code)
+    if not card:
+        return None
+    raw = _json_object(card.get("raw_json"))
+    purchase_uris = raw.get("purchase_uris") if isinstance(raw.get("purchase_uris"), dict) else {}
+    links = [
+        {"label": "Scryfall", "url": _trusted_card_link(raw.get("scryfall_uri"))},
+        {"label": "TCGplayer", "url": _trusted_card_link(purchase_uris.get("tcgplayer"))},
+        {"label": "Cardmarket", "url": _trusted_card_link(purchase_uris.get("cardmarket"))},
+        {"label": "Gatherer", "url": _trusted_card_link(purchase_uris.get("gatherer"))},
+    ]
+    legalities = raw.get("legalities") if isinstance(raw.get("legalities"), dict) else {}
+    with _connect() as conn:
+        printings = conn.execute(
+            """
+                 SELECT id, set_code, set_name, collector_number, rarity,
+                     image_small, image_normal, price_usd_minor,
+                     price_usd_foil_minor,
+                     json_extract(raw_json, '$.illustration_id') AS illustration_id,
+                     json_extract(raw_json, '$.released_at') AS released_at,
+                     json_extract(raw_json, '$.finishes') AS finishes_json
+              FROM cards WHERE game_code = ? AND name = ? COLLATE NOCASE
+             ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END,
+                      COALESCE(json_extract(raw_json, '$.released_at'), '') DESC,
+                      set_code, collector_number LIMIT 100
+            """,
+            (game_code, card["name"], card_id),
+        ).fetchall()
+        decks = conn.execute(
+            """
+            SELECT d.id, d.name, d.format, dc.qty, dc.board, dc.category
+              FROM deck_cards dc JOIN decks d ON d.id = dc.deck_id
+             WHERE dc.card_id = ? ORDER BY d.name COLLATE NOCASE
+            """,
+            (card_id,),
+        ).fetchall()
+        collection = conn.execute(
+            """
+            SELECT id, qty, foil, condition, acquired_date,
+                   acquired_price_minor, acquired_currency, notes
+              FROM collection WHERE card_id = ?
+             ORDER BY foil DESC, condition
+            """,
+            (card_id,),
+        ).fetchall()
+    public_card = {key: value for key, value in card.items() if key != "raw_json"}
+    printing_rows = [dict(row) for row in printings]
+    art_count = len({
+        row["illustration_id"] or f"printing:{row['id']}"
+        for row in printing_rows
+    })
+    return {
+        **public_card,
+        "faces": _card_faces(card, raw),
+        "released_at": raw.get("released_at"),
+        "set_type": raw.get("set_type"),
+        "lang": raw.get("lang"),
+        "artist": raw.get("artist"),
+        "flavor_text": raw.get("flavor_text") or raw.get("flavorText"),
+        "layout": raw.get("layout"),
+        "keywords": raw.get("keywords") if isinstance(raw.get("keywords"), list) else [],
+        "games": raw.get("games") if isinstance(raw.get("games"), list) else [],
+        "finishes": raw.get("finishes") if isinstance(raw.get("finishes"), list) else [],
+        "legalities": legalities,
+        "legal_groups": {
+            status: sorted(name.replace("_", " ").title() for name, value in legalities.items() if value == status)
+            for status in ("legal", "restricted", "banned", "not_legal")
+        },
+        "links": [link for link in links if link["url"]],
+        "printings": printing_rows,
+        "art_count": art_count,
+        "decks": [dict(row) for row in decks],
+        "collection": [dict(row) for row in collection],
+        "pokemon": {
+            "hp": raw.get("hp"),
+            "evolves_from": raw.get("evolvesFrom"),
+            "evolves_to": raw.get("evolvesTo") if isinstance(raw.get("evolvesTo"), list) else [],
+            "regulation_mark": raw.get("regulationMark"),
+            "pokedex_numbers": raw.get("nationalPokedexNumbers") if isinstance(raw.get("nationalPokedexNumbers"), list) else [],
+            "weaknesses": raw.get("weaknesses") if isinstance(raw.get("weaknesses"), list) else [],
+            "resistances": raw.get("resistances") if isinstance(raw.get("resistances"), list) else [],
+            "retreat_cost": raw.get("retreatCost") if isinstance(raw.get("retreatCost"), list) else [],
+        },
+    }
 
 
 def list_collection(game_code: str, query: str = "", *, limit: int = 500) -> list[dict[str, Any]]:
@@ -887,6 +1559,150 @@ def remove_deck_card(deck_id: int, deck_card_id: int) -> bool:
     return update_deck_card(deck_id, deck_card_id, 0)
 
 
+def get_deck_card(
+    deck_id: int,
+    deck_card_id: int,
+    game_code: str | None = None,
+) -> dict[str, Any] | None:
+    init_db()
+    game_clause = " AND d.game_code = ?" if game_code else ""
+    values: tuple[Any, ...] = (
+        (deck_id, deck_card_id, game_code)
+        if game_code else (deck_id, deck_card_id)
+    )
+    with _connect() as conn:
+        row = conn.execute(
+            f"""
+            SELECT dc.*, d.game_code, c.name AS card_name
+              FROM deck_cards dc
+              JOIN decks d ON d.id = dc.deck_id
+              JOIN cards c ON c.id = dc.card_id
+             WHERE dc.deck_id = ? AND dc.id = ?{game_clause}
+            """,
+            values,
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def _printing_family(card: sqlite3.Row | dict[str, Any]) -> tuple[str, str]:
+    raw = _json_object(card["raw_json"])
+    oracle_id = str(raw.get("oracle_id") or "").strip()
+    if oracle_id:
+        return "oracle", oracle_id
+    return "name", str(card["name"]).strip().casefold()
+
+
+def _validate_printing_swap(
+    conn: sqlite3.Connection,
+    source_card_id: int,
+    target_card_id: int,
+    game_code: str,
+) -> tuple[sqlite3.Row, sqlite3.Row]:
+    source = conn.execute(
+        "SELECT * FROM cards WHERE id = ? AND game_code = ?",
+        (source_card_id, game_code),
+    ).fetchone()
+    target = conn.execute(
+        "SELECT * FROM cards WHERE id = ? AND game_code = ?",
+        (target_card_id, game_code),
+    ).fetchone()
+    if not source or not target:
+        raise ValueError("source or target printing was not found")
+    if _printing_family(source) != _printing_family(target):
+        raise ValueError("target card is not an alternate printing of this card")
+    return source, target
+
+
+def printings_are_compatible(
+    source_card_id: int,
+    target_card_id: int,
+    game_code: str,
+) -> bool:
+    init_db()
+    with _connect() as conn:
+        try:
+            _validate_printing_swap(
+                conn, source_card_id, target_card_id, game_code
+            )
+        except ValueError:
+            return False
+    return True
+
+
+def swap_deck_card_printing(
+    deck_id: int,
+    deck_card_id: int,
+    target_card_id: int,
+    game_code: str,
+) -> dict[str, Any]:
+    """Replace one deck slot's printing, merging an existing target slot."""
+    init_db()
+    with transaction() as conn:
+        source = conn.execute(
+            """
+            SELECT dc.*, d.game_code
+              FROM deck_cards dc JOIN decks d ON d.id = dc.deck_id
+             WHERE dc.id = ? AND dc.deck_id = ? AND d.game_code = ?
+            """,
+            (deck_card_id, deck_id, game_code),
+        ).fetchone()
+        if not source:
+            raise ValueError("deck card not found")
+        _validate_printing_swap(
+            conn, int(source["card_id"]), int(target_card_id), game_code
+        )
+        if int(source["card_id"]) == int(target_card_id):
+            return {"deck_card_id": deck_card_id, "merged": False}
+
+        destination = conn.execute(
+            """
+            SELECT * FROM deck_cards
+             WHERE deck_id = ? AND card_id = ? AND board = ?
+            """,
+            (deck_id, target_card_id, source["board"]),
+        ).fetchone()
+        if destination:
+            total_qty = int(destination["qty"]) + int(source["qty"])
+            if total_qty > 9999:
+                raise ValueError("combined deck quantity must be at most 9999")
+            conn.execute(
+                "UPDATE deck_cards SET qty = ?, category = ? WHERE id = ?",
+                (
+                    total_qty,
+                    source["category"] or destination["category"],
+                    destination["id"],
+                ),
+            )
+            conn.execute("DELETE FROM deck_cards WHERE id = ?", (deck_card_id,))
+            result_id = int(destination["id"])
+            merged = True
+        else:
+            conn.execute(
+                "UPDATE deck_cards SET card_id = ? WHERE id = ?",
+                (target_card_id, deck_card_id),
+            )
+            result_id = deck_card_id
+            merged = False
+
+        conn.execute(
+            """
+            UPDATE decks SET
+                commander_card_id = CASE WHEN commander_card_id = ? THEN ? ELSE commander_card_id END,
+                partner_card_id = CASE WHEN partner_card_id = ? THEN ? ELSE partner_card_id END,
+                cover_card_id = CASE WHEN cover_card_id = ? THEN ? ELSE cover_card_id END,
+                updated_at = datetime('now')
+             WHERE id = ? AND game_code = ?
+            """,
+            (
+                source["card_id"], target_card_id,
+                source["card_id"], target_card_id,
+                source["card_id"], target_card_id,
+                deck_id, game_code,
+            ),
+        )
+        return {"deck_card_id": result_id, "merged": merged}
+
+
 def set_deck_tags(deck_id: int, tag_names: Iterable[str]) -> None:
     names = sorted({_text(name, "tag", maximum=40) for name in tag_names if str(name).strip()})
     if len(names) > 20:
@@ -999,6 +1815,135 @@ def remove_from_collection(
                 (int(qty), collection_id),
             )
         return True
+
+
+def get_collection_entry(
+    collection_id: int,
+    game_code: str | None = None,
+) -> dict[str, Any] | None:
+    init_db()
+    game_clause = " AND c.game_code = ?" if game_code else ""
+    values: tuple[Any, ...] = (
+        (collection_id, game_code) if game_code else (collection_id,)
+    )
+    with _connect() as conn:
+        row = conn.execute(
+            f"""
+            SELECT col.*, c.game_code, c.name AS card_name
+              FROM collection col JOIN cards c ON c.id = col.card_id
+             WHERE col.id = ?{game_clause}
+            """,
+            values,
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def _merged_notes(first: Any, second: Any) -> str | None:
+    values = []
+    for value in (first, second):
+        cleaned = str(value or "").strip()
+        if cleaned and cleaned not in values:
+            values.append(cleaned)
+    return "\n".join(values) or None
+
+
+def _weighted_acquisition_price(
+    source: sqlite3.Row,
+    destination: sqlite3.Row,
+) -> tuple[int | None, str]:
+    priced = [
+        row for row in (source, destination)
+        if row["acquired_price_minor"] is not None
+    ]
+    currencies = {str(row["acquired_currency"]) for row in priced}
+    if len(currencies) > 1:
+        raise ValueError(
+            "existing target collection entry uses a different acquisition currency"
+        )
+    if not priced:
+        return None, str(destination["acquired_currency"] or source["acquired_currency"])
+    currency = currencies.pop()
+    weighted_total = sum(
+        int(row["acquired_price_minor"]) * int(row["qty"]) for row in priced
+    )
+    priced_qty = sum(int(row["qty"]) for row in priced)
+    average = int(
+        (Decimal(weighted_total) / Decimal(priced_qty)).quantize(
+            Decimal("1"), rounding=ROUND_HALF_UP
+        )
+    )
+    return average, currency
+
+
+def swap_collection_printing(
+    collection_id: int,
+    target_card_id: int,
+    game_code: str,
+) -> dict[str, Any]:
+    """Replace a collection row's printing, merging an existing variant row."""
+    init_db()
+    with transaction() as conn:
+        source = conn.execute(
+            """
+            SELECT col.* FROM collection col
+              JOIN cards c ON c.id = col.card_id
+             WHERE col.id = ? AND c.game_code = ?
+            """,
+            (collection_id, game_code),
+        ).fetchone()
+        if not source:
+            raise ValueError("collection entry not found")
+        _validate_printing_swap(
+            conn, int(source["card_id"]), int(target_card_id), game_code
+        )
+        if int(source["card_id"]) == int(target_card_id):
+            return {"collection_id": collection_id, "merged": False}
+
+        destination = conn.execute(
+            """
+            SELECT * FROM collection
+             WHERE card_id = ? AND foil = ? AND condition = ?
+            """,
+            (target_card_id, source["foil"], source["condition"]),
+        ).fetchone()
+        if destination:
+            total_qty = int(destination["qty"]) + int(source["qty"])
+            if total_qty > 9999:
+                raise ValueError("combined collection quantity must be at most 9999")
+            price_minor, currency = _weighted_acquisition_price(
+                source, destination
+            )
+            dates = [
+                str(value) for value in (
+                    source["acquired_date"], destination["acquired_date"]
+                ) if value
+            ]
+            conn.execute(
+                """
+                UPDATE collection SET qty = ?, acquired_date = ?,
+                    acquired_price_minor = ?, acquired_currency = ?, notes = ?
+                 WHERE id = ?
+                """,
+                (
+                    total_qty,
+                    min(dates) if dates else None,
+                    price_minor,
+                    currency,
+                    _merged_notes(destination["notes"], source["notes"]),
+                    destination["id"],
+                ),
+            )
+            conn.execute("DELETE FROM collection WHERE id = ?", (collection_id,))
+            result_id = int(destination["id"])
+            merged = True
+        else:
+            conn.execute(
+                "UPDATE collection SET card_id = ? WHERE id = ?",
+                (target_card_id, collection_id),
+            )
+            result_id = collection_id
+            merged = False
+        return {"collection_id": result_id, "merged": merged}
 
 
 def _validated_notes_xml(value: Any) -> str:

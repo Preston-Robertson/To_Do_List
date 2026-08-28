@@ -1,0 +1,143 @@
+<article class="card-inspector" data-card-detail-root>
+  <header class="card-inspector-header">
+    <div>
+      <p>{{ card.set_name or card.set_code or 'Unknown set' }}{% if card.collector_number %} · {{ card.collector_number }}{% endif %}</p>
+      <h2>{{ card.name }}</h2>
+    </div>
+    <button type="button" data-cards-dialog-close aria-label="Close card details">&times;</button>
+  </header>
+
+  <div class="card-inspector-layout">
+    <section class="card-inspector-media" aria-label="Card faces">
+      <div class="card-face-stage">
+        {% for face in card.faces %}
+        <figure data-card-face="{{ loop.index0 }}" {% if not loop.first %}hidden{% endif %}>
+          {% if face.image_normal %}
+          <img src="{{ face.image_normal }}" alt="{{ face.name }}" loading="eager">
+          {% else %}
+          <div class="card-face-placeholder"><strong>{{ face.name }}</strong><span>{{ face.type_line or 'No image available' }}</span></div>
+          {% endif %}
+        </figure>
+        {% endfor %}
+      </div>
+      {% if card.faces|length > 1 %}
+      <div class="card-face-switcher" role="group" aria-label="Card face">
+        {% for face in card.faces %}
+        <button type="button" class="{% if loop.first %}active{% endif %}" data-card-face-button="{{ loop.index0 }}">{{ face.name }}</button>
+        {% endfor %}
+      </div>
+      {% endif %}
+      <div class="card-price-strip">
+        <span><small>Regular</small><strong>{{ card.price_usd_minor | money_minor }}</strong></span>
+        <span><small>Foil</small><strong>{{ card.price_usd_foil_minor | money_minor }}</strong></span>
+        <span><small>EUR</small><strong>{{ card.price_eur_minor | money_minor('EUR') }}</strong></span>
+      </div>
+      {% if swap_context %}
+      <div class="card-printing-context">
+        <span>{{ 'Deck slot' if swap_context.kind == 'deck' else 'Collection record' }}</span>
+        <strong>{{ swap_context.label }}</strong>
+        {% if swap_context.current_card_id == card.id %}
+        <span class="card-current-printing">Currently used printing</span>
+        {% else %}
+        <form method="post" action="{{ swap_context.action_url }}"
+              hx-post="{{ swap_context.action_url }}" hx-swap="none"
+              hx-confirm="Use this printing and artwork instead? Quantities and metadata will be preserved.">
+          <input type="hidden" name="target_card_id" value="{{ card.id }}">
+          <button type="submit" class="btn btn-primary">Use this printing</button>
+        </form>
+        {% endif %}
+      </div>
+      {% endif %}
+      <button type="button" class="btn btn-primary card-collect-action"
+              data-cards-quick-collect data-card-id="{{ card.id }}" data-card-name="{{ card.name }}">
+        Add to collection
+      </button>
+    </section>
+
+    <section class="card-inspector-info">
+      <nav class="card-inspector-tabs" role="tablist" aria-label="Card information">
+        <button type="button" class="active" role="tab" data-card-info-tab="card-info">Card info</button>
+        <button type="button" role="tab" data-card-info-tab="card-printings">Art & printings <span>{{ card.printings|length }}</span></button>
+        <button type="button" role="tab" data-card-info-tab="card-decks">In decks <span>{{ card.decks|length }}</span></button>
+        <button type="button" role="tab" data-card-info-tab="card-collection">Collection <span>{{ card.collection|length }}</span></button>
+      </nav>
+
+      <div id="card-info" class="card-info-panel active" role="tabpanel">
+        {% for face in card.faces %}
+        <section class="card-face-copy" data-card-face-copy="{{ loop.index0 }}" {% if not loop.first %}hidden{% endif %}>
+          {% if card.faces|length > 1 %}<h3>{{ face.name }}</h3>{% endif %}
+          <div class="card-type-line"><span>{{ face.type_line or card.type_line or 'Type not recorded' }}</span><span>{{ face.mana_cost | card_mana | safe }}</span></div>
+          {% if face.oracle_text %}<p class="card-rules-text">{{ face.oracle_text }}</p>{% endif %}
+          {% if face.power or face.toughness or face.loyalty or face.defense %}
+          <div class="card-stat-line">
+            {% if face.power or face.toughness %}<span>Power / Toughness <strong>{{ face.power or '-' }} / {{ face.toughness or '-' }}</strong></span>{% endif %}
+            {% if face.loyalty %}<span>Loyalty <strong>{{ face.loyalty }}</strong></span>{% endif %}
+            {% if face.defense %}<span>Defense <strong>{{ face.defense }}</strong></span>{% endif %}
+          </div>
+          {% endif %}
+          {% if face.flavor_text %}<blockquote>{{ face.flavor_text }}</blockquote>{% endif %}
+          {% if face.artist %}<p class="card-artist">Illustrated by {{ face.artist }}</p>{% endif %}
+        </section>
+        {% endfor %}
+
+        <dl class="card-metadata-grid">
+          <div><dt>Set</dt><dd>{{ card.set_name or '-' }}{% if card.set_code %} ({{ card.set_code|upper }}){% endif %}</dd></div>
+          <div><dt>Collector</dt><dd>{{ card.collector_number or '-' }}</dd></div>
+          <div><dt>Rarity</dt><dd>{{ card.rarity or '-' }}</dd></div>
+          <div><dt>Released</dt><dd>{{ card.released_at or '-' }}</dd></div>
+          <div><dt>Language</dt><dd>{{ card.lang|upper if card.lang else '-' }}</dd></div>
+          <div><dt>Source</dt><dd>{{ card.source }}</dd></div>
+          {% if card.games %}<div class="wide"><dt>Games</dt><dd>{{ card.games | join(', ') }}</dd></div>{% endif %}
+          {% if card.finishes %}<div class="wide"><dt>Finishes</dt><dd>{{ card.finishes | join(', ') }}</dd></div>{% endif %}
+          {% if card.keywords %}<div class="wide"><dt>Keywords</dt><dd>{{ card.keywords | join(', ') }}</dd></div>{% endif %}
+        </dl>
+
+        {% if card.pokemon.hp or card.pokemon.evolves_from or card.pokemon.pokedex_numbers or card.pokemon.weaknesses %}
+        <section class="card-provider-details">
+          <h3>Pokemon details</h3>
+          <dl class="card-metadata-grid">
+            {% if card.pokemon.hp %}<div><dt>HP</dt><dd>{{ card.pokemon.hp }}</dd></div>{% endif %}
+            {% if card.pokemon.evolves_from %}<div><dt>Evolves from</dt><dd>{{ card.pokemon.evolves_from }}</dd></div>{% endif %}
+            {% if card.pokemon.regulation_mark %}<div><dt>Regulation</dt><dd>{{ card.pokemon.regulation_mark }}</dd></div>{% endif %}
+            {% if card.pokemon.pokedex_numbers %}<div><dt>Pokedex</dt><dd>{{ card.pokemon.pokedex_numbers | join(', ') }}</dd></div>{% endif %}
+            {% if card.pokemon.weaknesses %}<div class="wide"><dt>Weaknesses</dt><dd>{% for item in card.pokemon.weaknesses %}{{ item.type }} {{ item.value }}{% if not loop.last %}, {% endif %}{% endfor %}</dd></div>{% endif %}
+            {% if card.pokemon.resistances %}<div class="wide"><dt>Resistances</dt><dd>{% for item in card.pokemon.resistances %}{{ item.type }} {{ item.value }}{% if not loop.last %}, {% endif %}{% endfor %}</dd></div>{% endif %}
+          </dl>
+        </section>
+        {% endif %}
+
+        {% if card.legalities %}
+        <section class="card-legality-section">
+          <h3>Format legality</h3>
+          {% for status, formats in card.legal_groups.items() if formats %}
+          <details {% if status != 'not_legal' %}open{% endif %}><summary>{{ status.replace('_', ' ')|title }} <span>{{ formats|length }}</span></summary><div>{% for format in formats %}<span>{{ format }}</span>{% endfor %}</div></details>
+          {% endfor %}
+        </section>
+        {% endif %}
+        {% if card.links %}<div class="card-external-links">{% for link in card.links %}<a class="btn" href="{{ link.url }}" target="_blank" rel="noopener noreferrer">{{ link.label }}</a>{% endfor %}</div>{% endif %}
+      </div>
+
+      <div id="card-printings" class="card-info-panel" role="tabpanel">
+        <div class="card-printing-summary"><span><strong>{{ card.printings|length }}</strong> printings</span><span><strong>{{ card.art_count }}</strong> artworks</span></div>
+        <div class="card-printing-grid">
+          {% for printing in card.printings %}
+          <button type="button" class="card-printing-option {% if printing.id == card.id %}selected{% endif %} {% if swap_context and printing.id == swap_context.current_card_id %}used{% endif %}"
+                  data-card-detail-url="/cards/{{ current_game }}/cards/{{ printing.id }}/detail{% if detail_context_query %}?{{ detail_context_query }}{% endif %}">
+            <span class="card-printing-art">{% if printing.image_normal or printing.image_small %}<img src="{{ printing.image_normal or printing.image_small }}" alt="" loading="lazy">{% else %}<span>No image</span>{% endif %}</span>
+            <span class="card-printing-copy"><strong>{{ printing.set_name or printing.set_code or 'Unknown set' }}</strong><small>{{ printing.set_code|upper if printing.set_code else '-' }} · {{ printing.collector_number or '-' }}</small><small>{{ printing.released_at or 'Release unknown' }} · {{ printing.rarity or 'Rarity unknown' }}</small><b>{{ printing.price_usd_minor | money_minor }}</b></span>
+            {% if swap_context and printing.id == swap_context.current_card_id %}<span class="card-printing-badge">Used</span>{% elif printing.id == card.id %}<span class="card-printing-badge">Selected</span>{% endif %}
+          </button>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div id="card-decks" class="card-info-panel" role="tabpanel">
+        {% if card.decks %}<div class="card-record-list">{% for usage in card.decks %}<a class="card-record-row" href="/cards/{{ current_game }}/decks/{{ usage.id }}"><span><strong>{{ usage.name }}</strong><small>{{ usage.format or 'No format' }} · {{ usage.board|title }}{% if usage.category %} · {{ usage.category }}{% endif %}</small></span><b>{{ usage.qty }}x</b></a>{% endfor %}</div>{% else %}<div class="cards-empty"><h3>Not used in a deck</h3><p>Add it from any deck's card search.</p></div>{% endif %}
+      </div>
+
+      <div id="card-collection" class="card-info-panel" role="tabpanel">
+        {% if card.collection %}<div class="card-record-list">{% for record in card.collection %}<div class="card-record-row"><span><strong>{{ record.qty }}x · {{ 'Foil' if record.foil else 'Regular' }} · {{ record.condition }}</strong><small>{% if record.acquired_date %}Acquired {{ record.acquired_date }} · {% endif %}{{ record.acquired_price_minor | money_minor(record.acquired_currency) }}{% if record.notes %} · {{ record.notes }}{% endif %}</small></span></div>{% endfor %}</div>{% else %}<div class="cards-empty"><h3>Not in collection</h3><p>Use Add to collection to record a copy.</p></div>{% endif %}
+      </div>
+    </section>
+  </div>
+</article>

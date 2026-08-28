@@ -803,6 +803,14 @@ class GanttTests(unittest.TestCase):
                     app.task_events.Capability(False, "not installed"), []
                 ),
             ),
+            patch.object(
+                db,
+                "list_calendar_activity_events",
+                return_value=(
+                    app.task_events.Capability(False, "not installed"), []
+                ),
+                create=True,
+            ),
         ):
             response = app.calendar_page(request, "2026-08")
         self.assertEqual(response.context["month_label"], "August 2026")
@@ -813,6 +821,14 @@ class GanttTests(unittest.TestCase):
         self.assertIn('data-calendar-view="agenda"', body)
         self.assertIn('data-calendar-density', body)
         self.assertIn('data-calendar-view-panel="agenda"', body)
+        planning = body.index('class="nav-group-label">Planning</div>')
+        self.assertGreater(body.index('href="/calendar"'), planning)
+        self.assertGreater(body.index('href="/review"'), planning)
+        self.assertIn('aria-label="Calendar sections"', body)
+        self.assertNotIn('<a href="/activity" class="nav-item', body)
+        self.assertIn('class="nav-focus-alert ', body)
+        self.assertNotIn('<a href="/archive" class="nav-item', body)
+        self.assertNotIn('<a href="/task-rules" class="nav-item', body)
 
     def test_calendar_adds_projected_recurring_occurrences(self) -> None:
         request = Request({"type": "http", "method": "GET", "path": "/calendar",
@@ -835,6 +851,14 @@ class GanttTests(unittest.TestCase):
                     app.task_events.Capability(False, "not installed"), []
                 ),
             ),
+            patch.object(
+                db,
+                "list_calendar_activity_events",
+                return_value=(
+                    app.task_events.Capability(False, "not installed"), []
+                ),
+                create=True,
+            ),
         ):
             response = app.calendar_page(request, "2026-08")
         august_third = next(
@@ -843,6 +867,48 @@ class GanttTests(unittest.TestCase):
         )
         self.assertEqual([row["task"] for row in august_third["tasks"]], ["Pay Rent"])
         self.assertTrue(august_third["tasks"][0]["_projected"])
+
+    def test_calendar_adds_task_activity_events(self) -> None:
+        request = Request({"type": "http", "method": "GET", "path": "/calendar",
+                           "query_string": b"", "headers": []})
+        activity_rows = [{
+            "uuid": "task-1", "task": "Example task", "priority": 0,
+            "status": "Created", "completed": 0, "due_date": "2026-08-12",
+            "source": "task", "source_exists": True,
+            "_calendar_layer": "activity", "_activity_kind": "created",
+            "_activity_label": "Created",
+        }]
+        with (
+            patch.object(app, "_require_v2"),
+            patch.object(app, "_reactivate_recurring"),
+            patch.object(db, "list_calendar_rows", return_value=[]),
+            patch.object(db, "list_recurring", return_value=[]),
+            patch.object(
+                db,
+                "list_task_completion_events",
+                return_value=(app.task_events.Capability(True, "available"), []),
+            ),
+            patch.object(
+                db,
+                "list_calendar_activity_events",
+                return_value=(
+                    app.task_events.Capability(True, "available"), activity_rows
+                ),
+                create=True,
+            ) as activity,
+        ):
+            response = app.calendar_page(request, "2026-08")
+        activity.assert_called_once_with(date(2026, 7, 26), date(2026, 9, 5))
+        august_twelfth = next(
+            day for week in response.context["weeks"] for day in week
+            if day["iso"] == "2026-08-12"
+        )
+        self.assertEqual(
+            [row["task"] for row in august_twelfth["tasks"]], ["Example task"]
+        )
+        body = response.body.decode()
+        self.assertIn('value="activity"', body)
+        self.assertIn('data-calendar-layer="activity"', body)
 
 
 class ConsolidatedTasksTests(unittest.TestCase):
@@ -866,6 +932,9 @@ class ConsolidatedTasksTests(unittest.TestCase):
         endpoints = {row["uuid"]: row["_endpoint_root"] for row in cards}
         self.assertEqual(endpoints, {"task-1": "/tasks", "rec-1": "/recurring"})
         self.assertTrue(response.context["consolidated"])
+        body = response.body.decode()
+        self.assertIn('href="/task-rules">Task rules</a>', body)
+        self.assertIn('href="/archive">Archived</a>', body)
 
     def test_compact_list_keeps_correct_endpoints_and_actions(self) -> None:
         row = {
@@ -994,7 +1063,9 @@ class ActivityTimelineTests(unittest.TestCase):
         self.assertIn("Example task", body)
         self.assertIn("via assistant", body)
         self.assertIn('name="kind"', body)
+        self.assertIn('aria-label="Calendar sections"', body)
         self.assertNotIn("Limited history", body)
+        self.assertEqual(response.context["active_nav"], "calendar")
 
 
 class CommandPaletteTests(unittest.TestCase):

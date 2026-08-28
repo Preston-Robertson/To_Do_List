@@ -13,11 +13,19 @@
   </div>
 </section>
 
+<nav class="view-switcher calendar-section-tabs" aria-label="Calendar sections">
+  <a class="view-switcher-btn active" href="/calendar" aria-current="page">Calendar</a>
+  <a class="view-switcher-btn" href="/activity">Activity</a>
+</nav>
+
 <div class="calendar-layer-bar" data-calendar-layers>
   <span class="muted-hint">Layers</span>
   <label><input type="checkbox" value="planned" checked> Planned</label>
   <label><input type="checkbox" value="completed" checked
     {% if not completion_history_available %}disabled{% endif %}> Completed</label>
+  <label title="{% if activity_history_complete %}Task creation and reopen events{% else %}Creation dates only · {{ activity_history_reason }}{% endif %}">
+    <input type="checkbox" value="activity" checked> Activity events
+  </label>
   <label><input type="checkbox" value="projected" checked> Recurring projection</label>
   {% if completion_history_complete %}
     <span class="muted-hint">{{ completion_day_policy }}</span>
@@ -50,7 +58,7 @@
     {% for day in week %}
       <div class="calendar-day{% if not day.in_month %} is-outside{% endif %}{% if day.iso == today_iso %} is-today{% endif %}">
         <div class="calendar-day-number">{{ day.date.day }}</div>
-        <div class="calendar-items">
+        <div class="calendar-items"{% if day.tasks %} tabindex="0" aria-label="{{ day.date.strftime('%B') }} {{ day.date.day }} tasks and activity"{% endif %}>
           {% for t in day.tasks %}
             {% include "partials/calendar_item.html" %}
           {% endfor %}

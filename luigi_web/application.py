@@ -575,7 +575,7 @@ def task_rules_page(request: Request):
     rows = _operation_task_rows()
     _reconcile_operation_records(rows)
     return templates.TemplateResponse("task_rules.html", {
-        "request": request, "active_nav": "task-rules", "page_title": "Task rules",
+        "request": request, "active_nav": "tasks", "page_title": "Task rules",
         "tasks": rows,
         "dependencies": operations.list_dependencies(),
         "reminder_rules": operations.list_reminder_rules(),
@@ -1169,8 +1169,8 @@ def archive_page(request: Request):
         "archive.html",
         {
             "request": request,
-            "active_nav": "archive",
-            "page_title": "Archive",
+            "active_nav": "tasks",
+            "page_title": "Archived tasks",
             "rows": db.list_archived(),
             "archive_enabled": True,
         },
@@ -2218,6 +2218,10 @@ def calendar_page(request: Request, month: str | None = None):
         grid_start, grid_end
     )
     rows.extend(completion_rows)
+    activity_status, activity_rows = db.list_calendar_activity_events(
+        grid_start, grid_end
+    )
+    rows.extend(activity_rows)
     rows.sort(key=lambda row: (
         str(row.get("due_date") or ""),
         -int(row.get("priority") or 0),
@@ -2258,6 +2262,8 @@ def calendar_page(request: Request, month: str | None = None):
             ),
             "completion_history_complete": history_status.available,
             "completion_history_reason": history_status.reason,
+            "activity_history_complete": activity_status.available,
+            "activity_history_reason": activity_status.reason,
             "completion_day_policy": task_events.server_time_policy(),
         },
     )
@@ -2286,8 +2292,8 @@ def activity_page(
     )
     return templates.TemplateResponse("activity.html", {
         "request": request,
-        "active_nav": "activity",
-        "page_title": "Task activity",
+        "active_nav": "calendar",
+        "page_title": "Calendar",
         "rows": rows,
         "days": days,
         "kind": kind,

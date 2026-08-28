@@ -43,10 +43,28 @@
   const SIDEBAR_KEY = "luigi.sidebar.collapsed";
   const sidebarMedia = window.matchMedia("(max-width: 900px)");
 
+  function syncBackgroundInert() {
+    const overlayOpen = document.body.classList.contains("command-open")
+      || document.body.classList.contains("modal-open");
+    const shell = document.querySelector(".app-shell");
+    const workspace = document.querySelector(".app-workspace");
+    if (shell) shell.inert = overlayOpen;
+    if (workspace) {
+      workspace.inert = !overlayOpen && sidebarMedia.matches
+        && document.body.classList.contains("sidebar-open");
+    }
+  }
+
   function syncSidebarButtonLabels() {
     const mobile = sidebarMedia.matches;
     const open = document.body.classList.contains("sidebar-open");
     const collapsed = document.body.classList.contains("sidebar-collapsed");
+    const sidebar = document.getElementById("app-sidebar");
+    if (sidebar) {
+      sidebar.inert = mobile && !open;
+      if (mobile) sidebar.setAttribute("aria-hidden", String(!open));
+      else sidebar.removeAttribute("aria-hidden");
+    }
     document.querySelectorAll("[data-sidebar-toggle]").forEach((button) => {
       const label = mobile
         ? (open ? "Close navigation" : "Open navigation")
@@ -55,11 +73,18 @@
       button.setAttribute("title", label);
       button.setAttribute("aria-expanded", mobile ? String(open) : String(!collapsed));
     });
+    syncBackgroundInert();
   }
 
-  function closeMobileSidebar() {
+  function closeMobileSidebar(restoreFocus = false) {
+    const wasOpen = document.body.classList.contains("sidebar-open");
     document.body.classList.remove("sidebar-open");
     syncSidebarButtonLabels();
+    if (restoreFocus && wasOpen) {
+      requestAnimationFrame(() => {
+        document.querySelector(".mobile-topbar [data-sidebar-toggle]")?.focus();
+      });
+    }
   }
 
   function initSidebar() {
@@ -78,16 +103,23 @@
     const toggle = e.target.closest("[data-sidebar-toggle]");
     if (toggle) {
       if (sidebarMedia.matches) {
-        document.body.classList.toggle("sidebar-open");
+        const open = document.body.classList.toggle("sidebar-open");
+        syncSidebarButtonLabels();
+        requestAnimationFrame(() => {
+          const focusTarget = open
+            ? document.querySelector("#app-sidebar [data-sidebar-toggle]")
+            : document.querySelector(".mobile-topbar [data-sidebar-toggle]");
+          focusTarget?.focus();
+        });
       } else {
         const collapsed = document.body.classList.toggle("sidebar-collapsed");
         try { localStorage.setItem(SIDEBAR_KEY, collapsed ? "1" : "0"); } catch {}
+        syncSidebarButtonLabels();
       }
-      syncSidebarButtonLabels();
       return;
     }
     if (e.target.closest("[data-sidebar-dismiss]")) {
-      closeMobileSidebar();
+      closeMobileSidebar(true);
       return;
     }
     if (sidebarMedia.matches && e.target.closest(".sidebar .nav-item")) {
@@ -110,6 +142,7 @@
   const commandPalette = () => document.getElementById("command-palette");
   const commandInput = () => document.querySelector("[data-command-input]");
   let commandIndex = -1;
+  let commandOpener = null;
 
   function commandOptions() {
     const palette = commandPalette();
@@ -129,9 +162,14 @@
     const palette = commandPalette();
     const input = commandInput();
     if (!palette || !input) return;
+    if (document.activeElement && document.activeElement !== document.body
+        && !palette.contains(document.activeElement)) {
+      commandOpener = document.activeElement;
+    }
     closeMobileSidebar();
     palette.classList.remove("hidden");
     document.body.classList.add("command-open");
+    syncBackgroundInert();
     commandIndex = -1;
     input.value = "";
     input.focus();
@@ -141,9 +179,15 @@
   window.closeCommandPalette = function () {
     const palette = commandPalette();
     if (!palette) return;
+    const opener = commandOpener;
+    commandOpener = null;
     palette.classList.add("hidden");
     document.body.classList.remove("command-open");
+    syncBackgroundInert();
     commandIndex = -1;
+    requestAnimationFrame(() => {
+      if (opener?.isConnected) opener.focus();
+    });
   };
 
   document.addEventListener("click", (e) => {
@@ -160,10 +204,15 @@
   // ------------------- Modal -------------------
   const modal = () => document.getElementById("modal");
   const modalBody = () => document.getElementById("modal-body");
+  let modalOpener = null;
 
   window.openModal = function () {
     const m = modal();
     if (!m) return;
+    if (document.activeElement && document.activeElement !== document.body
+        && !m.contains(document.activeElement)) {
+      modalOpener = document.activeElement;
+    }
     const body = modalBody();
     if (body && !body.children.length && !body.textContent.trim()) {
       body.innerHTML = `
@@ -176,6 +225,8 @@
         </div>`;
     }
     m.classList.remove("hidden");
+    document.body.classList.add("modal-open");
+    syncBackgroundInert();
     // Focus the first input in the loaded form when it arrives.
     setTimeout(() => {
       const first = modalBody().querySelector("input, select, textarea, button");
@@ -186,8 +237,15 @@
   window.closeModal = function () {
     const m = modal();
     if (!m) return;
+    const opener = modalOpener;
+    modalOpener = null;
     m.classList.add("hidden");
+    document.body.classList.remove("modal-open");
+    syncBackgroundInert();
     modalBody().innerHTML = "";
+    requestAnimationFrame(() => {
+      if (opener?.isConnected) opener.focus();
+    });
   };
 
   document.addEventListener("click", (e) => {
@@ -223,7 +281,7 @@
       return;
     }
     if (e.key === "Escape") {
-      if (document.body.classList.contains("sidebar-open")) closeMobileSidebar();
+      if (document.body.classList.contains("sidebar-open")) closeMobileSidebar(true);
       else window.closeModal();
     }
   });
@@ -655,8 +713,43 @@
       });
   });
 
+  // ------------------- Discipline mobile heatmap -------------------
+  const disciplineHeatmapMedia = window.matchMedia("(max-width: 620px)");
+
+  function positionMobileHeatmaps() {
+    if (!disciplineHeatmapMedia.matches) return;
+    requestAnimationFrame(() => {
+      document.querySelectorAll(".heatmap").forEach((heatmap) => {
+        if (heatmap.dataset.mobilePositioned === "1") return;
+        const currentDay = heatmap.querySelector("[data-current-day]");
+        if (currentDay) {
+          const heatmapRect = heatmap.getBoundingClientRect();
+          const dayRect = currentDay.getBoundingClientRect();
+          heatmap.scrollLeft += dayRect.left - heatmapRect.left
+            - ((heatmap.clientWidth - dayRect.width) / 2);
+        }
+        heatmap.dataset.mobilePositioned = "1";
+      });
+    });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", positionMobileHeatmaps);
+  } else {
+    positionMobileHeatmaps();
+  }
+  disciplineHeatmapMedia.addEventListener?.("change", () => {
+    document.querySelectorAll(".heatmap").forEach((heatmap) => {
+      delete heatmap.dataset.mobilePositioned;
+      if (!disciplineHeatmapMedia.matches) heatmap.scrollLeft = 0;
+    });
+    positionMobileHeatmaps();
+  });
+
   // ------------------- Tasks Board/List view -------------------
   const TASK_VIEW_KEY = "luigi.tasks.view";
+  const taskViewMedia = window.matchMedia("(max-width: 620px)");
+  const taskViewKey = () => `${TASK_VIEW_KEY}.${taskViewMedia.matches ? "mobile" : "desktop"}`;
 
   function setTaskView(view) {
     const scope = document.querySelector("[data-tasks-scope]");
@@ -671,13 +764,17 @@
       button.setAttribute("aria-pressed", String(active));
     });
     scope.dataset.activeView = next;
-    try { localStorage.setItem(TASK_VIEW_KEY, next); } catch {}
+    try { localStorage.setItem(taskViewKey(), next); } catch {}
   }
 
   function initTaskView() {
     if (!document.querySelector("[data-tasks-scope]")) return;
     let saved = "board";
-    try { saved = localStorage.getItem(TASK_VIEW_KEY) || "board"; } catch {}
+    try {
+      saved = localStorage.getItem(taskViewKey())
+        || (taskViewMedia.matches ? "board" : localStorage.getItem(TASK_VIEW_KEY))
+        || "board";
+    } catch {}
     setTaskView(saved);
   }
 
@@ -1244,7 +1341,8 @@
     if (!bar || bar.dataset.layerInit === "1") return;
     bar.dataset.layerInit = "1";
     const key = "luigi.calendar.layers";
-    const viewKey = "luigi.calendar.view";
+    const calendarViewMedia = window.matchMedia("(max-width: 620px)");
+    const viewKey = () => `luigi.calendar.view.${calendarViewMedia.matches ? "mobile" : "desktop"}`;
     const densityKey = "luigi.calendar.density";
     let saved = {};
     try { saved = JSON.parse(localStorage.getItem(key) || "{}"); }
@@ -1292,7 +1390,7 @@
         button.classList.toggle("active", active);
         button.setAttribute("aria-pressed", String(active));
       });
-      localStorage.setItem(viewKey, selected);
+      localStorage.setItem(viewKey(), selected);
     };
     modeBar?.querySelectorAll("[data-calendar-view]").forEach((button) => {
       button.addEventListener("click", () => applyView(button.dataset.calendarView));
@@ -1308,7 +1406,7 @@
         localStorage.setItem(densityKey, compact ? "compact" : "comfortable");
       });
     }
-    applyView(localStorage.getItem(viewKey) || "month");
+    applyView(localStorage.getItem(viewKey()) || (calendarViewMedia.matches ? "agenda" : "month"));
     apply();
   }
   if (document.readyState === "loading") {
