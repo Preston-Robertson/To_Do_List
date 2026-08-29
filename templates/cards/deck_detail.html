@@ -50,7 +50,7 @@
 </section>
 
 <section id="stats-panel" class="cards-tab-panel" role="tabpanel">
-  <div class="cards-stat-grid"><div><span>Total cards</span><strong>{{ total_qty }}</strong></div><div><span>Market value</span><strong>{{ total_price_minor | money_minor }}</strong></div><div><span>Groups</span><strong>{{ by_category|length }}</strong></div></div>
+  <div class="cards-stat-grid"><div><span>Total cards</span><strong>{{ total_qty }}</strong></div><div><span>Market value</span><strong>{{ total_price_minor | money_minor }}</strong></div><div><span>Board sections</span><strong>{{ deck_sections|length }}</strong></div><div><span>Categories</span><strong>{{ category_count }}</strong></div></div>
   <div class="cards-trend"><h2>Value trend</h2><img src="/cards/{{ current_game }}/decks/{{ deck.id }}/value-trend.svg?days=180" alt="Deck value over the last 180 days" width="600" height="140"></div>
 </section>
 
@@ -84,7 +84,7 @@
 <dialog class="cards-dialog cards-dialog-wide" id="import-cards-dialog">
   <form method="post" action="/cards/{{ current_game }}/decks/{{ deck.id }}/import" hx-post="/cards/{{ current_game }}/decks/{{ deck.id }}/import" hx-swap="none" data-card-import-form data-preview-url="/cards/{{ current_game }}/import/preview">
     <header><h2>Import into {{ deck.name }}</h2><button type="button" data-cards-dialog-close aria-label="Close">&times;</button></header>
-    <label>Card list<textarea name="text" rows="15" required placeholder="Mainboard&#10;4 Example Relic (TST) 7&#10;Sideboard&#10;2 Example Spell"></textarea></label>
+    <label>Card list<textarea name="text" rows="15" required placeholder="Mainboard&#10;[Ramp]&#10;4 Example Relic (TST) 7&#10;[Interaction]&#10;2 Example Spell&#10;Sideboard&#10;[Answers]&#10;1 Example Answer"></textarea></label>
     <div class="cards-import-preview" data-import-preview aria-live="polite"></div>
     <footer><button type="button" class="btn" data-cards-dialog-close>Cancel</button><button type="button" class="btn" data-import-preview-button>Preview</button><button class="btn btn-primary" type="submit">Import cards</button></footer>
   </form>

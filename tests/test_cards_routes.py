@@ -252,6 +252,41 @@ class CardRouteTests(unittest.TestCase):
         self.assertEqual(search.status_code, 200)
         self.assertIn("Route Example", search.text)
 
+    def test_import_preview_and_viewer_split_board_categories(self) -> None:
+        headers = self.csrf_headers()
+        preview = self.client.post(
+            "/cards/mtg/import/preview",
+            json={
+                "text": (
+                    "Mainboard\n[Engine]\n2 Route Example\n"
+                    "Sideboard\n[Answers]\n1 Route Example"
+                )
+            },
+            headers=headers,
+        )
+        self.assertEqual(preview.status_code, 200)
+        self.assertEqual(
+            [
+                (row["board"], row["category"], row["qty"])
+                for row in preview.json()["matched"]
+            ],
+            [("main", "Engine", 2), ("side", "Answers", 1)],
+        )
+
+        deck_id = cards.create_deck("mtg", "Section Route Deck")
+        cards.add_card_to_deck(
+            deck_id, self.card["id"], qty=2, board="main", category="Engine"
+        )
+        cards.add_card_to_deck(
+            deck_id, self.card["id"], qty=1, board="side", category="Answers"
+        )
+        response = self.client.get(f"/cards/mtg/decks/{deck_id}")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.text.count('class="deck-board-section"'), 2)
+        self.assertEqual(response.text.count('class="deck-stack-board"'), 2)
+        for label in ("Mainboard", "Sideboard", "Engine", "Answers"):
+            self.assertIn(label, response.text)
+
     def test_notes_route_rejects_active_xml(self) -> None:
         headers = self.csrf_headers()
         deck_id = cards.create_deck("mtg", "Notes Route Deck")

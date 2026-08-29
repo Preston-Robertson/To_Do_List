@@ -113,15 +113,53 @@ def _deck_state(game_code: str, deck_id: int) -> dict[str, Any]:
     deck = _require_deck(game_code, deck_id)
     rows = cards.list_deck_cards(deck_id)
     grouped: dict[str, list[dict[str, Any]]] = {}
+    section_map: dict[str, dict[str, Any]] = {}
     for row in rows:
-        board = _BOARD_LABELS.get(str(row["board"]), "Other")
+        board_code = str(row["board"])
+        board = _BOARD_LABELS.get(board_code, "Other")
         category = str(row.get("category") or "").strip()
         label = f"{board} · {category}" if category else board
         grouped.setdefault(label, []).append(row)
+        section = section_map.setdefault(board_code, {
+            "code": board_code,
+            "label": board,
+            "quantity": 0,
+            "price_minor": 0,
+            "category_map": {},
+        })
+        category_key = category.casefold()
+        category_group = section["category_map"].setdefault(category_key, {
+            "label": category or "Uncategorized",
+            "order": int(row["id"]),
+            "quantity": 0,
+            "price_minor": 0,
+            "cards": [],
+        })
+        quantity = int(row["qty"])
+        price_minor = quantity * int(row.get("price_usd_minor") or 0)
+        section["quantity"] += quantity
+        section["price_minor"] += price_minor
+        category_group["quantity"] += quantity
+        category_group["price_minor"] += price_minor
+        category_group["cards"].append(row)
+    deck_sections: list[dict[str, Any]] = []
+    for board_code in cards.BOARDS:
+        section = section_map.get(board_code)
+        if not section:
+            continue
+        section["categories"] = sorted(
+            section.pop("category_map").values(),
+            key=lambda group: int(group["order"]),
+        )
+        deck_sections.append(section)
     return {
         "deck": deck,
         "deck_cards": rows,
         "by_category": grouped,
+        "deck_sections": deck_sections,
+        "category_count": sum(
+            len(section["categories"]) for section in deck_sections
+        ),
         "total_qty": sum(int(row["qty"]) for row in rows),
         "total_price_minor": sum(
             int(row["qty"]) * int(row.get("price_usd_minor") or 0) for row in rows

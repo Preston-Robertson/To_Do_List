@@ -21,7 +21,8 @@ the shared LuigiBot repository.
   text import/export, tags, collection ownership, exact price tracking,
   rich card inspection, table/stack deck views, Scryfall-style advanced local
   search, visual alternate-art selection for deck and collection records,
-  catalog refreshes, and optional draw.io deck diagrams.
+  section-aware imports with split board/category views, catalog refreshes, and
+  optional draw.io deck diagrams.
 - **Finance:** separately unlocked accounts, transactions, budgets,
   investments, net worth, CSV import, reports, alerts, audit history, and
   exports. Finance data is isolated from LuigiBot and the LLM.

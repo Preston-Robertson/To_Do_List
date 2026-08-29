@@ -116,6 +116,63 @@ class CardRepositoryTests(unittest.TestCase):
         self.assertEqual(columns["price_usd_minor"], "INTEGER")
         self.assertNotIn("tasks", tables)
 
+    def test_v1_schema_migrates_deck_identity_to_include_category(self) -> None:
+        os.remove(cards.db_path())
+        conn = sqlite3.connect(cards.db_path())
+        conn.executescript("""
+            PRAGMA user_version=1;
+            CREATE TABLE games (
+                code TEXT PRIMARY KEY, name TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1, sort_order INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE cards (
+                id INTEGER PRIMARY KEY, game_code TEXT NOT NULL,
+                external_id TEXT NOT NULL, name TEXT NOT NULL,
+                set_code TEXT, collector_number TEXT,
+                UNIQUE(game_code, external_id)
+            );
+            CREATE TABLE decks (
+                id INTEGER PRIMARY KEY, game_code TEXT NOT NULL,
+                archived INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE TABLE deck_cards (
+                id INTEGER PRIMARY KEY,
+                deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+                card_id INTEGER NOT NULL REFERENCES cards(id),
+                qty INTEGER NOT NULL, category TEXT, board TEXT NOT NULL,
+                UNIQUE(deck_id, card_id, board)
+            );
+            INSERT INTO games VALUES ('mtg', 'Magic', 1, 0);
+            INSERT INTO cards VALUES (1, 'mtg', 'one', 'Example Card', NULL, NULL);
+            INSERT INTO decks VALUES (1, 'mtg', 0, datetime('now'));
+            INSERT INTO deck_cards VALUES (1, 1, 1, 2, NULL, 'main');
+        """)
+        conn.close()
+
+        cards.init_db()
+        cards.add_card_to_deck(1, 1, qty=3, category="Ramp")
+        cards.add_card_to_deck(1, 1, qty=4, category="Draw")
+        cards.add_card_to_deck(1, 1, qty=1, category="Ramp")
+
+        with cards._connect() as conn:
+            self.assertEqual(
+                conn.execute("PRAGMA user_version").fetchone()[0],
+                cards.SCHEMA_VERSION,
+            )
+            category_column = next(
+                row for row in conn.execute("PRAGMA table_info(deck_cards)")
+                if row["name"] == "category"
+            )
+            rows = conn.execute(
+                "SELECT category, qty FROM deck_cards ORDER BY id"
+            ).fetchall()
+        self.assertEqual(category_column["notnull"], 1)
+        self.assertEqual(
+            [(row["category"], row["qty"]) for row in rows],
+            [("", 2), ("Ramp", 4), ("Draw", 4)],
+        )
+
     def test_scryfall_upsert_rejects_untrusted_images(self) -> None:
         payload = _mtg_card("unsafe-image", "Image Example")
         payload["image_uris"]["normal"] = "https://untrusted.example/card.jpg"
@@ -205,9 +262,28 @@ class CardRepositoryTests(unittest.TestCase):
             deck_id, row["id"], third["id"], "mtg"
         )
         rows = cards.list_deck_cards(deck_id)
+        self.assertFalse(merged["merged"])
+        self.assertEqual(
+            [(item["card_id"], item["qty"], item["category"]) for item in rows],
+            [(third["id"], 2, "Leader"), (third["id"], 1, "Target")],
+        )
+
+        cards.add_card_to_deck(
+            deck_id, first["id"], qty=1, board="commander", category="Leader"
+        )
+        first_slot = next(
+            item for item in cards.list_deck_cards(deck_id)
+            if item["card_id"] == first["id"]
+        )
+        merged = cards.swap_deck_card_printing(
+            deck_id, first_slot["id"], third["id"], "mtg"
+        )
+        rows = cards.list_deck_cards(deck_id)
         self.assertTrue(merged["merged"])
-        self.assertEqual(len(rows), 1)
-        self.assertEqual((rows[0]["qty"], rows[0]["category"]), (3, "Leader"))
+        self.assertEqual(
+            [(item["qty"], item["category"]) for item in rows],
+            [(3, "Leader"), (1, "Target")],
+        )
         with self.assertRaisesRegex(ValueError, "alternate printing"):
             cards.swap_deck_card_printing(
                 deck_id, rows[0]["id"], unrelated["id"], "mtg"
@@ -489,6 +565,100 @@ class CardRepositoryTests(unittest.TestCase):
             cards_importer.apply(deck_id, invalid)
         after = sum(row["qty"] for row in cards.list_deck_cards(deck_id))
         self.assertEqual(after, before)
+
+    def test_import_preserves_board_and_custom_category_sections(self) -> None:
+        relic, wizard = self.seed()
+        deck_id = cards.create_deck("mtg", "Section Import")
+        text = """
+            Mainboard (5):
+            [Engine]
+            2 Example Relic (TST) 7
+            Category: Ramp
+            3 Example Wizard (TST) 8
+            1 Example Relic (TST) 7
+            [Engine]
+            1 Example Relic (TST) 7
+            // [Sideboard (1)]
+            [Answers]
+            1 Example Relic (TST) 7
+            Maybeboard
+            Ideas:
+            1 Example Wizard (TST) 8
+            1 Example Relic (TST) 7 [Inline Utility]
+            malformed text
+        """
+
+        parsed, unparsed = cards_importer.parse(text)
+        self.assertEqual(unparsed, ["            malformed text"])
+        self.assertEqual(
+            [(row.board, row.category, row.qty) for row in parsed],
+            [
+                ("main", "Engine", 2),
+                ("main", "Ramp", 3),
+                ("main", "Ramp", 1),
+                ("main", "Engine", 1),
+                ("side", "Answers", 1),
+                ("maybe", "Ideas", 1),
+                ("maybe", "Inline Utility", 1),
+            ],
+        )
+        report = cards_importer.preview("mtg", text)
+        self.assertEqual(report.as_dict()["matched"][0]["category"], "Engine")
+        self.assertEqual(
+            report.as_dict()["sections"],
+            [
+                {"board": "main", "category": "Engine"},
+                {"board": "main", "category": "Ramp"},
+                {"board": "side", "category": "Answers"},
+                {"board": "maybe", "category": "Ideas"},
+                {"board": "maybe", "category": "Inline Utility"},
+            ],
+        )
+        self.assertEqual(cards_importer.apply(deck_id, report), 10)
+        self.assertEqual(
+            [(row["board"], row["category"], row["qty"]) for row in cards.list_deck_cards(deck_id)],
+            [
+                ("main", "Engine", 3),
+                ("main", "Ramp", 1),
+                ("main", "Ramp", 3),
+                ("side", "Answers", 1),
+                ("maybe", "Ideas", 1),
+                ("maybe", "Inline Utility", 1),
+            ],
+        )
+
+        exported = cards.deck_export_text(deck_id)
+        reparsed, export_errors = cards_importer.parse(exported)
+        self.assertEqual(export_errors, [])
+        self.assertIn("Mainboard\n[Engine]", exported)
+        self.assertIn("Sideboard\n[Answers]", exported)
+        self.assertIn("Maybeboard\n[Ideas]", exported)
+        self.assertEqual(
+            [(row.board, row.category, row.qty) for row in reparsed],
+            [
+                ("main", "Engine", 3),
+                ("main", "Ramp", 1),
+                ("main", "Ramp", 3),
+                ("side", "Answers", 1),
+                ("maybe", "Ideas", 1),
+                ("maybe", "Inline Utility", 1),
+            ],
+        )
+
+        uncategorized_deck = cards.create_deck("mtg", "Mixed Categories")
+        cards.add_card_to_deck(
+            uncategorized_deck, relic["id"], category="Ramp"
+        )
+        cards.add_card_to_deck(
+            uncategorized_deck, wizard["id"], category=""
+        )
+        mixed_export = cards.deck_export_text(uncategorized_deck)
+        mixed_rows, mixed_errors = cards_importer.parse(mixed_export)
+        self.assertEqual(mixed_errors, [])
+        self.assertEqual(
+            [(row.name, row.category) for row in mixed_rows],
+            [("Example Wizard", None), ("Example Relic", "Ramp")],
+        )
 
     def test_create_plus_import_can_share_one_transaction(self) -> None:
         invalid = cards_importer.ImportReport(matched=[

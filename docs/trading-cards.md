@@ -56,6 +56,13 @@ schema `user_version` are enabled by the repository adapter.
 - Persistent Table and grouped overlapping Stacks deck views.
 - Archidekt, Moxfield, MTGO, MTGA, and plain-text list parsing.
 - Dry-run import preview and one-transaction import application.
+- Board and custom category preservation from text imports. `Mainboard`,
+  `Sideboard`, `Maybeboard`, and `Commander` may be plain, bracketed, counted,
+  or comment-prefixed headers. `[Ramp]`, `Category: Ramp`, `Ramp:`, and trailing
+  card markers such as `1 Example Card [Ramp]` preserve arbitrary category
+  labels and their first-seen order.
+- Table and Stacks views split Commander, Mainboard, Sideboard, and Maybeboard
+  into distinct bands with custom categories nested beneath each board.
 - Plain-text deck export.
 - Collection quantity, foil, condition, acquired price, currency, and notes.
 - Owned-versus-required counts in each deck.

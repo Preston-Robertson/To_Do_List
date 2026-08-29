@@ -181,6 +181,7 @@
   }
 
   const DECK_VIEW_KEY = "luigi.cards.deckView";
+  const DECK_GROUP_KEY = "luigi.cards.collapsedGroups";
   const deckViewMedia = window.matchMedia("(max-width: 700px)");
   const deckViewKey = () => `${DECK_VIEW_KEY}.${deckViewMedia.matches ? "mobile" : "desktop"}`;
 
@@ -204,6 +205,28 @@
     });
   }
 
+  function deckGroupKey(panel) {
+    return `${DECK_GROUP_KEY}.${panel?.dataset.deckId || "unknown"}`;
+  }
+
+  function collapsedDeckGroups(panel) {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(deckGroupKey(panel)) || "[]");
+      return new Set(Array.isArray(parsed) ? parsed : []);
+    } catch {
+      return new Set();
+    }
+  }
+
+  function applyDeckGroupState(root = document) {
+    const panel = root.querySelector?.("#deck-card-panel") || document.getElementById("deck-card-panel");
+    if (!panel) return;
+    const collapsed = collapsedDeckGroups(panel);
+    panel.querySelectorAll("[data-deck-group-key]").forEach((group) => {
+      group.open = !collapsed.has(group.dataset.deckGroupKey);
+    });
+  }
+
   document.addEventListener("click", (event) => {
     const button = event.target.closest("[data-deck-view]");
     if (!button) return;
@@ -211,12 +234,29 @@
     applyDeckView(button.closest("#deck-card-panel"));
   });
 
-  applyDeckView();
-  document.body.addEventListener("htmx:afterSwap", (event) => applyDeckView(event.target));
+  document.addEventListener("toggle", (event) => {
+    const group = event.target.closest?.("[data-deck-group-key]");
+    if (!group) return;
+    const panel = group.closest("#deck-card-panel");
+    const collapsed = collapsedDeckGroups(panel);
+    if (group.open) collapsed.delete(group.dataset.deckGroupKey);
+    else collapsed.add(group.dataset.deckGroupKey);
+    try {
+      localStorage.setItem(deckGroupKey(panel), JSON.stringify([...collapsed]));
+    } catch {}
+  }, true);
 
-  function appendList(details, title, values, formatter) {
+  applyDeckView();
+  applyDeckGroupState();
+  document.body.addEventListener("htmx:afterSwap", (event) => {
+    applyDeckView(event.target);
+    applyDeckGroupState(event.target);
+  });
+
+  function appendList(details, title, values, formatter, expanded = false) {
     if (!values.length) return;
     const section = document.createElement("details");
+    section.open = expanded;
     const summary = document.createElement("summary");
     summary.textContent = title;
     const list = document.createElement("ul");
@@ -249,7 +289,20 @@
       const summary = document.createElement("p");
       summary.textContent = `${data.counts.matched} matched · ${data.counts.unmatched} unmatched · ${data.counts.unparsed} unparsed`;
       output.appendChild(summary);
-      appendList(output, "Unmatched lines", data.unmatched, (row) => `${row.qty} x ${row.name}${row.set ? ` (${row.set})` : ""}`);
+      const boardLabels = {
+        commander: "Commander",
+        main: "Mainboard",
+        side: "Sideboard",
+        maybe: "Maybeboard",
+      };
+      const sections = (data.sections || []).map((section) =>
+        `${boardLabels[section.board] || section.board}${section.category ? ` → ${section.category}` : ""}`
+      );
+      appendList(output, "Sections preserved", sections, (section) => section, true);
+      appendList(output, "Unmatched lines", data.unmatched, (row) => {
+        const section = `${boardLabels[row.board] || row.board}${row.category ? ` → ${row.category}` : ""}`;
+        return `${row.qty} x ${row.name}${row.set ? ` (${row.set})` : ""} · ${section}`;
+      });
       appendList(output, "Unparsed lines", data.unparsed, (line) => line);
     } catch (error) {
       output.textContent = error.message || "Import preview failed";

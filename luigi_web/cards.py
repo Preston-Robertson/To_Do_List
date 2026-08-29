@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 
 from .paths import CARDS_DB_PATH
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 BOARDS = ("commander", "main", "side", "maybe")
 CONDITIONS = ("NM", "LP", "MP", "HP", "DMG")
 SUPPORTED_CURRENCIES = ("USD", "EUR")
@@ -218,10 +218,10 @@ def init_db() -> None:
                 deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
                 card_id INTEGER NOT NULL REFERENCES cards(id),
                 qty INTEGER NOT NULL DEFAULT 1 CHECK (qty > 0),
-                category TEXT,
+                category TEXT NOT NULL DEFAULT '',
                 board TEXT NOT NULL DEFAULT 'main'
                     CHECK (board IN ('main', 'side', 'maybe', 'commander')),
-                UNIQUE(deck_id, card_id, board)
+                UNIQUE(deck_id, card_id, board, category)
             );
             CREATE INDEX IF NOT EXISTS idx_deck_cards_deck ON deck_cards(deck_id);
             CREATE INDEX IF NOT EXISTS idx_deck_cards_card ON deck_cards(card_id);
@@ -278,6 +278,30 @@ def init_db() -> None:
                 ON price_history(snapshot_date);
             """
         )
+        if 0 < version < 2:
+            conn.executescript(
+                """
+                BEGIN IMMEDIATE;
+                ALTER TABLE deck_cards RENAME TO deck_cards_v1;
+                CREATE TABLE deck_cards (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+                    card_id INTEGER NOT NULL REFERENCES cards(id),
+                    qty INTEGER NOT NULL DEFAULT 1 CHECK (qty > 0),
+                    category TEXT NOT NULL DEFAULT '',
+                    board TEXT NOT NULL DEFAULT 'main'
+                        CHECK (board IN ('main', 'side', 'maybe', 'commander')),
+                    UNIQUE(deck_id, card_id, board, category)
+                );
+                INSERT INTO deck_cards(id, deck_id, card_id, qty, category, board)
+                SELECT id, deck_id, card_id, qty, COALESCE(category, ''), board
+                  FROM deck_cards_v1;
+                DROP TABLE deck_cards_v1;
+                CREATE INDEX idx_deck_cards_deck ON deck_cards(deck_id);
+                CREATE INDEX idx_deck_cards_card ON deck_cards(card_id);
+                COMMIT;
+                """
+            )
         conn.executemany(
             """
             INSERT OR IGNORE INTO games(code, name, active, sort_order)
@@ -1486,7 +1510,7 @@ def add_card_to_deck(
     clean_board = str(board or "main").strip().lower()
     if clean_board not in BOARDS:
         raise ValueError("invalid deck board")
-    clean_category = _text(category, "category", maximum=100) or None
+    clean_category = _text(category, "category", maximum=100)
 
     def write(active: sqlite3.Connection) -> None:
         row = active.execute(
@@ -1505,9 +1529,8 @@ def add_card_to_deck(
             """
             INSERT INTO deck_cards(deck_id, card_id, qty, board, category)
             VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(deck_id, card_id, board) DO UPDATE SET
-                qty = deck_cards.qty + excluded.qty,
-                category = COALESCE(excluded.category, deck_cards.category)
+            ON CONFLICT(deck_id, card_id, board, category) DO UPDATE SET
+                qty = deck_cards.qty + excluded.qty
             """,
             (deck_id, card_id, clean_qty, clean_board, clean_category),
         )
@@ -1529,13 +1552,19 @@ def add_card_to_deck(
 
 
 def update_deck_card(deck_id: int, deck_card_id: int, qty: int, category: str = "") -> bool:
-    clean_category = _text(category, "category", maximum=100) or None
+    clean_category = _text(category, "category", maximum=100)
     try:
         clean_qty = int(qty)
     except (TypeError, ValueError) as exc:
         raise ValueError("quantity must be a whole number") from exc
     init_db()
     with _connect() as conn:
+        source = conn.execute(
+            "SELECT * FROM deck_cards WHERE id = ? AND deck_id = ?",
+            (deck_card_id, deck_id),
+        ).fetchone()
+        if not source:
+            return False
         if clean_qty <= 0:
             result = conn.execute(
                 "DELETE FROM deck_cards WHERE id = ? AND deck_id = ?",
@@ -1544,10 +1573,34 @@ def update_deck_card(deck_id: int, deck_card_id: int, qty: int, category: str = 
         else:
             if clean_qty > 9999:
                 raise ValueError("quantity must be at most 9999")
-            result = conn.execute(
-                "UPDATE deck_cards SET qty = ?, category = ? WHERE id = ? AND deck_id = ?",
-                (clean_qty, clean_category, deck_card_id, deck_id),
-            )
+            destination = conn.execute(
+                """
+                SELECT id, qty FROM deck_cards
+                 WHERE deck_id = ? AND card_id = ? AND board = ?
+                   AND category = ? AND id != ?
+                """,
+                (
+                    deck_id, source["card_id"], source["board"],
+                    clean_category, deck_card_id,
+                ),
+            ).fetchone()
+            if destination:
+                total_qty = int(destination["qty"]) + clean_qty
+                if total_qty > 9999:
+                    raise ValueError("combined deck quantity must be at most 9999")
+                conn.execute(
+                    "UPDATE deck_cards SET qty = ? WHERE id = ?",
+                    (total_qty, destination["id"]),
+                )
+                result = conn.execute(
+                    "DELETE FROM deck_cards WHERE id = ? AND deck_id = ?",
+                    (deck_card_id, deck_id),
+                )
+            else:
+                result = conn.execute(
+                    "UPDATE deck_cards SET qty = ?, category = ? WHERE id = ? AND deck_id = ?",
+                    (clean_qty, clean_category, deck_card_id, deck_id),
+                )
         if result.rowcount:
             conn.execute(
                 "UPDATE decks SET updated_at = datetime('now') WHERE id = ?", (deck_id,)
@@ -1657,9 +1710,11 @@ def swap_deck_card_printing(
         destination = conn.execute(
             """
             SELECT * FROM deck_cards
-             WHERE deck_id = ? AND card_id = ? AND board = ?
+             WHERE deck_id = ? AND card_id = ? AND board = ? AND category = ?
             """,
-            (deck_id, target_card_id, source["board"]),
+            (
+                deck_id, target_card_id, source["board"], source["category"],
+            ),
         ).fetchone()
         if destination:
             total_qty = int(destination["qty"]) + int(source["qty"])
@@ -2000,10 +2055,25 @@ def deck_export_text(deck_id: int) -> str:
         if sections:
             sections.append("")
         sections.append(labels[board])
+        category_groups: dict[str, list[dict[str, Any]]] = {}
         for row in board_rows:
-            printing = f" ({row['set_code'].upper()})" if row.get("set_code") else ""
-            number = f" {row['collector_number']}" if row.get("collector_number") else ""
-            sections.append(f"{row['qty']} {row['name']}{printing}{number}")
+            category_groups.setdefault(
+                str(row.get("category") or ""), []
+            ).append(row)
+        ordered_groups = sorted(
+            category_groups.items(),
+            key=lambda item: (
+                bool(item[0]),
+                min(int(row["id"]) for row in item[1]),
+            ),
+        )
+        for category, category_rows in ordered_groups:
+            if category:
+                sections.append(f"[{category}]")
+            for row in category_rows:
+                printing = f" ({row['set_code'].upper()})" if row.get("set_code") else ""
+                number = f" {row['collector_number']}" if row.get("collector_number") else ""
+                sections.append(f"{row['qty']} {row['name']}{printing}{number}")
     return "\n".join(sections) + ("\n" if sections else "")
 
 

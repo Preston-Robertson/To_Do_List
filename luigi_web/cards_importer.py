@@ -37,6 +37,16 @@ _BOARD_HEADERS = {
     "commanders": "commander",
 }
 
+_BRACKETED_HEADER_RE = re.compile(r"^\[([^\[\]\n]{1,100})\]\s*:?$")
+_NAMED_CATEGORY_RE = re.compile(
+    r"^(?:category|section)\s*:\s*([^\[\]\n]{1,100})$",
+    re.IGNORECASE,
+)
+_TRAILING_CATEGORY_RE = re.compile(
+    r"\s+\[([^\[\]\n]{1,100})\](?=\s*(?:\*[^*]+\*\s*)*$)"
+)
+_HEADER_COUNT_RE = re.compile(r"\s*(?:\(\s*\d+\s*\)|\[\s*\d+\s*\])\s*$")
+
 
 @dataclass(frozen=True)
 class ParsedLine:
@@ -46,6 +56,7 @@ class ParsedLine:
     set_code: str | None = None
     collector_number: str | None = None
     board: str = "main"
+    category: str | None = None
     is_commander: bool = False
     is_foil: bool = False
 
@@ -63,6 +74,7 @@ class ImportReport:
     matched: list[ImportRow] = field(default_factory=list)
     unmatched: list[ImportRow] = field(default_factory=list)
     unparsed: list[str] = field(default_factory=list)
+    sections: list[dict[str, str | None]] = field(default_factory=list)
 
     @property
     def matched_count(self) -> int:
@@ -81,6 +93,7 @@ class ImportReport:
                     "name": row.matched_name,
                     "set": row.matched_set,
                     "board": row.line.board,
+                    "category": row.line.category,
                 }
                 for row in self.matched
             ],
@@ -90,10 +103,13 @@ class ImportReport:
                     "qty": row.line.qty,
                     "name": row.line.name,
                     "set": row.line.set_code,
+                    "board": row.line.board,
+                    "category": row.line.category,
                 }
                 for row in self.unmatched
             ],
             "unparsed": self.unparsed,
+            "sections": self.sections,
             "counts": {
                 "matched": self.matched_count,
                 "unmatched": self.unmatched_count,
@@ -113,28 +129,91 @@ def parse(text: str) -> tuple[list[ParsedLine], list[str]]:
     parsed: list[ParsedLine] = []
     unparsed: list[str] = []
     board = "main"
+    category: str | None = None
     for raw in lines:
         stripped = raw.strip()
-        if not stripped or stripped.startswith(("#", "//")):
+        if not stripped:
             continue
-        header = stripped.rstrip(":").strip().lower()
+        if stripped.startswith(("#", "//")):
+            comment_header = stripped[2:].strip() if stripped.startswith("//") else stripped[1:].strip()
+            comment_key = _header_key(comment_header)
+            if comment_key in _BOARD_HEADERS:
+                board = _BOARD_HEADERS[comment_key]
+                category = None
+            continue
+        bracketed = _BRACKETED_HEADER_RE.match(stripped)
+        header_text = bracketed.group(1).strip() if bracketed else stripped
+        header = _header_key(header_text)
         if header in _BOARD_HEADERS:
             board = _BOARD_HEADERS[header]
+            category = None
             continue
+        category_match = bracketed or _NAMED_CATEGORY_RE.match(stripped)
+        if category_match:
+            category = _category(category_match.group(1))
+            continue
+        if stripped.endswith(":") and not stripped.upper().startswith("SB:"):
+            category = _category(stripped[:-1])
+            continue
+        card_text, inline_category = _extract_trailing_category(stripped)
         if stripped.upper().startswith("SB:"):
-            match = _LINE_RE.match(stripped[3:].strip())
+            card_text, inline_category = _extract_trailing_category(
+                stripped[3:].strip()
+            )
+            match = _LINE_RE.match(card_text)
             if match:
-                parsed.append(_from_match(match, raw, "side"))
+                parsed.append(_from_match(
+                    match,
+                    raw,
+                    "side",
+                    inline_category or (category if board == "side" else None),
+                ))
                 continue
-        match = _LINE_RE.match(stripped)
+        match = _LINE_RE.match(card_text)
         if not match:
             unparsed.append(raw[:500])
             continue
-        parsed.append(_from_match(match, raw, board))
+        parsed.append(_from_match(
+            match,
+            raw,
+            board,
+            inline_category or category,
+        ))
     return parsed, unparsed
 
 
-def _from_match(match: re.Match[str], raw: str, board: str) -> ParsedLine:
+def _category(value: str) -> str:
+    category = " ".join(str(value).split()).strip(" :")
+    if not category:
+        raise ValueError("deck category cannot be empty")
+    if len(category) > 100:
+        raise ValueError("deck category must be at most 100 characters")
+    return category
+
+
+def _header_key(value: str) -> str:
+    cleaned = str(value).strip().rstrip(":").strip()
+    if cleaned.startswith("[") and cleaned.endswith("]"):
+        cleaned = cleaned[1:-1].strip()
+    without_count = _HEADER_COUNT_RE.sub("", cleaned)
+    return without_count.rstrip(":").strip().lower()
+
+
+def _extract_trailing_category(value: str) -> tuple[str, str | None]:
+    matches = list(_TRAILING_CATEGORY_RE.finditer(value))
+    if not matches:
+        return value, None
+    match = matches[-1]
+    category = _category(match.group(1))
+    return f"{value[:match.start()]}{value[match.end():]}".strip(), category
+
+
+def _from_match(
+    match: re.Match[str],
+    raw: str,
+    board: str,
+    category: str | None = None,
+) -> ParsedLine:
     qty = int(match.group("qty"))
     if qty < 1 or qty > 9999:
         raise ValueError("deck quantities must be between 1 and 9999")
@@ -149,6 +228,7 @@ def _from_match(match: re.Match[str], raw: str, board: str) -> ParsedLine:
         set_code=(match.group("set") or "").upper() or None,
         collector_number=match.group("cn") or None,
         board=board,
+        category=category,
         is_commander=is_commander,
         is_foil="*F*" in modifiers or "*FOIL*" in modifiers,
     )
@@ -156,7 +236,15 @@ def _from_match(match: re.Match[str], raw: str, board: str) -> ParsedLine:
 
 def resolve(game_code: str, lines: Iterable[ParsedLine]) -> ImportReport:
     report = ImportReport()
+    section_keys: set[tuple[str, str | None]] = set()
     for line in lines:
+        section_key = (line.board, line.category)
+        if section_key not in section_keys:
+            section_keys.add(section_key)
+            report.sections.append({
+                "board": line.board,
+                "category": line.category,
+            })
         matched = cards.find_card(
             game_code,
             line.name,
@@ -194,6 +282,7 @@ def apply(deck_id: int, report: ImportReport, *, conn=None) -> int:
                 row.card_id,
                 qty=row.line.qty,
                 board=row.line.board,
+                category=row.line.category or "",
                 conn=active,
             )
             added += row.line.qty
