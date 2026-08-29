@@ -33,9 +33,6 @@ from . import clock
 from . import review
 from . import task_backup
 from . import operations
-from . import cards
-from . import cards_scryfall
-from . import cards_templating
 from .auth import (
     COOKIE_NAME,
     CSRF_COOKIE_NAME,
@@ -59,7 +56,6 @@ from .paths import PROJECT_ROOT, STATIC_DIR, TEMPLATES_DIR
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
-cards_templating.register_filters(templates.env)
 
 
 @app.middleware("http")
@@ -83,10 +79,6 @@ async def csrf_middleware(request: Request, call_next):
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
     if request.url.path.startswith("/feedback"):
-        response.headers["Cache-Control"] = "no-store"
-        response.headers["Pragma"] = "no-cache"
-        response.headers["Expires"] = "0"
-    if request.url.path.startswith("/cards") and not request.url.path.endswith(".svg"):
         response.headers["Cache-Control"] = "no-store"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
@@ -120,12 +112,10 @@ from . import gnw
 from .finance_routes import router as finance_router
 from .feedback_routes import router as feedback_router
 from .preview_routes import router as preview_router
-from .cards_routes import router as cards_router
 
 app.include_router(finance_router)
 app.include_router(feedback_router)
 app.include_router(preview_router)
-app.include_router(cards_router)
 
 
 def _asset_version() -> str:
@@ -252,19 +242,6 @@ def _startup_schema_check() -> None:
         operations.init_db()
     except Exception:
         pass
-    try:
-        cards.init_db()
-        cards.mark_interrupted_refreshes()
-        cards_scryfall.start_scheduler()
-    except Exception as exc:
-        # Cards is app-owned and optional; a local catalog failure must not
-        # make LuigiBot task pages unavailable.
-        logger.warning("Trading Cards startup failed: %s", exc)
-
-
-@app.on_event("shutdown")
-def _stop_card_scheduler() -> None:
-    cards_scryfall.stop_scheduler()
 
 
 def _require_v2() -> None:
@@ -575,7 +552,7 @@ def task_rules_page(request: Request):
     rows = _operation_task_rows()
     _reconcile_operation_records(rows)
     return templates.TemplateResponse("task_rules.html", {
-        "request": request, "active_nav": "tasks", "page_title": "Task rules",
+        "request": request, "active_nav": "task-rules", "page_title": "Task rules",
         "tasks": rows,
         "dependencies": operations.list_dependencies(),
         "reminder_rules": operations.list_reminder_rules(),
@@ -1169,8 +1146,8 @@ def archive_page(request: Request):
         "archive.html",
         {
             "request": request,
-            "active_nav": "tasks",
-            "page_title": "Archived tasks",
+            "active_nav": "archive",
+            "page_title": "Archive",
             "rows": db.list_archived(),
             "archive_enabled": True,
         },
@@ -2218,10 +2195,6 @@ def calendar_page(request: Request, month: str | None = None):
         grid_start, grid_end
     )
     rows.extend(completion_rows)
-    activity_status, activity_rows = db.list_calendar_activity_events(
-        grid_start, grid_end
-    )
-    rows.extend(activity_rows)
     rows.sort(key=lambda row: (
         str(row.get("due_date") or ""),
         -int(row.get("priority") or 0),
@@ -2262,8 +2235,6 @@ def calendar_page(request: Request, month: str | None = None):
             ),
             "completion_history_complete": history_status.available,
             "completion_history_reason": history_status.reason,
-            "activity_history_complete": activity_status.available,
-            "activity_history_reason": activity_status.reason,
             "completion_day_policy": task_events.server_time_policy(),
         },
     )
@@ -2292,8 +2263,8 @@ def activity_page(
     )
     return templates.TemplateResponse("activity.html", {
         "request": request,
-        "active_nav": "calendar",
-        "page_title": "Calendar",
+        "active_nav": "activity",
+        "page_title": "Task activity",
         "rows": rows,
         "days": days,
         "kind": kind,
@@ -2577,14 +2548,6 @@ def _integration_result(name: str, check) -> dict[str, Any]:
         }
 
 
-def _llm_integration_health() -> str:
-    if isinstance(_LLM_PROVIDER, llm_mod.DisabledProvider):
-        raise RuntimeError(_LLM_PROVIDER.reason)
-    if isinstance(_LLM_PROVIDER, llm_mod.CopilotSDKProvider):
-        return _LLM_PROVIDER.check_ready()
-    return f"{_LLM_PROVIDER.name} · {_LLM_PROVIDER.model}"
-
-
 @app.get("/admin/integrations", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 def admin_integrations(request: Request):
     """Run bounded, read-only checks without requiring server-terminal access."""
@@ -2633,6 +2596,11 @@ def admin_integrations(request: Request):
         progress = bool(os.environ.get("LUIGI_WEB_STEAM_API_KEY") and os.environ.get("LUIGI_WEB_STEAM_ID"))
         return "store reachable; progress configured" if progress else "store reachable; progress not configured"
 
+    def check_llm():
+        if isinstance(_LLM_PROVIDER, llm_mod.DisabledProvider):
+            raise RuntimeError(_LLM_PROVIDER.reason)
+        return f"{_LLM_PROVIDER.name} · {_LLM_PROVIDER.model}"
+
     def check_git():
         head = _git_head_short()
         if not head:
@@ -2663,7 +2631,7 @@ def admin_integrations(request: Request):
         _integration_result("TVMaze", check_tvmaze),
         _integration_result("AniList", check_anilist),
         _integration_result("YouTube", check_youtube),
-        _integration_result("LLM", _llm_integration_health),
+        _integration_result("LLM", check_llm),
         _integration_result("Git checkout", check_git),
         _integration_result("Environment file", check_env),
         _integration_result("Finance storage", check_finance),

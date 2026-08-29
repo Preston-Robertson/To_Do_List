@@ -637,6 +637,18 @@ a.card-record-row { grid-template-columns: minmax(0, 1fr) auto; }
   .cards-header-actions { justify-content: flex-start; }
 }
 
+@media (max-width: 900px) {
+  .deck-stack-board-columns {
+    grid-template-columns: none;
+    grid-auto-flow: column;
+    grid-auto-columns: 260px;
+    overflow-x: auto;
+    scroll-snap-type: x proximity;
+    padding-bottom: 14px;
+  }
+  .deck-stack-column { scroll-snap-align: start; }
+}
+
 @media (max-width: 700px) {
   .cards-nav-band { margin: -14px -14px 16px; padding: 11px 14px 0; }
   .cards-identity small { display: none; }
@@ -671,8 +683,7 @@ a.card-record-row { grid-template-columns: minmax(0, 1fr) auto; }
   .deck-view-switcher { align-self: flex-start; }
   .deck-board-header { align-items: flex-start; flex-direction: column; gap: 7px; }
   .deck-board-header > div:last-child { justify-content: flex-start; }
-  .deck-stack-board-columns { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: 210px; gap: 10px; overflow-x: auto; scroll-snap-type: x proximity; padding-bottom: 14px; }
-  .deck-stack-column { scroll-snap-align: start; }
+  .deck-stack-board-columns { grid-auto-columns: 210px; gap: 10px; }
   .cards-form-grid { grid-template-columns: 1fr; }
   .cards-field-wide { grid-column: auto; }
   .cards-search-list li { grid-template-columns: 1fr; }

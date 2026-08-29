@@ -31,6 +31,7 @@ _BOARD_LABELS = {
     "side": "Sideboard",
     "maybe": "Maybeboard",
 }
+_STACK_LANE_SIZE = 8
 
 
 def _asset_version() -> str:
@@ -147,10 +148,24 @@ def _deck_state(game_code: str, deck_id: int) -> dict[str, Any]:
         section = section_map.get(board_code)
         if not section:
             continue
-        section["categories"] = sorted(
+        categories = sorted(
             section.pop("category_map").values(),
             key=lambda group: int(group["order"]),
         )
+        for group in categories:
+            group_cards = group["cards"]
+            group["stack_lanes"] = []
+            for offset in range(0, len(group_cards), _STACK_LANE_SIZE):
+                lane_cards = group_cards[offset:offset + _STACK_LANE_SIZE]
+                group["stack_lanes"].append({
+                    "cards": lane_cards,
+                    "quantity": sum(int(card["qty"]) for card in lane_cards),
+                    "price_minor": sum(
+                        int(card["qty"]) * int(card.get("price_usd_minor") or 0)
+                        for card in lane_cards
+                    ),
+                })
+        section["categories"] = categories
         deck_sections.append(section)
     return {
         "deck": deck,

@@ -54,10 +54,11 @@
       <header class="deck-board-header"><div><span>Board</span><h2>{{ section.label }}</h2></div><div><span><strong>{{ section.quantity }}</strong> {{ 'card' if section.quantity == 1 else 'cards' }}</span><span><strong>{{ section.price_minor | money_minor }}</strong> value</span></div></header>
       <div class="deck-stack-board-columns">
       {% for group in section.categories %}
+      {% for lane in group.stack_lanes %}
       <section class="deck-stack-column">
-        <header><div><h3>{{ group.label }}</h3><span>Qty {{ group.quantity }}</span></div><strong>{{ group.price_minor | money_minor }}</strong></header>
+        <header><div><h3>{{ group.label }}</h3><span>{% if group.stack_lanes|length > 1 %}Stack {{ loop.index }} of {{ group.stack_lanes|length }} · {% endif %}Qty {{ lane.quantity }}</span></div><strong>{{ lane.price_minor | money_minor }}</strong></header>
         <div class="deck-stack-list">
-          {% for card in group.cards %}
+          {% for card in lane.cards %}
           <button type="button" class="deck-stack-card" style="--stack-index:{{ loop.index0 }}"
                   data-card-detail-url="/cards/{{ current_game }}/cards/{{ card.card_id }}/detail?deck_id={{ deck.id }}&deck_card_id={{ card.id }}"
                   aria-label="View {{ card.name }} details">
@@ -72,6 +73,7 @@
           {% endfor %}
         </div>
       </section>
+      {% endfor %}
       {% endfor %}
       </div>
     </section>

@@ -17,12 +17,6 @@ the shared LuigiBot repository.
 - **Games and shows:** shared Game'N'Watch Google Sheet, metadata search,
   covers, ratings, statuses, Steam playtime, achievements, and local Insights
   charts/tables with backlog health and health-aware weighted picks.
-- **Trading Cards:** MTG, Pokemon, and Riftbound catalogs; deck construction,
-  text import/export, tags, collection ownership, exact price tracking,
-  rich card inspection, table/stack deck views, Scryfall-style advanced local
-  search, visual alternate-art selection for deck and collection records,
-  section-aware imports with split board/category views, catalog refreshes, and
-  optional draw.io deck diagrams.
 - **Finance:** separately unlocked accounts, transactions, budgets,
   investments, net worth, CSV import, reports, alerts, audit history, and
   exports. Finance data is isolated from LuigiBot and the LLM.
@@ -72,8 +66,6 @@ Finance is designed around data minimization:
 - Finance records are excluded from chat tools, global search, URLs, logs,
   screenshots, and public fixtures;
 - Finance uses an app-owned SQLite database outside the repository;
-- Trading Cards uses a separate app-owned SQLite database for its catalog,
-  decks, collection, and integer-minor-unit price history;
 - browser mutations use same-origin CSRF protection;
 - secure cookies can be enforced behind HTTPS.
 
@@ -122,8 +114,6 @@ control. Core settings:
 | `LUIGI_WEB_FINANCE_BASE_CURRENCY` | ISO currency used for reports |
 | `LUIGI_WEB_REVIEW_DB` | App-owned Daily/Weekly Review SQLite path |
 | `LUIGI_WEB_OPERATIONS_DB` | App-owned task dependencies and reminders SQLite path |
-| `LUIGI_WEB_CARDS_DB` | App-owned trading-card catalog, decks, and collection SQLite path |
-| `LUIGI_WEB_CARDS_*` | Optional Scryfall refresh, temporary bulk directory, and draw.io settings |
 | `LUIGI_WEB_LLM_*` | Optional GitHub Copilot or OpenAI-compatible assistant |
 | `LUIGI_WEB_COPILOT_HOME` | Writable cache for the bundled Copilot runtime |
 | `LUIGI_WEB_GNW_*` | Optional Game'N'Watch Google Sheet |
@@ -174,9 +164,7 @@ GitHub Models was retired on July 30, 2026. Use
 Copilot SDK and consume the configured account's Copilot allowance. The SDK is
 run in empty mode and receives only Luigi Web's existing task tools. Local
 interactive installs can use an existing GitHub CLI login; headless services
-should set `LUIGI_WEB_LLM_API_KEY` to a `github_pat_` fine-grained token or a
-`gho_` / `ghu_` OAuth user token. Classic `ghp_` personal access tokens are not
-supported by the Copilot SDK.
+should set `LUIGI_WEB_LLM_API_KEY` to a supported fine-grained GitHub token.
 Legacy configurations that still name the retired GitHub Models endpoint are
 automatically routed through the Copilot SDK using their existing GitHub token.
 If that configured token is rejected before any task tool runs, Luigi Web
@@ -222,8 +210,6 @@ Repository guidance:
   validation requirements
 - [`docs/architecture.md`](docs/architecture.md) — storage boundaries and
   technical design
-- [`docs/trading-cards.md`](docs/trading-cards.md) — card schema, providers,
-  imports, and storage boundary
 - [`docs/discipline-v2-plan.md`](docs/discipline-v2-plan.md) — coordinated
   LuigiBot Discipline migration
 - [`docs/task-events-plan.md`](docs/task-events-plan.md) — shared completion

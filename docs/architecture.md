@@ -16,7 +16,6 @@ data domains behind one authenticated interface.
 | Feedback inbox | Luigi Web SQLite database | `luigi_web/feedback.py` |
 | Daily/Weekly Review sessions | Luigi Web SQLite database | `luigi_web/review.py` |
 | Task dependencies and reminders | Luigi Web SQLite database | `luigi_web/operations.py` |
-| Trading-card catalog, decks, collection, and prices | Luigi Web SQLite database | `luigi_web/cards.py` |
 | Preview deployment | Root helper + isolated worktree/service/database | `luigi_web/preview.py` |
 
 Production code lives in the `luigi_web/` package. Root `app.py` is a small
@@ -97,26 +96,6 @@ fallback.
 This shared-task artifact intentionally excludes Finance, Feedback, Review
 notes, dependencies, reminders, credentials, and deployment settings. Those
 stores retain their separate security and ownership boundaries.
-
-## Trading Cards boundary
-
-Trading Cards uses one app-owned SQLite database configured by
-`LUIGI_WEB_CARDS_DB`. Catalog rows, decks, deck cards, tags, collection rows,
-refresh audit records, and price history share that file because ownership and
-deck-value queries require transactional joins. The file does not share tables
-or a schema version with LuigiBot PostgreSQL or Finance.
-
-MTG catalog rows are streamed from an allow-listed Scryfall bulk endpoint in
-bounded batches. The raw bulk file is deleted after every successful or failed
-run. Pokemon uses bounded pages from pokemontcg.io and also retains manual
-entry as a fallback. Riftbound uses manual catalog rows until a stable provider
-is configured. All market and acquisition prices are integer minor units with
-an explicit currency.
-
-The card domain uses the main Luigi Web session and global same-origin CSRF
-middleware. Deck and collection responses are no-store, card records are not
-registered with LLM tools, and optional draw.io XML is size-limited and parsed
-before persistence. See `trading-cards.md` for the full contract.
 
 ## Finance boundary
 

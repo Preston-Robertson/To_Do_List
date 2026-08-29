@@ -83,6 +83,31 @@ class CardRouteTests(unittest.TestCase):
         self.assertIn('data-deck-view="stacks"', deck.text)
         self.assertIn("deck-stack-card", deck.text)
 
+    def test_long_category_is_balanced_into_visual_stack_lanes(self) -> None:
+        cards.upsert_scryfall_cards([
+            {
+                "id": f"stack-lane-{index}",
+                "name": f"Stack Lane Card {index}",
+                "set": "TST",
+                "set_name": "Synthetic Set",
+                "collector_number": str(index),
+                "type_line": "Land",
+                "prices": {"usd": "1.00"},
+            }
+            for index in range(1, 10)
+        ])
+        deck_id = cards.create_deck("mtg", "Balanced Stack Deck")
+        for index in range(1, 10):
+            card = cards.find_card("mtg", f"Stack Lane Card {index}")
+            cards.add_card_to_deck(deck_id, card["id"], category="Lands")
+
+        response = self.client.get(f"/cards/mtg/decks/{deck_id}")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.text.count('class="deck-stack-column"'), 2)
+        self.assertIn("Stack 1 of 2 · Qty 8", response.text)
+        self.assertIn("Stack 2 of 2 · Qty 1", response.text)
+
     def test_inspector_can_swap_deck_and_collection_printings(self) -> None:
         alternate_payload = {
             "id": "route-card-alt", "oracle_id": "route-oracle",
