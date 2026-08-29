@@ -664,6 +664,74 @@ class LlmTests(unittest.TestCase):
             ):
                 provider.run_chat([{"role": "user", "content": "Hello"}], {})
 
+    def test_copilot_classic_pat_error_names_supported_token_formats(self) -> None:
+        class FailingClient:
+            def __init__(self, **options):
+                pass
+
+            async def start(self):
+                raise RuntimeError("401 authentication failed")
+
+            async def stop(self):
+                pass
+
+        provider = llm.CopilotSDKProvider(
+            github_token="ghp_example", model="", timeout=5,
+            base_directory=tempfile.gettempdir(),
+        )
+        with patch("copilot.CopilotClient", FailingClient):
+            with self.assertRaisesRegex(
+                llm.LLMError, "classic personal access token.*github_pat_"
+            ):
+                provider.run_chat([{"role": "user", "content": "Hello"}], {})
+
+    def test_copilot_readiness_checks_auth_and_models_without_prompt(self) -> None:
+        events: list[str] = []
+
+        class FakeClient:
+            def __init__(self, **options):
+                events.append("created")
+
+            async def start(self):
+                events.append("started")
+
+            async def get_auth_status(self):
+                events.append("authenticated")
+                return SimpleNamespace(isAuthenticated=True, statusMessage=None)
+
+            async def list_models(self):
+                events.append("models")
+                return [SimpleNamespace(id="model-a"), SimpleNamespace(id="model-b")]
+
+            async def stop(self):
+                events.append("stopped")
+
+        provider = llm.CopilotSDKProvider(
+            github_token="github_pat_example", model="", timeout=5,
+            base_directory=tempfile.gettempdir(),
+        )
+        with patch("copilot.CopilotClient", FakeClient):
+            detail = provider.check_ready()
+
+        self.assertEqual(detail, "authenticated · 2 models available · auto")
+        self.assertEqual(events, [
+            "created", "started", "authenticated", "models", "stopped",
+        ])
+
+    def test_admin_copilot_health_runs_live_readiness_probe(self) -> None:
+        provider = llm.CopilotSDKProvider(
+            github_token="github_pat_example", model="", timeout=5,
+            base_directory=tempfile.gettempdir(),
+        )
+        with (
+            patch.object(provider, "check_ready", return_value="authenticated") as check,
+            patch.object(app, "_LLM_PROVIDER", provider),
+        ):
+            detail = app._llm_integration_health()
+
+        self.assertEqual(detail, "authenticated")
+        check.assert_called_once_with()
+
     def test_copilot_sdk_exposes_only_custom_allow_list(self) -> None:
         captured: dict[str, object] = {}
 
@@ -674,8 +742,12 @@ class LlmTests(unittest.TestCase):
             async def send_and_wait(self, prompt, timeout):
                 captured["prompt"] = prompt
                 invocation = SimpleNamespace(arguments={"limit": 2})
-                captured["tool_result"] = self.options["tools"][0].handler(invocation)
-                captured["blocked_tool_result"] = self.options["tools"][0].handler(invocation)
+                captured["tool_result"] = self.options["tools"][0].handler(
+                    invocation
+                )
+                captured["blocked_tool_result"] = self.options["tools"][0].handler(
+                    invocation
+                )
                 return SimpleNamespace(data=SimpleNamespace(content="Two tasks found."))
 
             async def disconnect(self):
@@ -735,7 +807,11 @@ class LlmTests(unittest.TestCase):
         self.assertFalse(session["enable_host_git_operations"])
         self.assertFalse(session["enable_skills"])
         self.assertEqual(calls, [{"limit": 2}])
-        self.assertIn("tool-call cap reached", captured["blocked_tool_result"])
+        self.assertIn(
+            "tool-call cap reached",
+            captured["blocked_tool_result"].text_result_for_llm,
+        )
+        self.assertEqual(captured["blocked_tool_result"].result_type, "failure")
         self.assertEqual(result.reply, "Two tasks found.")
         self.assertEqual(result.tool_calls[0].name, "list_open_tasks")
         self.assertTrue(result.tool_calls[0].ok)

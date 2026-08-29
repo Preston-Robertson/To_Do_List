@@ -23,9 +23,6 @@
 }
 
 .cards-nav-band {
-  position: sticky;
-  top: 0;
-  z-index: 18;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   gap: 9px 22px;
@@ -410,8 +407,9 @@
 .deck-table-view[hidden] { display: none; }
 .deck-stack-board-columns {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(210px, 260px));
   align-items: start;
+  justify-content: start;
   gap: 14px;
   padding: 10px;
 }
@@ -640,7 +638,7 @@ a.card-record-row { grid-template-columns: minmax(0, 1fr) auto; }
 }
 
 @media (max-width: 700px) {
-  .cards-nav-band { top: 0; margin: -14px -14px 16px; padding: 11px 14px 0; }
+  .cards-nav-band { margin: -14px -14px 16px; padding: 11px 14px 0; }
   .cards-identity small { display: none; }
   .cards-game-switcher { padding-bottom: 2px; }
   .cards-page-header { min-height: 0; align-items: stretch; flex-direction: column; }

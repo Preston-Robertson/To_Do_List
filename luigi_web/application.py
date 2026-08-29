@@ -2577,6 +2577,14 @@ def _integration_result(name: str, check) -> dict[str, Any]:
         }
 
 
+def _llm_integration_health() -> str:
+    if isinstance(_LLM_PROVIDER, llm_mod.DisabledProvider):
+        raise RuntimeError(_LLM_PROVIDER.reason)
+    if isinstance(_LLM_PROVIDER, llm_mod.CopilotSDKProvider):
+        return _LLM_PROVIDER.check_ready()
+    return f"{_LLM_PROVIDER.name} · {_LLM_PROVIDER.model}"
+
+
 @app.get("/admin/integrations", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 def admin_integrations(request: Request):
     """Run bounded, read-only checks without requiring server-terminal access."""
@@ -2625,11 +2633,6 @@ def admin_integrations(request: Request):
         progress = bool(os.environ.get("LUIGI_WEB_STEAM_API_KEY") and os.environ.get("LUIGI_WEB_STEAM_ID"))
         return "store reachable; progress configured" if progress else "store reachable; progress not configured"
 
-    def check_llm():
-        if isinstance(_LLM_PROVIDER, llm_mod.DisabledProvider):
-            raise RuntimeError(_LLM_PROVIDER.reason)
-        return f"{_LLM_PROVIDER.name} · {_LLM_PROVIDER.model}"
-
     def check_git():
         head = _git_head_short()
         if not head:
@@ -2660,7 +2663,7 @@ def admin_integrations(request: Request):
         _integration_result("TVMaze", check_tvmaze),
         _integration_result("AniList", check_anilist),
         _integration_result("YouTube", check_youtube),
-        _integration_result("LLM", check_llm),
+        _integration_result("LLM", _llm_integration_health),
         _integration_result("Git checkout", check_git),
         _integration_result("Environment file", check_env),
         _integration_result("Finance storage", check_finance),

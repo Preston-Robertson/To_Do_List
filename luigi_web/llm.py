@@ -213,17 +213,113 @@ class CopilotSDKProvider:
         if self._is_auth_error(exc):
             token_used = bool(self.github_token) if using_token is None else using_token
             if token_used:
+                if self.github_token and self.github_token.startswith("ghp_"):
+                    return (
+                        "The configured credential is a classic personal access token "
+                        "(ghp_), which the GitHub Copilot SDK does not support. Replace "
+                        "it with a fine-grained token (github_pat_) or GitHub OAuth "
+                        "user token (gho_ or ghu_)."
+                    )
+                if self.github_token and not self.github_token.startswith(
+                    ("github_pat_", "gho_", "ghu_")
+                ):
+                    return (
+                        "The configured credential format is not supported by the "
+                        "GitHub Copilot SDK. Use a fine-grained token (github_pat_) "
+                        "or GitHub OAuth user token (gho_ or ghu_)."
+                    )
                 return (
-                    "GitHub Copilot rejected the configured token. Replace "
-                    "LUIGI_WEB_LLM_API_KEY with a supported token for an account "
-                    "that has Copilot access, or clear it to use the service login."
+                    "GitHub Copilot rejected the configured token. Confirm it is "
+                    "current, belongs to an account with Copilot access, and is "
+                    "authorized by any organization SSO or Copilot policy."
                 )
             return (
                 "GitHub Copilot login is unavailable to the service account. "
-                "Authenticate that account with GitHub Copilot or configure a "
-                "supported LUIGI_WEB_LLM_API_KEY."
+                "Configure LUIGI_WEB_LLM_API_KEY with a fine-grained GitHub token "
+                "(github_pat_) or an OAuth user token (gho_ or ghu_)."
             )
         return f"GitHub Copilot SDK failed: {detail or type(exc).__name__}"
+
+    def _build_client(self, client_type, github_token: str | None,
+                      runtime_env: dict[str, str]):
+        extract_dir = runtime_env["COPILOT_CLI_EXTRACT_DIR"]
+        previous_extract_dir = os.environ.get("COPILOT_CLI_EXTRACT_DIR")
+        os.environ["COPILOT_CLI_EXTRACT_DIR"] = extract_dir
+        try:
+            return client_type(
+                mode="empty",
+                github_token=github_token,
+                use_logged_in_user=not bool(github_token),
+                base_directory=self.base_directory,
+                env=runtime_env,
+                log_level="error",
+            )
+        finally:
+            if previous_extract_dir is None:
+                os.environ.pop("COPILOT_CLI_EXTRACT_DIR", None)
+            else:
+                os.environ["COPILOT_CLI_EXTRACT_DIR"] = previous_extract_dir
+
+    async def _check_ready_async(self) -> str:
+        try:
+            from copilot import CopilotClient
+        except ImportError as exc:
+            raise LLMError(
+                "GitHub Copilot SDK is not installed; reinstall requirements.txt"
+            ) from exc
+
+        Path(self.base_directory).mkdir(parents=True, exist_ok=True)
+        runtime_env = _copilot_runtime_env(self.base_directory)
+
+        async def check_client(github_token: str | None) -> str:
+            client = self._build_client(CopilotClient, github_token, runtime_env)
+            try:
+                await asyncio.wait_for(client.start(), timeout=self.timeout)
+                auth = await asyncio.wait_for(
+                    client.get_auth_status(), timeout=self.timeout
+                )
+                if not auth.isAuthenticated:
+                    reason = str(auth.statusMessage or "not authenticated")
+                    raise RuntimeError(f"authentication failed: {reason}")
+                models = await asyncio.wait_for(
+                    client.list_models(), timeout=self.timeout
+                )
+                model_ids = {
+                    str(getattr(model, "id", "") or "") for model in models
+                }
+                if self.model != "auto" and self.model not in model_ids:
+                    raise LLMError(
+                        f"Configured Copilot model '{self.model}' is unavailable. "
+                        "Leave LUIGI_WEB_LLM_MODEL blank for automatic selection."
+                    )
+                return (
+                    f"authenticated · {len(models)} models available · {self.model}"
+                )
+            finally:
+                with contextlib.suppress(Exception, BaseExceptionGroup):
+                    await client.stop()
+
+        try:
+            return await check_client(self.github_token)
+        except LLMError:
+            raise
+        except Exception as exc:
+            if self.github_token and self._is_auth_error(exc):
+                configured_message = self._safe_error(exc, using_token=True)
+                try:
+                    return await check_client(None)
+                except Exception as fallback_exc:
+                    fallback_message = self._safe_error(
+                        fallback_exc, using_token=False
+                    )
+                    raise LLMError(
+                        f"{configured_message} The service-login fallback also "
+                        f"failed. {fallback_message}"
+                    ) from fallback_exc
+            raise LLMError(self._safe_error(exc)) from exc
+
+    def check_ready(self) -> str:
+        return asyncio.run(self._check_ready_async())
 
     async def _run_async(
         self,
@@ -233,7 +329,7 @@ class CopilotSDKProvider:
         try:
             from copilot import CopilotClient
             from copilot.rpc import PermissionDecisionApproveOnce, PermissionDecisionReject
-            from copilot.tools import Tool as CopilotTool
+            from copilot.tools import Tool as CopilotTool, ToolResult as CopilotToolResult
         except ImportError as exc:
             raise LLMError(
                 "GitHub Copilot SDK is not installed; reinstall requirements.txt"
@@ -268,7 +364,13 @@ class CopilotSDKProvider:
                                 error=error,
                             ))
                             cap_recorded = True
-                        return json.dumps({"ok": False, "error": error})
+                        return CopilotToolResult(
+                            text_result_for_llm=json.dumps(
+                                {"ok": False, "error": error}
+                            ),
+                            result_type="failure",
+                            error=error,
+                        )
                     tool_calls_started += 1
                 try:
                     result = tool.handler(arguments)
@@ -276,6 +378,8 @@ class CopilotSDKProvider:
                         name=tool.name, arguments=arguments, ok=True, result=result
                     )
                     response = {"ok": True, "result": result}
+                    result_type = "success"
+                    error = None
                 except Exception as exc:  # noqa: BLE001
                     record = ToolCallRecord(
                         name=tool.name,
@@ -284,9 +388,15 @@ class CopilotSDKProvider:
                         error=f"{type(exc).__name__}: {exc}",
                     )
                     response = {"ok": False, "error": record.error}
+                    result_type = "failure"
+                    error = record.error
                 with audit_lock:
                     audit.append(record)
-                return json.dumps(response, default=str)
+                return CopilotToolResult(
+                    text_result_for_llm=json.dumps(response, default=str),
+                    result_type=result_type,
+                    error=error,
+                )
 
             return CopilotTool(
                 name=tool.name,
@@ -308,27 +418,8 @@ class CopilotSDKProvider:
         system_message, prompt = self._prompt(messages)
         runtime_env = _copilot_runtime_env(self.base_directory)
 
-        def build_client(github_token: str | None):
-            extract_dir = runtime_env["COPILOT_CLI_EXTRACT_DIR"]
-            previous_extract_dir = os.environ.get("COPILOT_CLI_EXTRACT_DIR")
-            os.environ["COPILOT_CLI_EXTRACT_DIR"] = extract_dir
-            try:
-                return CopilotClient(
-                    mode="empty",
-                    github_token=github_token,
-                    use_logged_in_user=not bool(github_token),
-                    base_directory=self.base_directory,
-                    env=runtime_env,
-                    log_level="error",
-                )
-            finally:
-                if previous_extract_dir is None:
-                    os.environ.pop("COPILOT_CLI_EXTRACT_DIR", None)
-                else:
-                    os.environ["COPILOT_CLI_EXTRACT_DIR"] = previous_extract_dir
-
         async def run_client(github_token: str | None) -> ChatResult:
-            client = build_client(github_token)
+            client = self._build_client(CopilotClient, github_token, runtime_env)
             session = None
             try:
                 await asyncio.wait_for(client.start(), timeout=self.timeout)
@@ -372,6 +463,7 @@ class CopilotSDKProvider:
             raise
         except Exception as exc:
             if self.github_token and self._is_auth_error(exc) and not audit:
+                configured_message = self._safe_error(exc, using_token=True)
                 try:
                     return await run_client(None)
                 except Exception as fallback_exc:
@@ -379,8 +471,8 @@ class CopilotSDKProvider:
                         fallback_exc, using_token=False
                     )
                     raise LLMError(
-                        "GitHub Copilot rejected the configured token, and the "
-                        f"service-login fallback also failed. {fallback_message}"
+                        f"{configured_message} The service-login fallback also "
+                        f"failed. {fallback_message}"
                     ) from fallback_exc
             raise LLMError(self._safe_error(exc)) from exc
 

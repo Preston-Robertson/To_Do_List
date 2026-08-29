@@ -3174,6 +3174,7 @@ kbd {
   overflow: visible;
   display: flex;
   flex-direction: row;
+  flex: 0 0 auto;
   min-height: 152px;
 }
 .media-cover {
