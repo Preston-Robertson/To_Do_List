@@ -62,12 +62,11 @@
           <button type="button" class="deck-stack-card" style="--stack-index:{{ loop.index0 }}"
                   data-card-detail-url="/cards/{{ current_game }}/cards/{{ card.card_id }}/detail?deck_id={{ deck.id }}&deck_card_id={{ card.id }}"
                   aria-label="View {{ card.name }} details">
+            <span class="deck-stack-placeholder" aria-hidden="true"><b>{{ card.name }}</b><small>{{ card.type_line or 'No image available' }}</small></span>
             {% if card.image_normal or card.image_small %}
-            <img src="{{ card.image_normal or card.image_small }}" alt="{{ card.name }}" loading="lazy">
-            {% else %}
-            <span class="deck-stack-placeholder"><b>{{ card.name }}</b><small>{{ card.type_line or 'No image available' }}</small></span>
+            <img src="{{ card.image_normal or card.image_small }}" alt="" loading="lazy">
             {% endif %}
-            <span class="deck-stack-quantity">{{ card.qty }}x</span>
+            <span class="deck-stack-label" aria-hidden="true"><strong>{{ card.name }}</strong><b>{{ card.qty }}x</b></span>
             <span class="deck-stack-owned {% if card.owned_qty >= card.qty %}complete{% endif %}">{{ card.owned_qty }} / {{ card.qty }} owned</span>
           </button>
           {% endfor %}

@@ -660,6 +660,41 @@ class CardRepositoryTests(unittest.TestCase):
             [("Example Wizard", None), ("Example Relic", "Ramp")],
         )
 
+    def test_import_accepts_counted_comment_and_hash_categories(self) -> None:
+        text = """
+            Commander (1 card)
+            1 Example Leader (TST) 1
+            1 Example Direct (TST) 7 #Direct Category
+            Creatures (2)
+            2 Example Creature (TST) 2
+            // Card Draw (3 cards)
+            3 Example Draw (TST) 3
+            Lands: 4
+            4 Example Land (TST) 4
+            1 Example Utility (TST) 5 #Flexible
+            // Sideboard [1]
+            1 Example Answer (TST) 6 #Removal *F*
+        """
+
+        parsed, unparsed = cards_importer.parse(text)
+
+        self.assertEqual(unparsed, [])
+        self.assertEqual(
+            [
+                (row.board, row.category, row.qty, row.name, row.is_foil)
+                for row in parsed
+            ],
+            [
+                ("commander", None, 1, "Example Leader", False),
+                ("main", "Direct Category", 1, "Example Direct", False),
+                ("main", "Creatures", 2, "Example Creature", False),
+                ("main", "Card Draw", 3, "Example Draw", False),
+                ("main", "Lands", 4, "Example Land", False),
+                ("main", "Flexible", 1, "Example Utility", False),
+                ("side", "Removal", 1, "Example Answer", True),
+            ],
+        )
+
     def test_create_plus_import_can_share_one_transaction(self) -> None:
         invalid = cards_importer.ImportReport(matched=[
             cards_importer.ImportRow(

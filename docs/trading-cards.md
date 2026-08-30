@@ -58,9 +58,10 @@ schema `user_version` are enabled by the repository adapter.
 - Dry-run import preview and one-transaction import application.
 - Board and custom category preservation from text imports. `Mainboard`,
   `Sideboard`, `Maybeboard`, and `Commander` may be plain, bracketed, counted,
-  or comment-prefixed headers. `[Ramp]`, `Category: Ramp`, `Ramp:`, and trailing
-  card markers such as `1 Example Card [Ramp]` preserve arbitrary category
-  labels and their first-seen order.
+  or comment-prefixed headers. `[Ramp]`, `Category: Ramp`, `Ramp:`, `Ramp (12)`,
+  and `// Ramp` preserve arbitrary section labels. Trailing card markers such
+  as `1 Example Card [Ramp]` and `1 Example Card #Ramp` override the active
+  category for that card. Labels retain their first-seen order.
 - Table and Stacks views split Commander, Mainboard, Sideboard, and Maybeboard
   into distinct bands with custom categories nested beneath each board.
 - Plain-text deck export.

@@ -227,6 +227,19 @@
     });
   }
 
+  function hideFailedStackImages(root = document) {
+    root.querySelectorAll?.(".deck-stack-card img").forEach((image) => {
+      if (image.complete && image.naturalWidth === 0) image.hidden = true;
+    });
+  }
+
+  document.addEventListener("error", (event) => {
+    const image = event.target;
+    if (image instanceof HTMLImageElement && image.closest(".deck-stack-card")) {
+      image.hidden = true;
+    }
+  }, true);
+
   document.addEventListener("click", (event) => {
     const button = event.target.closest("[data-deck-view]");
     if (!button) return;
@@ -248,9 +261,11 @@
 
   applyDeckView();
   applyDeckGroupState();
+  hideFailedStackImages();
   document.body.addEventListener("htmx:afterSwap", (event) => {
     applyDeckView(event.target);
     applyDeckGroupState(event.target);
+    hideFailedStackImages(event.target);
   });
 
   function appendList(details, title, values, formatter, expanded = false) {

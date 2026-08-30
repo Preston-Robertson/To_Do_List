@@ -33,6 +33,9 @@ from . import clock
 from . import review
 from . import task_backup
 from . import operations
+from . import cards
+from . import cards_scryfall
+from . import cards_templating
 from .auth import (
     COOKIE_NAME,
     CSRF_COOKIE_NAME,
@@ -56,6 +59,7 @@ from .paths import PROJECT_ROOT, STATIC_DIR, TEMPLATES_DIR
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+cards_templating.register_filters(templates.env)
 
 
 @app.middleware("http")
@@ -79,6 +83,10 @@ async def csrf_middleware(request: Request, call_next):
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
     if request.url.path.startswith("/feedback"):
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    if request.url.path.startswith("/cards") and not request.url.path.endswith(".svg"):
         response.headers["Cache-Control"] = "no-store"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
@@ -112,10 +120,12 @@ from . import gnw
 from .finance_routes import router as finance_router
 from .feedback_routes import router as feedback_router
 from .preview_routes import router as preview_router
+from .cards_routes import router as cards_router
 
 app.include_router(finance_router)
 app.include_router(feedback_router)
 app.include_router(preview_router)
+app.include_router(cards_router)
 
 
 def _asset_version() -> str:
@@ -242,6 +252,17 @@ def _startup_schema_check() -> None:
         operations.init_db()
     except Exception:
         pass
+    try:
+        cards.init_db()
+        cards.mark_interrupted_refreshes()
+        cards_scryfall.start_scheduler()
+    except Exception as exc:
+        logger.warning("Trading Cards startup failed: %s", exc)
+
+
+@app.on_event("shutdown")
+def _stop_card_scheduler() -> None:
+    cards_scryfall.stop_scheduler()
 
 
 def _require_v2() -> None:

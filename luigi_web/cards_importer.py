@@ -45,7 +45,18 @@ _NAMED_CATEGORY_RE = re.compile(
 _TRAILING_CATEGORY_RE = re.compile(
     r"\s+\[([^\[\]\n]{1,100})\](?=\s*(?:\*[^*]+\*\s*)*$)"
 )
-_HEADER_COUNT_RE = re.compile(r"\s*(?:\(\s*\d+\s*\)|\[\s*\d+\s*\])\s*$")
+_TRAILING_HASH_CATEGORY_RE = re.compile(
+    r"\s+#\s*([^#\n]{1,100}?)(?=\s*(?:\*[^*]+\*\s*)*$)"
+)
+_HEADER_COUNT_RE = re.compile(
+    r"\s*(?:\(\s*\d+\s*(?:cards?)?\s*\)|\[\s*\d+\s*\]|:\s*\d+)\s*$",
+    re.IGNORECASE,
+)
+_COUNTED_CATEGORY_RE = re.compile(
+    r"^(?P<label>[^\[\]\n]{1,100}?)\s*"
+    r"(?:\(\s*\d+\s*(?:cards?)?\s*\)|\[\s*\d+\s*\]|:\s*\d+)\s*:?$",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -130,6 +141,7 @@ def parse(text: str) -> tuple[list[ParsedLine], list[str]]:
     unparsed: list[str] = []
     board = "main"
     category: str | None = None
+    cards_since_board_header = 0
     for raw in lines:
         stripped = raw.strip()
         if not stripped:
@@ -140,6 +152,10 @@ def parse(text: str) -> tuple[list[ParsedLine], list[str]]:
             if comment_key in _BOARD_HEADERS:
                 board = _BOARD_HEADERS[comment_key]
                 category = None
+                cards_since_board_header = 0
+            elif comment_header:
+                board = _category_board(board, cards_since_board_header)
+                category = _category(_category_header(comment_header))
             continue
         bracketed = _BRACKETED_HEADER_RE.match(stripped)
         header_text = bracketed.group(1).strip() if bracketed else stripped
@@ -147,12 +163,19 @@ def parse(text: str) -> tuple[list[ParsedLine], list[str]]:
         if header in _BOARD_HEADERS:
             board = _BOARD_HEADERS[header]
             category = None
+            cards_since_board_header = 0
             continue
-        category_match = bracketed or _NAMED_CATEGORY_RE.match(stripped)
+        category_match = (
+            bracketed
+            or _NAMED_CATEGORY_RE.match(stripped)
+            or _COUNTED_CATEGORY_RE.match(stripped)
+        )
         if category_match:
+            board = _category_board(board, cards_since_board_header)
             category = _category(category_match.group(1))
             continue
         if stripped.endswith(":") and not stripped.upper().startswith("SB:"):
+            board = _category_board(board, cards_since_board_header)
             category = _category(stripped[:-1])
             continue
         card_text, inline_category = _extract_trailing_category(stripped)
@@ -168,6 +191,7 @@ def parse(text: str) -> tuple[list[ParsedLine], list[str]]:
                     "side",
                     inline_category or (category if board == "side" else None),
                 ))
+                cards_since_board_header += 1
                 continue
         match = _LINE_RE.match(card_text)
         if not match:
@@ -176,9 +200,11 @@ def parse(text: str) -> tuple[list[ParsedLine], list[str]]:
         parsed.append(_from_match(
             match,
             raw,
-            board,
+            _category_board(board, cards_since_board_header)
+            if inline_category else board,
             inline_category or category,
         ))
+        cards_since_board_header += 1
     return parsed, unparsed
 
 
@@ -199,11 +225,25 @@ def _header_key(value: str) -> str:
     return without_count.rstrip(":").strip().lower()
 
 
+def _category_header(value: str) -> str:
+    counted = _COUNTED_CATEGORY_RE.match(str(value).strip())
+    return counted.group("label") if counted else str(value)
+
+
+def _category_board(board: str, cards_since_board_header: int) -> str:
+    if board == "commander" and cards_since_board_header:
+        return "main"
+    return board
+
+
 def _extract_trailing_category(value: str) -> tuple[str, str | None]:
-    matches = list(_TRAILING_CATEGORY_RE.finditer(value))
+    matches = [
+        *list(_TRAILING_CATEGORY_RE.finditer(value)),
+        *list(_TRAILING_HASH_CATEGORY_RE.finditer(value)),
+    ]
     if not matches:
         return value, None
-    match = matches[-1]
+    match = max(matches, key=lambda found: found.start())
     category = _category(match.group(1))
     return f"{value[:match.start()]}{value[match.end():]}".strip(), category
 
