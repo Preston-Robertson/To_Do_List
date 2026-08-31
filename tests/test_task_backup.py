@@ -137,6 +137,24 @@ class TaskBackupTests(unittest.TestCase):
         with self.assertRaisesRegex(task_backup.RestoreError, "duplicate key"):
             task_backup.parse_backup(json.dumps(payload).encode())
 
+    def test_prepare_bounds_pending_preview_backlog(self) -> None:
+        tokens = [
+            f"preview-{index}"
+            for index in range(task_backup.MAX_PENDING_PREVIEWS + 2)
+        ]
+        with (
+            patch.object(task_backup, "parse_backup", return_value={"tables": {}}),
+            patch.object(task_backup, "preview_restore", return_value={"total_rows": 0}),
+            patch.object(task_backup.secrets, "token_urlsafe", side_effect=tokens),
+        ):
+            for _ in tokens:
+                task_backup.prepare(b"{}")
+
+        self.assertEqual(len(task_backup._PREVIEWS), task_backup.MAX_PENDING_PREVIEWS)
+        self.assertNotIn(tokens[0], task_backup._PREVIEWS)
+        self.assertNotIn(tokens[1], task_backup._PREVIEWS)
+        self.assertIn(tokens[-1], task_backup._PREVIEWS)
+
     def test_late_failure_rolls_back_all_shared_rows(self) -> None:
         engine = self._engine(reject_follow_up=True)
         payload = task_backup.parse_backup(

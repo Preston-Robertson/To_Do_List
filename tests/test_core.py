@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 import unittest
 from datetime import date, timedelta
 from types import SimpleNamespace
@@ -43,6 +44,32 @@ class DatabaseHelperTests(unittest.TestCase):
             url = db._dsn()
         self.assertEqual(url.password, "p@ss:/word")
         self.assertEqual(url.host, "db.local")
+
+    def test_database_engine_bounds_connection_timeout(self) -> None:
+        engine = Mock()
+        env = {
+            "LUIGI_WEB_PG_HOST": "db.local",
+            "LUIGI_WEB_PG_PORT": "5432",
+            "LUIGI_WEB_PG_DB": "luigi_todo",
+            "LUIGI_WEB_PG_USER": "luigi",
+            "LUIGI_WEB_PG_PASSWORD": "synthetic-password",
+            "LUIGI_WEB_PG_CONNECT_TIMEOUT": "999",
+        }
+        with (
+            patch.dict(os.environ, env),
+            patch.object(db, "create_engine", return_value=engine) as create,
+        ):
+            db._engine = None
+            try:
+                self.assertIs(db.get_engine(), engine)
+            finally:
+                db._engine = None
+
+        self.assertEqual(create.call_args.kwargs["connect_args"], {
+            "connect_timeout": 30,
+        })
+        with patch.dict(os.environ, {"LUIGI_WEB_PG_CONNECT_TIMEOUT": "invalid"}):
+            self.assertEqual(db._connect_timeout(), 5)
 
     def test_recurring_weekdays_are_normalized(self) -> None:
         self.assertEqual(db.parse_recurring_days(["4", "0", "4", "9"]), "0,4")
@@ -241,6 +268,23 @@ class DatabaseHelperTests(unittest.TestCase):
 
 
 class RecurringFormTests(unittest.TestCase):
+    def test_text_form_parser_preserves_repeated_values(self) -> None:
+        import asyncio
+        from starlette.datastructures import FormData
+
+        class FormRequest:
+            async def form(self):
+                return FormData([
+                    ("recurring_days", "0"),
+                    ("recurring_days", "4"),
+                ])
+
+        form = asyncio.run(app._form_dict(
+            FormRequest(), multi_keys=("recurring_days",)
+        ))
+
+        self.assertEqual(form["recurring_days"], ["0", "4"])
+
     def test_enabled_recurrence_requires_a_schedule(self) -> None:
         app._validate_recurring_form({
             "recurring": "1", "recurring_schedule_type": "interval",
@@ -337,6 +381,25 @@ class DisciplineWorkflowTests(unittest.TestCase):
 
 
 class GameAndWatchTests(unittest.TestCase):
+    def test_catalog_search_bounds_external_error_detail(self) -> None:
+        client = TestClient(app.app)
+        client.cookies.set(auth.COOKIE_NAME, "expected")
+        client.cookies.set(auth.CSRF_COOKIE_NAME, "csrf-value")
+        with (
+            patch.dict(os.environ, {"LUIGI_WEB_UI_TOKEN": "expected"}),
+            patch.object(gnw, "search_catalog", side_effect=RuntimeError("x" * 500)),
+        ):
+            response = client.post(
+                "/gnw/games/search",
+                data={"query": "Example"},
+                headers={"X-CSRF-Token": "csrf-value"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Search failed: RuntimeError:", response.text)
+        self.assertNotIn("x" * 250, response.text)
+        self.assertIn("...", response.text)
+
     def test_media_insights_handles_partial_metrics(self) -> None:
         items = [
             {
@@ -732,6 +795,35 @@ class LlmTests(unittest.TestCase):
         self.assertEqual(detail, "authenticated")
         check.assert_called_once_with()
 
+    def test_admin_health_checks_run_concurrently_in_display_order(self) -> None:
+        barrier = threading.Barrier(2)
+
+        def first_check() -> str:
+            barrier.wait(timeout=1)
+            return "first result"
+
+        def second_check() -> str:
+            barrier.wait(timeout=1)
+            return "second result"
+
+        results = app._run_integration_checks([
+            ("First", first_check),
+            ("Second", second_check),
+        ])
+
+        self.assertEqual([result["name"] for result in results], ["First", "Second"])
+        self.assertTrue(all(result["ok"] for result in results))
+
+    def test_admin_health_error_detail_is_bounded(self) -> None:
+        def fail() -> None:
+            raise RuntimeError("x" * 500)
+
+        result = app._integration_result("Example", fail)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(len(result["detail"]), 240)
+        self.assertTrue(result["detail"].endswith("..."))
+
     def test_copilot_sdk_exposes_only_custom_allow_list(self) -> None:
         captured: dict[str, object] = {}
 
@@ -819,6 +911,17 @@ class LlmTests(unittest.TestCase):
 
 
 class GanttTests(unittest.TestCase):
+    def test_sidebar_reminder_control_has_bounded_styles(self) -> None:
+        css = (app.STATIC_DIR / "css" / "app.css").read_text(encoding="utf-8")
+        alert_rule = css.split(".nav-focus-alert {", 1)[1].split("}", 1)[0]
+        icon_rule = css.split(".nav-focus-alert svg {", 1)[1].split("}", 1)[0]
+
+        self.assertIn("width: 28px", alert_rule)
+        self.assertIn("height: 28px", alert_rule)
+        self.assertIn("width: 18px", icon_rule)
+        self.assertIn("height: 18px", icon_rule)
+        self.assertIn(".nav-focus-alert .nav-count", css)
+
     def test_scheduled_and_unscheduled_tasks_are_shaped(self) -> None:
         rows = [
             {
@@ -1102,6 +1205,24 @@ class ConsolidatedTasksTests(unittest.TestCase):
                 ],
             }, headers={"X-CSRF-Token": "csrf-value"})
         self.assertEqual(response.status_code, 422)
+
+    def test_text_form_route_rejects_uploaded_file_value(self) -> None:
+        client = TestClient(app.app)
+        client.cookies.set(auth.COOKIE_NAME, "expected")
+        client.cookies.set(auth.CSRF_COOKIE_NAME, "csrf-value")
+        with (
+            patch.dict(os.environ, {"LUIGI_WEB_UI_TOKEN": "expected"}),
+            patch.object(app, "_require_v2"),
+            patch.object(db, "set_task_status") as set_status,
+        ):
+            response = client.post(
+                "/tasks/task-1/status",
+                files={"status": ("status.txt", b"Completed", "text/plain")},
+                headers={"X-CSRF-Token": "csrf-value"},
+            )
+
+        self.assertEqual(response.status_code, 422)
+        set_status.assert_not_called()
 
 
 class ActivityTimelineTests(unittest.TestCase):

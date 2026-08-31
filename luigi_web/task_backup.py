@@ -16,6 +16,7 @@ from . import db
 FORMAT = "luigi-task-backup-v1"
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 PREVIEW_TTL_SECONDS = 15 * 60
+MAX_PENDING_PREVIEWS = 4
 
 _PREVIEW_LOCK = threading.Lock()
 _PREVIEWS: dict[str, tuple[float, dict[str, Any], dict[str, Any]]] = {}
@@ -407,6 +408,8 @@ def prepare(raw: bytes) -> tuple[str, dict[str, Any]]:
         expired = [key for key, value in _PREVIEWS.items() if value[0] <= now]
         for key in expired:
             _PREVIEWS.pop(key, None)
+        while len(_PREVIEWS) >= MAX_PENDING_PREVIEWS:
+            _PREVIEWS.pop(next(iter(_PREVIEWS)))
         _PREVIEWS[token] = (now + PREVIEW_TTL_SECONDS, payload, plan)
     return token, plan
 

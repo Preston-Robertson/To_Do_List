@@ -65,6 +65,7 @@ KNOWN_KEYS: tuple[EnvKey, ...] = (
     EnvKey("LUIGI_WEB_PG_DB",       "Postgres database", "Usually 'luigi_todo'.",                          "Postgres"),
     EnvKey("LUIGI_WEB_PG_USER",     "Postgres user",     "Role the GUI connects as (e.g. luigi_web).",     "Postgres"),
     EnvKey("LUIGI_WEB_PG_PASSWORD", "Postgres password", "Password for the DB role. Blank = keep current.", "Postgres", is_secret=True),
+    EnvKey("LUIGI_WEB_PG_CONNECT_TIMEOUT", "Postgres timeout", "Connection timeout in seconds, clamped from 1 to 30 (default 5).", "Postgres", input_type="number"),
     # Web -------------------------------------------------------------------
     # PROTECTED_KEYS are intentionally excluded. They define the security
     # boundary for this editor and must be managed outside the app.

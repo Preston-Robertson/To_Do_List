@@ -1078,9 +1078,86 @@
     initChatMic();
   }
 
-  // ------------------- Admin env editor: secret reveal -------------------
-  // Toggle a password field to a text field and back. Purely client-side —
-  // the value never leaves the DOM until the form is submitted normally.
+  // ------------------- Admin environment editor -------------------
+  function initAdminEnvEditor(root) {
+    const scope = root && root.querySelector ? root : document;
+    const form = scope.querySelector(".env-form");
+    if (!form || form.dataset.envInit === "1") return;
+    form.dataset.envInit = "1";
+
+    const filter = form.querySelector("[data-env-filter]");
+    const status = form.querySelector("[data-env-filter-status]");
+    const expand = form.querySelector("[data-env-expand]");
+    const groups = Array.from(form.querySelectorAll("[data-env-group]"));
+    const rows = Array.from(form.querySelectorAll("[data-env-row]"));
+    let filtering = false;
+
+    const visibleGroups = () => groups.filter((group) => !group.hidden);
+    const syncExpand = () => {
+      if (!expand) return;
+      const visible = visibleGroups();
+      const allOpen = visible.length > 0 && visible.every((group) => group.open);
+      expand.setAttribute("aria-expanded", String(allOpen));
+      expand.textContent = allOpen ? "Collapse all" : "Expand all";
+    };
+
+    const applyFilter = () => {
+      const query = String(filter?.value || "").trim().toLowerCase();
+      if (query && !filtering) {
+        groups.forEach((group) => {
+          group.dataset.envFilterOpen = group.open ? "1" : "0";
+        });
+      }
+
+      let matches = 0;
+      groups.forEach((group) => {
+        let groupMatches = 0;
+        group.querySelectorAll("[data-env-row]").forEach((row) => {
+          const visible = !query || row.textContent.toLowerCase().includes(query);
+          row.hidden = !visible;
+          if (visible) groupMatches += 1;
+        });
+        group.hidden = groupMatches === 0;
+        if (query && groupMatches) group.open = true;
+        matches += groupMatches;
+      });
+
+      if (!query && filtering) {
+        groups.forEach((group) => {
+          group.open = group.dataset.envFilterOpen === "1";
+          delete group.dataset.envFilterOpen;
+        });
+      }
+      filtering = Boolean(query);
+
+      if (status) {
+        status.textContent = query
+          ? (matches ? `${matches} of ${rows.length} settings` : "No settings found")
+          : `${rows.length} settings`;
+      }
+      syncExpand();
+    };
+
+    filter?.addEventListener("input", applyFilter);
+    expand?.addEventListener("click", () => {
+      const visible = visibleGroups();
+      const shouldOpen = !visible.length || !visible.every((group) => group.open);
+      visible.forEach((group) => { group.open = shouldOpen; });
+      syncExpand();
+    });
+    groups.forEach((group) => group.addEventListener("toggle", syncExpand));
+    applyFilter();
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => initAdminEnvEditor(document));
+  } else {
+    initAdminEnvEditor(document);
+  }
+  document.body.addEventListener("htmx:afterSwap", (e) => initAdminEnvEditor(e.target));
+
+  // Toggle a password field to a text field and back. The value remains in
+  // the browser until the form is deliberately submitted.
   document.addEventListener("click", (e) => {
     const btn = e.target.closest("[data-env-toggle]");
     if (!btn) return;
@@ -1088,8 +1165,11 @@
     if (!wrap) return;
     const input = wrap.querySelector("input");
     if (!input) return;
-    input.type = input.type === "password" ? "text" : "password";
-    btn.textContent = input.type === "password" ? "👁" : "🙈";
+    const show = input.type === "password";
+    input.type = show ? "text" : "password";
+    btn.setAttribute("aria-pressed", String(show));
+    btn.setAttribute("aria-label", `${show ? "Hide" : "Show"} ${input.name}`);
+    btn.title = show ? "Hide value" : "Show value";
   });
 
   // ------------------- Card action menus (close on outside click) ----------

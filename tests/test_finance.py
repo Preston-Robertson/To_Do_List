@@ -137,6 +137,49 @@ class FinanceRepositoryTests(unittest.TestCase):
         self.assertEqual(result, {"imported": 1, "skipped": 1})
         self.assertEqual(len(finance.list_transactions()), 1)
 
+    def test_csv_preview_queries_only_upload_hashes(self) -> None:
+        account_id = self.create_account()
+        content = (
+            "date,amount,category,memo\n"
+            "2026-08-01,-12.34,Groceries,Example purchase\n"
+        ).encode()
+        digest = finance._transaction_hash(
+            account_id, "2026-08-01", -1234, "Groceries", "Example purchase"
+        )
+
+        with patch.object(
+            finance, "_existing_import_hashes", return_value={digest}
+        ) as lookup:
+            preview = finance.prepare_csv_import(account_id, content)
+
+        self.assertEqual(lookup.call_args.args[1], {digest})
+        self.assertEqual(preview["duplicates"], 1)
+        self.assertTrue(preview["rows"][0]["duplicate"])
+
+    def test_csv_preview_is_bounded_and_labels_truncation(self) -> None:
+        account_id = self.create_account()
+        rows = "".join(
+            f"2026-08-01,-1.00,General,Example {index}\n"
+            for index in range(101)
+        )
+        preview = finance.prepare_csv_import(
+            account_id,
+            f"date,amount,category,memo\n{rows}".encode(),
+        )
+
+        self.assertEqual(len(preview["rows"]), 100)
+        self.assertTrue(preview["preview_truncated"])
+
+        for index in range(finance._IMPORT_MAX_PENDING + 1):
+            finance.prepare_csv_import(
+                account_id,
+                (
+                    "date,amount,category,memo\n"
+                    f"2026-08-02,-1.00,General,Preview {index}\n"
+                ).encode(),
+            )
+        self.assertEqual(len(finance._IMPORT_CACHE), finance._IMPORT_MAX_PENDING)
+
     def test_csv_export_requests_all_transactions(self) -> None:
         with patch.object(finance, "list_transactions", return_value=[]) as list_rows:
             finance.transactions_csv("2026-08")

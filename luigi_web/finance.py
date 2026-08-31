@@ -28,6 +28,7 @@ from . import clock
 _DB_LOCK = threading.RLock()
 _IMPORT_LOCK = threading.Lock()
 _IMPORT_TTL_SECONDS = 15 * 60
+_IMPORT_MAX_PENDING = 4
 _IMPORT_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 
 _ACCOUNT_TYPES = {"checking", "savings", "cash", "credit", "investment", "other"}
@@ -772,6 +773,25 @@ def _sweep_import_cache() -> None:
             _IMPORT_CACHE.pop(token, None)
 
 
+def _existing_import_hashes(
+    connection: sqlite3.Connection,
+    candidates: set[str],
+) -> set[str]:
+    existing: set[str] = set()
+    values = list(candidates)
+    for start in range(0, len(values), 500):
+        chunk = values[start:start + 500]
+        placeholders = ", ".join("?" for _ in chunk)
+        existing.update(
+            str(row[0]) for row in connection.execute(
+                f"SELECT import_hash FROM finance_transactions "
+                f"WHERE import_hash IN ({placeholders})",
+                chunk,
+            )
+        )
+    return existing
+
+
 def prepare_csv_import(account_id: str, content: bytes) -> dict[str, Any]:
     if not get_account(account_id):
         raise ValueError("account not found")
@@ -787,13 +807,7 @@ def prepare_csv_import(account_id: str, content: bytes) -> dict[str, Any]:
     if not required.issubset(normalized_headers):
         raise ValueError("CSV requires date, amount, and category columns; memo is optional")
     rows: list[dict[str, Any]] = []
-    duplicate_count = 0
-    with connect() as connection:
-        existing_hashes = {
-            str(row[0]) for row in connection.execute(
-                "SELECT import_hash FROM finance_transactions WHERE import_hash IS NOT NULL"
-            ).fetchall()
-        }
+    upload_hashes: set[str] = set()
     for index, raw in enumerate(reader, start=2):
         if len(rows) >= 1000:
             raise ValueError("CSV may contain at most 1,000 transactions")
@@ -803,9 +817,8 @@ def prepare_csv_import(account_id: str, content: bytes) -> dict[str, Any]:
         memo_header = normalized_headers.get("memo")
         memo = safe_label(raw.get(memo_header) if memo_header else "", f"row {index} memo", required=False, max_length=120)
         digest = _transaction_hash(account_id, transaction_date, amount_minor, category, memo)
-        duplicate = digest in existing_hashes or any(row["import_hash"] == digest for row in rows)
-        if duplicate:
-            duplicate_count += 1
+        duplicate = digest in upload_hashes
+        upload_hashes.add(digest)
         rows.append({
             "transaction_date": transaction_date,
             "amount_minor": amount_minor,
@@ -817,12 +830,26 @@ def prepare_csv_import(account_id: str, content: bytes) -> dict[str, Any]:
         })
     if not rows:
         raise ValueError("CSV contains no transaction rows")
+    with connect() as connection:
+        existing_hashes = _existing_import_hashes(connection, upload_hashes)
+    for row in rows:
+        if row["import_hash"] in existing_hashes:
+            row["duplicate"] = True
+    duplicate_count = sum(1 for row in rows if row["duplicate"])
     token = new_id()
     payload = {"account_id": account_id, "rows": rows}
     with _IMPORT_LOCK:
         _sweep_import_cache()
+        while len(_IMPORT_CACHE) >= _IMPORT_MAX_PENDING:
+            _IMPORT_CACHE.pop(next(iter(_IMPORT_CACHE)))
         _IMPORT_CACHE[token] = (time.monotonic(), payload)
-    return {"token": token, "rows": rows[:100], "total": len(rows), "duplicates": duplicate_count}
+    return {
+        "token": token,
+        "rows": rows[:100],
+        "total": len(rows),
+        "duplicates": duplicate_count,
+        "preview_truncated": len(rows) > 100,
+    }
 
 
 def commit_csv_import(token: str) -> dict[str, int]:

@@ -105,6 +105,7 @@ control. Core settings:
 | Variable | Purpose |
 |---|---|
 | `LUIGI_WEB_PG_*` | Shared LuigiBot PostgreSQL connection |
+| `LUIGI_WEB_PG_CONNECT_TIMEOUT` | Connection timeout in seconds, clamped to `1`–`30` (default `5`) |
 | `LUIGI_WEB_UI_TOKEN` | Main application login token |
 | `LUIGI_WEB_FINANCE_TOKEN` | Separate Finance unlock token |
 | `LUIGI_WEB_SECURE_COOKIES` | Set to `1` behind HTTPS |
