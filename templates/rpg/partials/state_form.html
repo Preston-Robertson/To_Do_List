@@ -1,0 +1,24 @@
+<form class="entity-form rpg-drawer-form" method="post"
+      action="/characters/{{ character.id }}/states"
+      hx-post="/characters/{{ character.id }}/states" hx-swap="none">
+  <div class="rpg-form-kicker">{{ character.name }}</div>
+  <h2>Add level state</h2>
+  <div class="form-row">
+    <label>Level
+      <input type="number" name="level" min="1" max="20" required value="{{ suggested_level }}">
+    </label>
+    <label class="grow">State label
+      <input type="text" name="label" maxlength="120" placeholder="Level path milestone">
+    </label>
+  </div>
+  <label>Start from
+    <select name="clone_from_id">
+      <option value="">Blank sheet</option>
+      {% for state in states %}<option value="{{ state.id }}" {% if state.id == source_id %}selected{% endif %}>Level {{ state.level }}: {{ state.label }}</option>{% endfor %}
+    </select>
+  </label>
+  <div class="form-actions">
+    <button type="button" class="btn btn-ghost" data-close-modal>Cancel</button>
+    <button type="submit" class="btn btn-primary">Create state</button>
+  </div>
+</form>

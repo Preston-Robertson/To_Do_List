@@ -185,6 +185,15 @@
   const deckViewMedia = window.matchMedia("(max-width: 700px)");
   const deckViewKey = () => `${DECK_VIEW_KEY}.${deckViewMedia.matches ? "mobile" : "desktop"}`;
 
+  function loadDeckViewImages(view) {
+    view.querySelectorAll("img[data-deck-image-src]").forEach((image) => {
+      const source = image.dataset.deckImageSrc;
+      if (!source) return;
+      image.src = source;
+      image.removeAttribute("data-deck-image-src");
+    });
+  }
+
   function applyDeckView(root = document) {
     const panel = root.querySelector?.("#deck-card-panel") || document.getElementById("deck-card-panel");
     if (!panel) return;
@@ -201,7 +210,9 @@
       button.setAttribute("aria-pressed", String(active));
     });
     panel.querySelectorAll("[data-deck-view-panel]").forEach((view) => {
-      view.hidden = view.dataset.deckViewPanel !== selected;
+      const active = view.dataset.deckViewPanel === selected;
+      view.hidden = !active;
+      if (active) loadDeckViewImages(view);
     });
   }
 
@@ -229,7 +240,9 @@
 
   function hideFailedStackImages(root = document) {
     root.querySelectorAll?.(".deck-stack-card img").forEach((image) => {
-      if (image.complete && image.naturalWidth === 0) image.hidden = true;
+      if (image.hasAttribute("src") && image.complete && image.naturalWidth === 0) {
+        image.hidden = true;
+      }
     });
   }
 

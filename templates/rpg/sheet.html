@@ -1,0 +1,193 @@
+{% extends "rpg/layout.html" %}
+{% from "rpg/macros.html" import signed, entry_section %}
+{% block rpg_page_class %}rpg-sheet-page{% endblock %}
+{% block rpg_content %}
+{% set character = sheet.character %}
+{% set state = sheet.state %}
+<div class="rpg-sheet-shell" data-character-id="{{ character.id }}" data-system="{{ character.system_code }}">
+  <header class="rpg-sheet-header">
+    <a class="rpg-back-link" href="/characters" aria-label="Back to characters" title="Back to characters">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+    </a>
+    <div class="rpg-sheet-identity">
+      <div class="rpg-character-monogram" aria-hidden="true">{{ character.name[:1]|upper }}</div>
+      <div>
+        <div class="rpg-character-kicker"><span>{{ sheet.system.short_name }}</span>{% if character.archived %}<span>Archived</span>{% endif %}</div>
+        <h1>{{ character.name }}</h1>
+        <p>{{ state.class_name or 'Class not set' }}{% if state.ancestry %} &middot; {{ state.ancestry }}{% endif %}{% if character.campaign %} &middot; {{ character.campaign }}{% endif %}</p>
+      </div>
+    </div>
+    <div class="rpg-sheet-actions">
+      <button type="button" class="btn"
+              hx-get="/characters/{{ character.id }}/edit" hx-target="#modal-body"
+              hx-swap="innerHTML" onclick="openModal()">Character</button>
+      <button type="button" class="btn btn-primary"
+              hx-get="/characters/{{ character.id }}/states/{{ state.id }}/edit"
+              hx-target="#modal-body" hx-swap="innerHTML" onclick="openModal()">Edit sheet</button>
+    </div>
+  </header>
+
+  <section class="rpg-level-path" aria-labelledby="rpg-level-path-title">
+    <div class="rpg-path-heading">
+      <div><span>Level path</span><strong id="rpg-level-path-title">{{ state.label }}</strong></div>
+      <button type="button" class="rpg-path-add" title="Add level state" aria-label="Add level state"
+              hx-get="/characters/{{ character.id }}/states/new?source={{ state.id }}"
+              hx-target="#modal-body" hx-swap="innerHTML" onclick="openModal()">+</button>
+    </div>
+    <nav class="rpg-state-track" aria-label="Character level states">
+      {% for path_state in sheet.states %}
+      <a href="/characters/{{ character.id }}?state={{ path_state.id }}"
+         class="{% if path_state.id == state.id %}selected{% endif %} {% if path_state.is_active %}current{% endif %}"
+         {% if path_state.id == state.id %}aria-current="page"{% endif %}>
+        <span>{{ path_state.level }}</span>
+        <div><strong>{{ path_state.label }}</strong><small>{% if path_state.is_active %}Current{% else %}Level {{ path_state.level }}{% endif %}</small></div>
+      </a>
+      {% endfor %}
+    </nav>
+    <div class="rpg-state-actions">
+      {% if not state.is_active %}
+      <form method="post" action="/characters/{{ character.id }}/states/{{ state.id }}/active"
+            hx-post="/characters/{{ character.id }}/states/{{ state.id }}/active" hx-swap="none">
+        <button type="submit" class="btn btn-tiny">Make current</button>
+      </form>
+      {% endif %}
+      {% if sheet.states|length > 1 %}
+      <form method="post" action="/characters/{{ character.id }}/states/{{ state.id }}/delete"
+            hx-post="/characters/{{ character.id }}/states/{{ state.id }}/delete" hx-swap="none"
+            hx-confirm="Delete this level state and all of its sheet entries?">
+        <button type="submit" class="btn btn-tiny btn-danger">Delete state</button>
+      </form>
+      {% endif %}
+    </div>
+  </section>
+
+  <section class="rpg-vitals-band" aria-label="Current character values">
+    <form class="rpg-hp-control" method="post"
+          action="/characters/{{ character.id }}/states/{{ state.id }}"
+          hx-post="/characters/{{ character.id }}/states/{{ state.id }}" hx-swap="none">
+      <div class="rpg-vital-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8l1.1 1.1L12 21l7.7-7.5 1.1-1.1a5.5 5.5 0 0 0 0-7.8Z"/></svg>
+      </div>
+      <label><span>Current HP</span><input type="number" name="hp_current" min="0" max="1000000" value="{{ state.hp_current }}" required></label>
+      <span class="rpg-vital-divider">/</span>
+      <label><span>Max HP</span><input type="number" name="hp_max" min="1" max="1000000" value="{{ state.hp_max }}" required></label>
+      <label><span>Temp</span><input type="number" name="temp_hp" min="0" max="1000000" value="{{ state.temp_hp }}" required></label>
+      <button type="submit" class="btn btn-tiny">Save</button>
+    </form>
+    <div class="rpg-vital-stat"><strong>{{ state.armor_class }}</strong><span>Armor Class</span></div>
+    <div class="rpg-vital-stat"><strong>{{ signed(state.initiative) }}</strong><span>Initiative</span></div>
+    <div class="rpg-vital-stat"><strong>{{ state.speed }}</strong><span>Speed</span></div>
+    <div class="rpg-vital-stat"><strong>{{ signed(state.perception) if character.system_code == 'pf2e' else state.perception }}</strong><span>{{ 'Perception' if character.system_code == 'pf2e' else 'Passive Perception' }}</span></div>
+    {% if character.system_code == 'dnd5e_2014' %}
+    <div class="rpg-vital-stat"><strong>{{ signed(sheet.proficiency_bonus) }}</strong><span>Proficiency</span></div>
+    {% else %}
+    <div class="rpg-vital-stat"><strong>{{ state.hero_points }}</strong><span>Hero Points</span></div>
+    <div class="rpg-vital-stat"><strong>{{ state.focus_current }}/{{ state.focus_max }}</strong><span>Focus</span></div>
+    {% endif %}
+  </section>
+
+  <nav class="rpg-sheet-tabs" role="tablist" aria-label="Character sheet section">
+    <button type="button" role="tab" aria-selected="true" data-rpg-tab="overview">Overview</button>
+    <button type="button" role="tab" aria-selected="false" data-rpg-tab="actions">Actions <span>{{ sheet.entries_by_kind.action|length }}</span></button>
+    <button type="button" role="tab" aria-selected="false" data-rpg-tab="spells">Spells <span>{{ sheet.entries_by_kind.spell|length }}</span></button>
+    <button type="button" role="tab" aria-selected="false" data-rpg-tab="inventory">Inventory <span>{{ sheet.entries_by_kind.inventory|length }}</span></button>
+    <button type="button" role="tab" aria-selected="false" data-rpg-tab="features">Features <span>{{ sheet.entries_by_kind.feature|length }}</span></button>
+    <button type="button" role="tab" aria-selected="false" data-rpg-tab="notes">Notes</button>
+  </nav>
+
+  <div class="rpg-sheet-panels">
+    <section class="rpg-tab-panel" role="tabpanel" data-rpg-panel="overview">
+      <div class="rpg-overview-grid">
+        <div class="rpg-overview-main">
+          <section class="rpg-identity-strip" aria-label="Character identity">
+            <div><span>{{ 'Species' if character.system_code == 'dnd5e_2014' else 'Ancestry' }}</span><strong>{{ state.ancestry or 'Not set' }}</strong></div>
+            <div><span>Heritage</span><strong>{{ state.heritage or 'Not set' }}</strong></div>
+            <div><span>Background</span><strong>{{ state.background or 'Not set' }}</strong></div>
+            <div><span>{{ 'Subclass' if character.system_code == 'dnd5e_2014' else 'Archetype' }}</span><strong>{{ state.subclass or 'Not set' }}</strong></div>
+          </section>
+
+          <section class="rpg-ability-section" aria-labelledby="rpg-abilities-title">
+            <header class="rpg-section-heading"><div><h2 id="rpg-abilities-title">Abilities</h2></div></header>
+            <div class="rpg-ability-grid">
+              {% for ability in sheet.abilities %}
+              <div class="rpg-ability-tile">
+                <span>{{ ability.short }}</span>
+                <strong>{{ signed(ability.modifier) }}</strong>
+                {% if character.system_code == 'dnd5e_2014' %}<small>{{ ability.value }}</small>{% endif %}
+              </div>
+              {% endfor %}
+            </div>
+          </section>
+
+          <div class="rpg-rules-grid">
+            <section aria-labelledby="rpg-saves-title">
+              <header class="rpg-section-heading"><div><h2 id="rpg-saves-title">Saving throws</h2></div></header>
+              <div class="rpg-score-list">
+                {% for save in sheet.saves %}
+                <div><span class="rpg-rank-dot rank-{{ save.rank }}" title="Rank {{ save.rank }}"></span><strong>{{ save.label }}</strong><output>{{ signed(save.total) }}</output></div>
+                {% endfor %}
+              </div>
+            </section>
+            <section aria-labelledby="rpg-skills-title">
+              <header class="rpg-section-heading"><div><h2 id="rpg-skills-title">Skills</h2><span>{{ sheet.skills|length }}</span></div></header>
+              <div class="rpg-score-list rpg-skill-list">
+                {% for skill in sheet.skills %}
+                <div><span class="rpg-rank-dot rank-{{ skill.rank }}" title="Rank {{ skill.rank }}"></span><strong>{{ skill.label }}</strong><small>{{ skill.ability_short }}</small><output>{{ signed(skill.total) }}</output></div>
+                {% endfor %}
+              </div>
+            </section>
+          </div>
+        </div>
+        <aside class="rpg-overview-side">
+          {{ entry_section(sheet, 'resource', 'Resources', 'No tracked resources.', 'Add resource') }}
+          <section class="rpg-glance-notes">
+            <header class="rpg-section-heading"><div><h2>At a glance</h2></div></header>
+            <dl>
+              {% if state.spell_dc %}<div><dt>Spell DC</dt><dd>{{ state.spell_dc }}</dd></div>{% endif %}
+              {% if state.spell_attack %}<div><dt>Spell attack</dt><dd>{{ signed(state.spell_attack) }}</dd></div>{% endif %}
+              {% if state.class_dc %}<div><dt>Class DC</dt><dd>{{ state.class_dc }}</dd></div>{% endif %}
+              <div><dt>XP</dt><dd>{{ state.xp_current }}{% if state.xp_next %} / {{ state.xp_next }}{% endif %}</dd></div>
+              {% if character.system_code == 'dnd5e_2014' %}<div><dt>Inspiration</dt><dd>{{ 'Ready' if state.inspiration else 'Empty' }}</dd></div>{% endif %}
+            </dl>
+            {% if state.conditions %}<div class="rpg-condition-callout"><span>Conditions</span><p>{{ state.conditions }}</p></div>{% endif %}
+          </section>
+        </aside>
+      </div>
+    </section>
+
+    <section class="rpg-tab-panel" role="tabpanel" data-rpg-panel="actions" hidden>
+      {{ entry_section(sheet, 'action', 'Actions', 'No actions recorded for this state.', 'Add action') }}
+    </section>
+    <section class="rpg-tab-panel" role="tabpanel" data-rpg-panel="spells" hidden>
+      <div class="rpg-casting-strip">
+        <div><span>Spell DC</span><strong>{{ state.spell_dc or '-' }}</strong></div>
+        <div><span>Spell attack</span><strong>{{ signed(state.spell_attack) if state.spell_attack else '-' }}</strong></div>
+        {% if character.system_code == 'pf2e' %}<div><span>Focus</span><strong>{{ state.focus_current }} / {{ state.focus_max }}</strong></div>{% endif %}
+      </div>
+      {{ entry_section(sheet, 'spell', 'Spells', 'No spells recorded for this state.', 'Add spell') }}
+    </section>
+    <section class="rpg-tab-panel" role="tabpanel" data-rpg-panel="inventory" hidden>
+      {{ entry_section(sheet, 'inventory', 'Inventory', 'No equipment recorded for this state.', 'Add item') }}
+    </section>
+    <section class="rpg-tab-panel" role="tabpanel" data-rpg-panel="features" hidden>
+      <div class="rpg-feature-columns">
+        {{ entry_section(sheet, 'feature', 'Features and feats', 'No features recorded for this state.', 'Add feature') }}
+        {{ entry_section(sheet, 'proficiency', 'Proficiencies', 'No proficiency entries recorded.', 'Add proficiency') }}
+        {{ entry_section(sheet, 'condition', 'Conditions and effects', 'No condition entries recorded.', 'Add condition') }}
+      </div>
+    </section>
+    <section class="rpg-tab-panel" role="tabpanel" data-rpg-panel="notes" hidden>
+      <div class="rpg-notes-grid">
+        <section><header class="rpg-section-heading"><div><h2>Notes</h2></div></header><p class="rpg-long-copy">{{ state.notes or 'No notes for this state.' }}</p></section>
+        <section><header class="rpg-section-heading"><div><h2>Languages</h2></div></header><p class="rpg-long-copy">{{ state.languages or 'None recorded.' }}</p></section>
+        <section><header class="rpg-section-heading"><div><h2>Training and proficiencies</h2></div></header><p class="rpg-long-copy">{{ state.proficiencies or 'None recorded.' }}</p></section>
+        <section class="rpg-rules-links">
+          <header class="rpg-section-heading"><div><h2>Rules references</h2></div></header>
+          <a href="{{ sheet.system.rules_url }}" target="_blank" rel="noreferrer">{{ '5e.tools (2014)' if character.system_code == 'dnd5e_2014' else 'Archives of Nethys' }}</a>
+          <a href="{{ sheet.system.official_url }}" target="_blank" rel="noreferrer">Official {{ 'SRD' if character.system_code == 'dnd5e_2014' else 'Pathfinder site' }}</a>
+        </section>
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}

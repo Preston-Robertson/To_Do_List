@@ -1,0 +1,46 @@
+<form class="entity-form rpg-drawer-form"
+      method="post" action="{{ '/characters/' ~ character.id if character else '/characters' }}"
+      hx-post="{{ '/characters/' ~ character.id if character else '/characters' }}" hx-swap="none">
+  <div class="rpg-form-kicker">Character record</div>
+  <h2>{{ 'Edit character' if character else 'New character' }}</h2>
+  <label>Character name
+    <input type="text" name="name" maxlength="120" required autofocus value="{{ character.name if character else '' }}">
+  </label>
+  {% if character %}
+  <div class="rpg-locked-system"><span>Game system</span><strong>{{ systems[character.system_code].name }}</strong></div>
+  {% else %}
+  <fieldset class="rpg-system-choice">
+    <legend>Game system</legend>
+    {% for code, system in systems.items() %}
+    <label><input type="radio" name="system_code" value="{{ code }}" {% if loop.first %}checked{% endif %}><span><strong>{{ system.short_name }}</strong><small>{{ system.name }}</small></span></label>
+    {% endfor %}
+  </fieldset>
+  <label>Starting level
+    <input type="number" name="level" min="1" max="20" value="1" required>
+  </label>
+  {% endif %}
+  <label>Campaign
+    <input type="text" name="campaign" maxlength="160" value="{{ character.campaign if character else '' }}" placeholder="Campaign name">
+  </label>
+  <label>Concept
+    <textarea name="concept" rows="3" maxlength="500" placeholder="Short character concept">{{ character.concept if character else '' }}</textarea>
+  </label>
+  <div class="form-actions">
+    <button type="button" class="btn btn-ghost" data-close-modal>Cancel</button>
+    <button type="submit" class="btn btn-primary">{{ 'Save' if character else 'Create character' }}</button>
+  </div>
+</form>
+{% if character %}
+<div class="rpg-record-actions">
+  <form method="post" action="/characters/{{ character.id }}/archive"
+        hx-post="/characters/{{ character.id }}/archive" hx-swap="none">
+    <input type="hidden" name="archived" value="{{ 0 if character.archived else 1 }}">
+    <button type="submit" class="btn">{{ 'Restore character' if character.archived else 'Archive character' }}</button>
+  </form>
+  <form method="post" action="/characters/{{ character.id }}/delete"
+        hx-post="/characters/{{ character.id }}/delete" hx-swap="none"
+        hx-confirm="Permanently delete this character and every level state?">
+    <button type="submit" class="btn btn-danger">Delete character</button>
+  </form>
+</div>
+{% endif %}

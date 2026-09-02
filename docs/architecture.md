@@ -16,6 +16,7 @@ data domains behind one authenticated interface.
 | Feedback inbox | Luigi Web SQLite database | `luigi_web/feedback.py` |
 | Daily/Weekly Review sessions | Luigi Web SQLite database | `luigi_web/review.py` |
 | Task dependencies and reminders | Luigi Web SQLite database | `luigi_web/operations.py` |
+| Tabletop characters and level states | Luigi Web SQLite database | `luigi_web/rpg.py` |
 | Preview deployment | Root helper + isolated worktree/service/database | `luigi_web/preview.py` |
 
 Production code lives in the `luigi_web/` package. Root `app.py` is a small
@@ -126,6 +127,20 @@ Finance tables:
 - `finance_net_worth_snapshots`
 - `finance_saved_reports`
 - `finance_audit_events`
+
+## Character sheets boundary
+
+Tabletop characters are app-owned and stored in the isolated SQLite database
+configured by `LUIGI_WEB_RPG_DB`. Character records, level states, and sheet
+entries never share LuigiBot, Finance, or Trading Cards tables.
+
+Each character has one current level state and can retain multiple independent
+states for its build path. Cloning a state transactionally copies its sheet
+entries so later hit-point, spell, resource, inventory, or note changes do not
+rewrite earlier levels. The app stores user-entered summaries and optional
+source links; it does not mirror third-party rules compendiums. Character data
+is excluded from Assistant tools and global record search, and all character
+responses use `Cache-Control: no-store`.
 
 ## Authentication and request security
 

@@ -1,0 +1,97 @@
+{% set character = sheet.character %}
+{% set state = sheet.state %}
+{% if character.system_code == 'dnd5e_2014' %}
+  {% set rank_options = [(0, 'Not proficient'), (1, 'Proficient'), (2, 'Expertise')] %}
+{% else %}
+  {% set rank_options = [(0, 'Untrained'), (1, 'Trained'), (2, 'Expert'), (3, 'Master'), (4, 'Legendary')] %}
+{% endif %}
+<form class="entity-form rpg-drawer-form rpg-sheet-editor" method="post"
+      action="/characters/{{ character.id }}/states/{{ state.id }}"
+      hx-post="/characters/{{ character.id }}/states/{{ state.id }}" hx-swap="none">
+  <div class="rpg-form-kicker">{{ character.name }} &middot; {{ sheet.system.short_name }}</div>
+  <h2>Edit level state</h2>
+
+  <details open>
+    <summary>Identity</summary>
+    <div class="rpg-editor-grid">
+      <label>Level<input type="number" name="level" min="1" max="20" value="{{ state.level }}" required></label>
+      <label class="wide">State label<input type="text" name="label" maxlength="120" value="{{ state.label }}" required></label>
+      <label>{{ 'Species' if character.system_code == 'dnd5e_2014' else 'Ancestry' }}<input type="text" name="ancestry" maxlength="120" value="{{ state.ancestry }}"></label>
+      <label>Heritage<input type="text" name="heritage" maxlength="120" value="{{ state.heritage }}"></label>
+      <label>Background<input type="text" name="background" maxlength="120" value="{{ state.background }}"></label>
+      <label>Class<input type="text" name="class_name" maxlength="160" value="{{ state.class_name }}"></label>
+      <label>{{ 'Subclass' if character.system_code == 'dnd5e_2014' else 'Archetype' }}<input type="text" name="subclass" maxlength="160" value="{{ state.subclass }}"></label>
+      <label>Alignment<input type="text" name="alignment" maxlength="80" value="{{ state.alignment }}"></label>
+      <label>Current XP<input type="number" name="xp_current" min="0" value="{{ state.xp_current }}"></label>
+      <label>Next level XP<input type="number" name="xp_next" min="0" value="{{ state.xp_next }}"></label>
+    </div>
+  </details>
+
+  <details open>
+    <summary>Current values</summary>
+    <div class="rpg-editor-grid compact">
+      <label>Current HP<input type="number" name="hp_current" min="0" value="{{ state.hp_current }}" required></label>
+      <label>Maximum HP<input type="number" name="hp_max" min="1" value="{{ state.hp_max }}" required></label>
+      <label>Temporary HP<input type="number" name="temp_hp" min="0" value="{{ state.temp_hp }}"></label>
+      <label>Armor Class<input type="number" name="armor_class" min="0" value="{{ state.armor_class }}"></label>
+      <label>Speed<input type="number" name="speed" min="0" value="{{ state.speed }}"></label>
+      <label>Initiative<input type="number" name="initiative" value="{{ state.initiative }}"></label>
+      <label>{{ 'Perception' if character.system_code == 'pf2e' else 'Passive Perception' }}<input type="number" name="perception" value="{{ state.perception }}"></label>
+      <label>Class DC<input type="number" name="class_dc" min="0" value="{{ state.class_dc }}"></label>
+      <label>Spell DC<input type="number" name="spell_dc" min="0" value="{{ state.spell_dc }}"></label>
+      <label>Spell attack<input type="number" name="spell_attack" value="{{ state.spell_attack }}"></label>
+      {% if character.system_code == 'dnd5e_2014' %}
+      <label>Death successes<input type="number" name="death_successes" min="0" max="3" value="{{ state.death_successes }}"></label>
+      <label>Death failures<input type="number" name="death_failures" min="0" max="3" value="{{ state.death_failures }}"></label>
+      <input type="hidden" name="inspiration" value="0">
+      <label class="checkbox wide"><input type="checkbox" name="inspiration" value="1" {% if state.inspiration %}checked{% endif %}> Inspiration ready</label>
+      {% else %}
+      <label>Hero Points<input type="number" name="hero_points" min="0" max="3" value="{{ state.hero_points }}"></label>
+      <label>Current Focus<input type="number" name="focus_current" min="0" max="3" value="{{ state.focus_current }}"></label>
+      <label>Maximum Focus<input type="number" name="focus_max" min="0" max="3" value="{{ state.focus_max }}"></label>
+      {% endif %}
+    </div>
+  </details>
+
+  <details open>
+    <summary>Abilities</summary>
+    <div class="rpg-editor-grid abilities">
+      {% for ability in sheet.abilities %}
+      <label>{{ ability.label }} {{ 'score' if character.system_code == 'dnd5e_2014' else 'modifier' }}
+        <input type="number" name="ability_{{ ability.key }}" min="{{ 1 if character.system_code == 'dnd5e_2014' else -10 }}" max="30" value="{{ ability.value }}">
+      </label>
+      {% endfor %}
+    </div>
+  </details>
+
+  <details>
+    <summary>Saving throws</summary>
+    <div class="rpg-training-editor">
+      {% for save in sheet.saves %}
+      <div><span>{{ save.label }}</span><select name="save_{{ save.key }}_rank">{% for value, label in rank_options %}<option value="{{ value }}" {% if value == save.rank %}selected{% endif %}>{{ label }}</option>{% endfor %}</select><label>Misc<input type="number" name="save_{{ save.key }}_misc" value="{{ save.misc }}"></label></div>
+      {% endfor %}
+    </div>
+  </details>
+
+  <details>
+    <summary>Skills</summary>
+    <div class="rpg-training-editor">
+      {% for skill in sheet.skills %}
+      <div><span>{{ skill.label }} <small>{{ skill.ability_short }}</small></span><select name="skill_{{ skill.key }}_rank">{% for value, label in rank_options %}<option value="{{ value }}" {% if value == skill.rank %}selected{% endif %}>{{ label }}</option>{% endfor %}</select><label>Misc<input type="number" name="skill_{{ skill.key }}_misc" value="{{ skill.misc }}"></label></div>
+      {% endfor %}
+    </div>
+  </details>
+
+  <details>
+    <summary>Notes and training</summary>
+    <label>Languages<textarea name="languages" rows="2" maxlength="2000">{{ state.languages }}</textarea></label>
+    <label>Proficiencies<textarea name="proficiencies" rows="3" maxlength="5000">{{ state.proficiencies }}</textarea></label>
+    <label>Conditions<textarea name="conditions" rows="2" maxlength="2000">{{ state.conditions }}</textarea></label>
+    <label>Notes<textarea name="notes" rows="6" maxlength="20000">{{ state.notes }}</textarea></label>
+  </details>
+
+  <div class="form-actions rpg-sticky-actions">
+    <button type="button" class="btn btn-ghost" data-close-modal>Cancel</button>
+    <button type="submit" class="btn btn-primary">Save sheet</button>
+  </div>
+</form>

@@ -25,6 +25,12 @@
       <span class="command-option-icon">S</span>
       <span><strong>Add show</strong><small>Search TV, anime, or playlists</small></span>
     </button>
+    <button type="button" class="command-option" data-command-option
+      hx-get="/characters/new" hx-target="#modal-body"
+      onclick="closeCommandPalette(); openModal()">
+      <span class="command-option-icon">20</span>
+      <span><strong>New character</strong><small>D&amp;D 5e (2014) or Pathfinder 2e</small></span>
+    </button>
   </div>
 
   <div class="command-section">
@@ -38,6 +44,7 @@
       ('/games','Games','Game backlog'),
       ('/shows','Shows','Show backlog'),
       ('/cards','Trading Cards','Catalogs, decks, and collection'),
+      ('/characters','Characters','Sheets and level paths'),
       ('/admin','Admin','Settings and health')
     ] %}
       <a href="{{ href }}" class="command-option" data-command-option>

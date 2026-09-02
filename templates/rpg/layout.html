@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block head_scripts %}
+  {{ super() }}
+  <meta name="referrer" content="no-referrer">
+  <link rel="stylesheet" href="/static/css/rpg.css?v={{ asset_version }}">
+  <script src="/static/js/rpg.js?v={{ asset_version }}" defer></script>
+{% endblock %}
+{% block content %}
+<section class="rpg-workspace {% block rpg_page_class %}{% endblock %}" data-rpg-workspace>
+  {% block rpg_content %}{% endblock %}
+</section>
+{% endblock %}

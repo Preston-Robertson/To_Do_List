@@ -87,6 +87,8 @@ KNOWN_KEYS: tuple[EnvKey, ...] = (
     EnvKey("LUIGI_WEB_CARDS_REFRESH_HOURS", "Automatic refresh hours", "0 disables automatic Scryfall refresh (default).", "Trading Cards", input_type="number"),
     EnvKey("LUIGI_WEB_CARDS_POKEMON_API_KEY", "Pokemon TCG API key", "Optional. Raises pokemontcg.io rate limits; blank on save keeps the current key.", "Trading Cards", is_secret=True),
     EnvKey("LUIGI_WEB_CARDS_DRAWIO_URL", "Draw.io embed URL", "Trusted HTTPS draw.io embed URL. Blank disables deck diagrams.", "Trading Cards", input_type="url"),
+    # Tabletop Characters ---------------------------------------------------
+    EnvKey("LUIGI_WEB_RPG_DB", "Characters database", "App-owned SQLite character sheets and level paths.", "Characters"),
     # LLM chat --------------------------------------------------------------
     EnvKey("LUIGI_WEB_LLM_PROVIDER",           "LLM provider",  "'copilot' (GitHub subscription), 'openai', or 'disabled'.", "LLM"),
     EnvKey("LUIGI_WEB_LLM_BASE_URL",           "LLM base URL",  "Used only for an OpenAI-compatible /chat/completions endpoint.", "LLM", input_type="url"),

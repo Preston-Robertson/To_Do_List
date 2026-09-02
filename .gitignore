@@ -25,6 +25,8 @@ data/operations.db-*
 data/cards.db
 data/cards.db-*
 data/cards-bulk/
+data/rpg.db
+data/rpg.db-*
 LOCAL_DEPLOYMENT.md
 LOCAL_FEATURE_REQUESTS.md
 

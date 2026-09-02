@@ -1,0 +1,82 @@
+{% macro signed(value) -%}{% if value >= 0 %}+{% endif %}{{ value }}{%- endmacro %}
+
+{% macro add_entry_button(sheet, kind, label='Add') %}
+<button type="button" class="btn btn-tiny"
+        hx-get="/characters/{{ sheet.character.id }}/states/{{ sheet.state.id }}/entries/new?kind={{ kind }}"
+        hx-target="#modal-body" hx-swap="innerHTML" onclick="openModal()">
+  {{ label }}
+</button>
+{% endmacro %}
+
+{% macro entry_section(sheet, kind, title, empty_label, add_label='Add') %}
+{% set entries = sheet.entries_by_kind[kind] %}
+<section class="rpg-entry-section" aria-labelledby="rpg-{{ kind }}-title">
+  <header class="rpg-section-heading">
+    <div>
+      <h2 id="rpg-{{ kind }}-title">{{ title }}</h2>
+      <span>{{ entries|length }}</span>
+    </div>
+    {{ add_entry_button(sheet, kind, add_label) }}
+  </header>
+  <div class="rpg-entry-list">
+    {% for entry in entries %}
+    <article class="rpg-entry-card" data-entry-kind="{{ entry.kind }}">
+      <header>
+        <div class="rpg-entry-title">
+          <h3>{{ entry.name }}</h3>
+          <div class="rpg-entry-tags">
+            {% if entry.rank %}<span>Rank {{ entry.rank }}</span>{% endif %}
+            {% if entry.action_cost %}<span>{{ entry.action_cost }}</span>{% endif %}
+            {% if entry.prepared %}<span>Prepared</span>{% endif %}
+            {% if entry.equipped %}<span>Equipped</span>{% endif %}
+            {% if entry.kind == 'inventory' and entry.quantity != 1 %}<span>Qty {{ entry.quantity }}</span>{% endif %}
+          </div>
+        </div>
+        <button type="button" class="rpg-icon-button" title="Edit {{ entry.name }}"
+                aria-label="Edit {{ entry.name }}"
+                hx-get="/characters/{{ sheet.character.id }}/states/{{ sheet.state.id }}/entries/{{ entry.id }}/edit"
+                hx-target="#modal-body" hx-swap="innerHTML" onclick="openModal()">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg>
+        </button>
+      </header>
+      {% if entry.summary %}<p class="rpg-entry-summary">{{ entry.summary }}</p>{% endif %}
+      {% if entry.max_uses is not none %}
+      {% set uses = entry.current_uses if entry.current_uses is not none else entry.max_uses %}
+      <div class="rpg-use-tracker" aria-label="{{ entry.name }} uses remaining">
+        <form method="post"
+              action="/characters/{{ sheet.character.id }}/states/{{ sheet.state.id }}/entries/{{ entry.id }}/uses"
+              hx-post="/characters/{{ sheet.character.id }}/states/{{ sheet.state.id }}/entries/{{ entry.id }}/uses"
+              hx-swap="none">
+          <input type="hidden" name="current_uses" value="{{ uses - 1 if uses > 0 else 0 }}">
+          <button type="submit" aria-label="Spend one use" {% if uses <= 0 %}disabled{% endif %}>&minus;</button>
+        </form>
+        <output>{{ uses }} / {{ entry.max_uses }}</output>
+        <form method="post"
+              action="/characters/{{ sheet.character.id }}/states/{{ sheet.state.id }}/entries/{{ entry.id }}/uses"
+              hx-post="/characters/{{ sheet.character.id }}/states/{{ sheet.state.id }}/entries/{{ entry.id }}/uses"
+              hx-swap="none">
+          <input type="hidden" name="current_uses" value="{{ uses + 1 if uses < entry.max_uses else entry.max_uses }}">
+          <button type="submit" aria-label="Restore one use" {% if uses >= entry.max_uses %}disabled{% endif %}>+</button>
+        </form>
+        {% if entry.reset_on %}<span>{{ entry.reset_on|replace('_', ' ')|title }}</span>{% endif %}
+      </div>
+      {% endif %}
+      {% if entry.description %}
+      <details class="rpg-entry-details">
+        <summary>Details</summary>
+        <p>{{ entry.description }}</p>
+      </details>
+      {% endif %}
+      {% if entry.source_url %}
+      <a class="rpg-source-link" href="{{ entry.source_url }}" target="_blank" rel="noreferrer">Open source</a>
+      {% endif %}
+    </article>
+    {% else %}
+    <div class="rpg-section-empty">
+      <span aria-hidden="true">+</span>
+      <p>{{ empty_label }}</p>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endmacro %}

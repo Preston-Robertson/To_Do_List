@@ -36,6 +36,9 @@ web-only features, including Finance.
   `LUIGI_WEB_CARDS_DB`. Its catalog, decks, collection, and price history stay
   together for transactional joins, but never share tables with LuigiBot or
   Finance.
+- Characters uses a separate app-owned SQLite database configured by
+  `LUIGI_WEB_RPG_DB`. Character, level-state, and sheet-entry records must not
+  share tables with LuigiBot, Finance, or Trading Cards.
 - The coordinated shared Discipline redesign is documented in
   `docs/discipline-v2-plan.md`.
 
@@ -54,6 +57,9 @@ web-only features, including Finance.
 - Trading-card deck and collection records stay out of LLM tools and external
   search. Scryfall bulk files are temporary, image URLs are allow-listed, and
   all persisted prices use integer minor units plus currency.
+- Character records stay out of LLM tools and global record search. Store only
+  user-entered rules summaries and source links; do not mirror third-party
+  compendiums in the repository.
 
 ## Architecture
 
@@ -65,6 +71,8 @@ web-only features, including Finance.
 - `luigi_web/finance_routes.py`: separately authenticated Finance HTTP routes.
 - `luigi_web/cards.py`: app-owned trading-card catalog, deck, and collection repository.
 - `luigi_web/cards_routes.py`: authenticated Trading Cards HTTP routes.
+- `luigi_web/rpg.py` / `rpg_routes.py`: isolated character sheets, level states,
+  calculations, and authenticated HTTP routes.
 - `luigi_web/cards_importer.py` / `cards_scryfall.py` / `cards_pokemon.py`:
   text-deck import and authenticated catalog refresh providers.
 - `luigi_web/feedback.py` / `feedback_routes.py`: local-only Feedback inbox.

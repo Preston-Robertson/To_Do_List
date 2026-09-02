@@ -17,6 +17,9 @@ the shared LuigiBot repository.
 - **Games and shows:** shared Game'N'Watch Google Sheet, metadata search,
   covers, ratings, statuses, Steam playtime, achievements, and local Insights
   charts/tables with backlog health and health-aware weighted picks.
+- **Characters:** private D&D 5e (2014) and Pathfinder 2e sheets with live
+  resources, abilities, saves, skills, spells, equipment, notes, and cloned
+  level-path states.
 - **Finance:** separately unlocked accounts, transactions, budgets,
   investments, net worth, CSV import, reports, alerts, audit history, and
   exports. Finance data is isolated from LuigiBot and the LLM.
@@ -115,6 +118,7 @@ control. Core settings:
 | `LUIGI_WEB_FINANCE_BASE_CURRENCY` | ISO currency used for reports |
 | `LUIGI_WEB_REVIEW_DB` | App-owned Daily/Weekly Review SQLite path |
 | `LUIGI_WEB_OPERATIONS_DB` | App-owned task dependencies and reminders SQLite path |
+| `LUIGI_WEB_RPG_DB` | App-owned character sheets and level paths SQLite path |
 | `LUIGI_WEB_LLM_*` | Optional GitHub Copilot or OpenAI-compatible assistant |
 | `LUIGI_WEB_COPILOT_HOME` | Writable cache for the bundled Copilot runtime |
 | `LUIGI_WEB_GNW_*` | Optional Game'N'Watch Google Sheet |

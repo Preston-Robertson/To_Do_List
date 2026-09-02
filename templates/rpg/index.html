@@ -1,0 +1,84 @@
+{% extends "rpg/layout.html" %}
+{% block rpg_page_class %}rpg-roster-page{% endblock %}
+{% block rpg_content %}
+<header class="rpg-roster-header">
+  <div class="rpg-page-title">
+    <span class="rpg-title-mark" aria-hidden="true">20</span>
+    <div>
+      <h1>Characters</h1>
+      <p>{{ characters|length }} {{ 'record' if characters|length == 1 else 'records' }}</p>
+    </div>
+  </div>
+  <button type="button" class="btn btn-primary"
+          hx-get="/characters/new" hx-target="#modal-body"
+          hx-swap="innerHTML" onclick="openModal()">New character</button>
+</header>
+
+<div class="rpg-roster-toolbar">
+  <nav class="rpg-system-switcher" aria-label="Game system">
+    <a href="/characters{% if include_archived %}?archived=true{% endif %}"
+       class="{% if not system_filter %}active{% endif %}"
+       {% if not system_filter %}aria-current="page"{% endif %}>All</a>
+    {% for code, system in systems.items() %}
+    <a href="/characters?system={{ code }}{% if include_archived %}&amp;archived=true{% endif %}"
+       class="{% if system_filter == code %}active{% endif %}"
+       {% if system_filter == code %}aria-current="page"{% endif %}>{{ system.short_name }}</a>
+    {% endfor %}
+  </nav>
+  <a class="rpg-archive-toggle"
+     href="/characters{% if system_filter %}?system={{ system_filter }}{% if not include_archived %}&amp;archived=true{% endif %}{% elif not include_archived %}?archived=true{% endif %}">
+    {{ 'Current characters' if include_archived else 'Include archived' }}
+  </a>
+</div>
+
+{% if characters %}
+<div class="rpg-character-grid">
+  {% for character in characters %}
+  {% set system = systems[character.system_code] %}
+  <article class="rpg-character-card" data-system="{{ character.system_code }}">
+    <div class="rpg-character-stripe" aria-hidden="true"></div>
+    <header>
+      <div class="rpg-character-monogram" aria-hidden="true">{{ character.name[:1]|upper }}</div>
+      <div class="rpg-character-heading">
+        <div class="rpg-character-kicker">
+          <span>{{ system.short_name }}</span>
+          {% if character.archived %}<span>Archived</span>{% endif %}
+        </div>
+        <h2><a href="/characters/{{ character.id }}">{{ character.name }}</a></h2>
+        <p>
+          {% if character.active_class_name %}{{ character.active_class_name }}{% else %}Class not set{% endif %}
+          {% if character.active_ancestry %}&middot; {{ character.active_ancestry }}{% endif %}
+        </p>
+      </div>
+      <div class="rpg-level-seal" aria-label="Level {{ character.active_level }}">
+        <small>LVL</small><strong>{{ character.active_level }}</strong>
+      </div>
+    </header>
+    <div class="rpg-character-context">
+      <span>{{ character.campaign or 'No campaign' }}</span>
+      <span>{{ character.state_count }} {{ 'state' if character.state_count == 1 else 'states' }}</span>
+    </div>
+    <div class="rpg-hp-row">
+      <div class="rpg-hp-label"><span>Hit points</span><strong>{{ character.hp_current }} / {{ character.hp_max }}</strong></div>
+      <div class="rpg-hp-meter" style="--rpg-hp: {{ (character.hp_current * 100 / character.hp_max)|round(1) }}%"><span></span></div>
+    </div>
+    {% if character.concept %}<p class="rpg-character-concept">{{ character.concept }}</p>{% endif %}
+    <footer>
+      <a class="btn" href="/characters/{{ character.id }}">Open sheet</a>
+      <button type="button" class="btn btn-ghost"
+              hx-get="/characters/{{ character.id }}/edit" hx-target="#modal-body"
+              hx-swap="innerHTML" onclick="openModal()">Edit</button>
+    </footer>
+  </article>
+  {% endfor %}
+</div>
+{% else %}
+<div class="rpg-roster-empty">
+  <span class="rpg-title-mark" aria-hidden="true">20</span>
+  <h2>No characters here</h2>
+  <button type="button" class="btn btn-primary"
+          hx-get="/characters/new" hx-target="#modal-body"
+          hx-swap="innerHTML" onclick="openModal()">Create character</button>
+</div>
+{% endif %}
+{% endblock %}

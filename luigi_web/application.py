@@ -38,6 +38,7 @@ from . import operations
 from . import cards
 from . import cards_scryfall
 from . import cards_templating
+from . import rpg
 from .auth import (
     COOKIE_NAME,
     CSRF_COOKIE_NAME,
@@ -92,6 +93,10 @@ async def csrf_middleware(request: Request, call_next):
         response.headers["Cache-Control"] = "no-store"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
+    if request.url.path.startswith("/characters"):
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
     if not request.cookies.get(CSRF_COOKIE_NAME):
         response.set_cookie(
             CSRF_COOKIE_NAME,
@@ -123,11 +128,13 @@ from .finance_routes import router as finance_router
 from .feedback_routes import router as feedback_router
 from .preview_routes import router as preview_router
 from .cards_routes import router as cards_router
+from .rpg_routes import router as rpg_router
 
 app.include_router(finance_router)
 app.include_router(feedback_router)
 app.include_router(preview_router)
 app.include_router(cards_router)
+app.include_router(rpg_router)
 
 
 def _asset_version() -> str:
@@ -282,6 +289,10 @@ def _startup_schema_check() -> None:
         cards_scryfall.start_scheduler()
     except Exception as exc:
         logger.warning("Trading Cards startup failed: %s", exc)
+    try:
+        rpg.init_db()
+    except Exception as exc:
+        logger.warning("Characters startup failed: %s", exc)
 
 
 @app.on_event("shutdown")

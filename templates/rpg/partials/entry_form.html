@@ -1,0 +1,48 @@
+{% set kind_labels = {'action': 'Action', 'feature': 'Feature or feat', 'spell': 'Spell', 'inventory': 'Inventory item', 'resource': 'Resource', 'proficiency': 'Proficiency', 'condition': 'Condition or effect'} %}
+<form class="entity-form rpg-drawer-form rpg-entry-form" method="post"
+      action="/characters/{{ character_id }}/states/{{ state_id }}/entries{% if entry %}/{{ entry.id }}{% endif %}"
+      hx-post="/characters/{{ character_id }}/states/{{ state_id }}/entries{% if entry %}/{{ entry.id }}{% endif %}"
+      hx-swap="none" data-rpg-entry-form>
+  <div class="rpg-form-kicker">Sheet entry</div>
+  <h2>{{ 'Edit entry' if entry else 'Add entry' }}</h2>
+  <label>Section
+    <select name="kind" data-rpg-entry-kind>
+      {% for kind in entry_kinds %}<option value="{{ kind }}" {% if kind == selected_kind %}selected{% endif %}>{{ kind_labels[kind] }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Name<input type="text" name="name" maxlength="160" required autofocus value="{{ entry.name if entry else '' }}"></label>
+  <label>Summary<input type="text" name="summary" maxlength="500" value="{{ entry.summary if entry else '' }}" placeholder="Short sheet line"></label>
+  <div class="rpg-entry-fields">
+    <label data-entry-for="spell">Rank or spell level<input type="number" name="rank" min="0" max="20" value="{{ entry.rank if entry else 0 }}"></label>
+    <label data-entry-for="action spell feature">Action cost<input type="text" name="action_cost" maxlength="80" value="{{ entry.action_cost if entry else '' }}" placeholder="Action, reaction, 2 actions"></label>
+    <label data-entry-for="inventory">Quantity<input type="number" name="quantity" min="0" max="1000000" value="{{ entry.quantity if entry else 1 }}"></label>
+    <label data-entry-for="action spell feature resource">Current uses<input type="number" name="current_uses" min="0" max="1000000" value="{{ entry.current_uses if entry and entry.current_uses is not none else '' }}"></label>
+    <label data-entry-for="action spell feature resource">Maximum uses<input type="number" name="max_uses" min="0" max="1000000" value="{{ entry.max_uses if entry and entry.max_uses is not none else '' }}"></label>
+    <label data-entry-for="action spell feature resource">Resets
+      <select name="reset_on">
+        {% for value, label in [('', 'Not tracked'), ('turn', 'Each turn'), ('encounter', 'Each encounter'), ('short_rest', 'Short rest'), ('long_rest', 'Long rest'), ('daily', 'Daily preparation')] %}<option value="{{ value }}" {% if entry and entry.reset_on == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    </label>
+  </div>
+  <div class="rpg-entry-checks">
+    <input type="hidden" name="prepared" value="0">
+    <label class="checkbox" data-entry-for="spell"><input type="checkbox" name="prepared" value="1" {% if entry and entry.prepared %}checked{% endif %}> Prepared</label>
+    <input type="hidden" name="equipped" value="0">
+    <label class="checkbox" data-entry-for="inventory"><input type="checkbox" name="equipped" value="1" {% if entry and entry.equipped %}checked{% endif %}> Equipped</label>
+  </div>
+  <label>Description<textarea name="description" rows="7" maxlength="20000" placeholder="Rules summary, choices, or reminders">{{ entry.description if entry else '' }}</textarea></label>
+  <label>Source link<input type="url" name="source_url" maxlength="1000" value="{{ entry.source_url if entry else '' }}" placeholder="https://"></label>
+  <input type="hidden" name="sort_order" value="{{ entry.sort_order if entry else 0 }}">
+  <div class="form-actions">
+    <button type="button" class="btn btn-ghost" data-close-modal>Cancel</button>
+    <button type="submit" class="btn btn-primary">{{ 'Save entry' if entry else 'Add to sheet' }}</button>
+  </div>
+</form>
+{% if entry %}
+<form class="rpg-entry-delete" method="post"
+      action="/characters/{{ character_id }}/states/{{ state_id }}/entries/{{ entry.id }}/delete"
+      hx-post="/characters/{{ character_id }}/states/{{ state_id }}/entries/{{ entry.id }}/delete"
+      hx-swap="none" hx-confirm="Delete this sheet entry?">
+  <button type="submit" class="btn btn-danger">Delete entry</button>
+</form>
+{% endif %}

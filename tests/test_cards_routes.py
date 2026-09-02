@@ -82,6 +82,8 @@ class CardRouteTests(unittest.TestCase):
         self.assertEqual(detail.headers["Cache-Control"], "no-store")
         self.assertIn('data-deck-view="stacks"', deck.text)
         self.assertIn("deck-stack-card", deck.text)
+        self.assertIn("data-deck-image-src=", deck.text)
+        self.assertNotIn('class="cards-sparkline" src=', deck.text)
 
     def test_long_category_is_balanced_into_visual_stack_lanes(self) -> None:
         cards.upsert_scryfall_cards([
