@@ -1,6 +1,8 @@
 import os
+import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from unittest.mock import patch
 
 from luigi_web import rpg
@@ -125,6 +127,358 @@ class RpgRepositoryTests(unittest.TestCase):
         rpg.set_character_archived(character["id"], True)
         self.assertEqual(rpg.list_characters(), [])
         self.assertEqual(len(rpg.list_characters(include_archived=True)), 1)
+
+    def test_schema_v1_migrates_without_losing_character_data(self) -> None:
+        character = rpg.create_character("Migration example", "dnd5e_2014")
+        with closing(sqlite3.connect(rpg.db_path())) as connection:
+            connection.execute("PRAGMA user_version=1")
+            connection.execute("DROP TABLE class_progressions")
+            connection.execute("DROP TABLE library_entries")
+            connection.commit()
+
+        rpg.init_db()
+
+        self.assertEqual(rpg.get_character(character["id"])["name"], "Migration example")
+        with closing(sqlite3.connect(rpg.db_path())) as connection:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 4)
+
+    def test_schema_v2_adds_library_replacement_family(self) -> None:
+        with closing(sqlite3.connect(rpg.db_path())) as connection:
+            connection.execute("ALTER TABLE library_entries DROP COLUMN replacement_family")
+            connection.execute("PRAGMA user_version=2")
+            connection.commit()
+
+        rpg.init_db()
+
+        with closing(sqlite3.connect(rpg.db_path())) as connection:
+            columns = {
+                row[1]
+                for row in connection.execute("PRAGMA table_info(library_entries)").fetchall()
+            }
+            self.assertIn("replacement_family", columns)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 4)
+
+    def test_schema_v3_adds_progression_provider(self) -> None:
+        with closing(sqlite3.connect(rpg.db_path())) as connection:
+            connection.execute("ALTER TABLE class_progressions DROP COLUMN provider")
+            connection.execute("PRAGMA user_version=3")
+            connection.commit()
+
+        rpg.init_db()
+
+        with closing(sqlite3.connect(rpg.db_path())) as connection:
+            columns = {
+                row[1]
+                for row in connection.execute("PRAGMA table_info(class_progressions)").fetchall()
+            }
+            self.assertIn("provider", columns)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 4)
+
+    def test_library_copy_is_system_scoped_and_independent(self) -> None:
+        template = rpg.create_library_entry(
+            "dnd5e_2014",
+            kind="spell",
+            name="Example library spell",
+            summary="Synthetic summary",
+            rank=2,
+            max_uses=3,
+            source_url="https://example.com/srd/example-spell",
+            source_title="Example SRD",
+            license_name="CC BY 4.0",
+        )
+        dnd = rpg.create_character("Library wizard", "dnd5e_2014")
+        pf2 = rpg.create_character("Library thaumaturge", "pf2e")
+
+        copied = rpg.add_library_entries_to_state(
+            dnd["active_state_id"],
+            [template["id"]],
+        )[0]
+
+        self.assertEqual(copied["current_uses"], 3)
+        self.assertEqual(copied["library_entry_id"], template["id"])
+        rpg.update_entry(copied["id"], name="Character-specific spell")
+        self.assertEqual(rpg.get_library_entry(template["id"])["name"], "Example library spell")
+        with self.assertRaisesRegex(ValueError, "game system"):
+            rpg.add_library_entries_to_state(pf2["active_state_id"], [template["id"]])
+
+    def test_library_replacement_family_updates_only_new_snapshot(self) -> None:
+        first = rpg.create_library_entry(
+            "dnd5e_2014",
+            kind="feature",
+            name="Example die (d6)",
+            replacement_family="example-die",
+        )
+        upgraded = rpg.create_library_entry(
+            "dnd5e_2014",
+            kind="feature",
+            name="Example die (d8)",
+            replacement_family="example-die",
+        )
+        character = rpg.create_character("Upgrade example", "dnd5e_2014")
+        first_state_id = character["active_state_id"]
+        rpg.add_library_entries_to_state(first_state_id, [first["id"]])
+        second = rpg.create_state(
+            character["id"],
+            level=2,
+            clone_from_id=first_state_id,
+        )
+
+        rpg.add_library_entries_to_state(second["id"], [upgraded["id"]])
+
+        self.assertEqual(
+            [entry["name"] for entry in rpg.list_entries(first_state_id)],
+            ["Example die (d6)"],
+        )
+        self.assertEqual(
+            [entry["name"] for entry in rpg.list_entries(second["id"])],
+            ["Example die (d8)"],
+        )
+
+    def test_provider_upsert_rolls_back_invalid_progression(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unknown library entry"):
+            rpg.upsert_provider_library(
+                "dnd5e_2014",
+                "synthetic-provider",
+                [{
+                    "external_key": "feature:valid",
+                    "kind": "feature",
+                    "name": "Valid entry",
+                }],
+                [{
+                    "external_key": "feature:missing",
+                    "class_name": "Example class",
+                    "level": 1,
+                    "grant_type": "automatic",
+                }],
+            )
+
+        self.assertEqual(
+            rpg.list_library_entries("dnd5e_2014", include_archived=True),
+            [],
+        )
+
+    def test_guided_level_up_adds_automatic_and_selected_choices(self) -> None:
+        automatic = rpg.create_library_entry(
+            "dnd5e_2014", kind="feature", name="Automatic feature"
+        )
+        option_a = rpg.create_library_entry(
+            "dnd5e_2014", kind="feature", name="Option A"
+        )
+        option_b = rpg.create_library_entry(
+            "dnd5e_2014", kind="feature", name="Option B"
+        )
+        later = rpg.create_library_entry(
+            "dnd5e_2014", kind="feature", name="Later feature"
+        )
+        rpg.add_class_progression(
+            automatic["id"],
+            class_name="Example class",
+            level=2,
+            grant_type="automatic",
+        )
+        for option in (option_a, option_b):
+            rpg.add_class_progression(
+                option["id"],
+                class_name="Example class",
+                level=2,
+                grant_type="choice",
+                choice_group="Example choice",
+                choice_count=1,
+            )
+        rpg.add_class_progression(
+            later["id"],
+            class_name="Example class",
+            level=3,
+            grant_type="automatic",
+        )
+        character = rpg.create_character("Guided example", "dnd5e_2014")
+        first_state_id = character["active_state_id"]
+
+        third = rpg.create_guided_state(
+            character["id"],
+            source_state_id=first_state_id,
+            class_name="Example class",
+            target_level=3,
+            selected_library_ids=[option_b["id"]],
+        )
+
+        names = {entry["name"] for entry in rpg.list_entries(third["id"])}
+        self.assertEqual(names, {"Automatic feature", "Option B", "Later feature"})
+        self.assertEqual(third["class_name"], "Example class 3")
+        self.assertFalse(rpg.get_state(first_state_id)["is_active"])
+
+    def test_guided_level_up_rejects_choice_without_partial_state(self) -> None:
+        option = rpg.create_library_entry(
+            "dnd5e_2014", kind="feature", name="Required option"
+        )
+        rpg.add_class_progression(
+            option["id"],
+            class_name="Choice class",
+            level=2,
+            grant_type="choice",
+            choice_group="Required choice",
+            choice_count=1,
+        )
+        character = rpg.create_character("Choice example", "dnd5e_2014")
+        before = rpg.list_states(character["id"])
+
+        with self.assertRaisesRegex(ValueError, "Required choice"):
+            rpg.create_guided_state(
+                character["id"],
+                source_state_id=character["active_state_id"],
+                class_name="Choice class",
+                target_level=2,
+                selected_library_ids=[],
+            )
+
+        self.assertEqual(rpg.list_states(character["id"]), before)
+        self.assertTrue(rpg.get_state(character["active_state_id"])["is_active"])
+
+    def test_guided_level_up_rejects_reused_choice(self) -> None:
+        option_a = rpg.create_library_entry(
+            "dnd5e_2014", kind="feature", name="Existing option"
+        )
+        option_b = rpg.create_library_entry(
+            "dnd5e_2014", kind="feature", name="New option"
+        )
+        for option in (option_a, option_b):
+            rpg.add_class_progression(
+                option["id"],
+                class_name="Choice class",
+                level=2,
+                grant_type="choice",
+                choice_group="Example choice",
+                choice_count=1,
+            )
+        character = rpg.create_character("Reuse example", "dnd5e_2014")
+        rpg.add_library_entries_to_state(character["active_state_id"], [option_a["id"]])
+
+        with self.assertRaisesRegex(ValueError, "new option"):
+            rpg.create_guided_state(
+                character["id"],
+                source_state_id=character["active_state_id"],
+                class_name="Choice class",
+                target_level=2,
+                selected_library_ids=[option_a["id"]],
+            )
+
+        state = rpg.create_guided_state(
+            character["id"],
+            source_state_id=character["active_state_id"],
+            class_name="Choice class",
+            target_level=2,
+            selected_library_ids=[option_b["id"]],
+        )
+        self.assertEqual(
+            {entry["name"] for entry in rpg.list_entries(state["id"])},
+            {"Existing option", "New option"},
+        )
+
+    def test_guided_level_up_distinguishes_repeated_choice_pools(self) -> None:
+        options = [
+            rpg.create_library_entry(
+                "dnd5e_2014", kind="feature", name=f"Repeated option {label}"
+            )
+            for label in ("A", "B", "C")
+        ]
+        progression_ids: dict[tuple[int, int], int] = {}
+        for level in (2, 3):
+            for option in options:
+                progression = rpg.add_class_progression(
+                    option["id"],
+                    class_name="Repeated class",
+                    level=level,
+                    grant_type="choice",
+                    choice_group="Repeated pool",
+                    choice_count=1,
+                )
+                progression_ids[(level, option["id"])] = progression["id"]
+        character = rpg.create_character("Repeated pool example", "dnd5e_2014")
+
+        with self.assertRaisesRegex(ValueError, "new option"):
+            rpg.create_guided_state(
+                character["id"],
+                source_state_id=character["active_state_id"],
+                class_name="Repeated class",
+                target_level=3,
+                selected_progression_ids=[
+                    progression_ids[(2, options[0]["id"])],
+                    progression_ids[(3, options[0]["id"])],
+                ],
+            )
+
+        state = rpg.create_guided_state(
+            character["id"],
+            source_state_id=character["active_state_id"],
+            class_name="Repeated class",
+            target_level=3,
+            selected_progression_ids=[
+                progression_ids[(2, options[0]["id"])],
+                progression_ids[(3, options[1]["id"])],
+            ],
+        )
+        self.assertEqual(
+            {entry["name"] for entry in rpg.list_entries(state["id"])},
+            {"Repeated option A", "Repeated option B"},
+        )
+
+    def test_guided_level_up_filters_and_records_subclass(self) -> None:
+        first_option = rpg.create_library_entry(
+            "dnd5e_2014", kind="feature", name="First subclass feature"
+        )
+        other_option = rpg.create_library_entry(
+            "dnd5e_2014", kind="feature", name="Other subclass feature"
+        )
+        for entry, subclass in ((first_option, "First path"), (other_option, "Other path")):
+            rpg.add_class_progression(
+                entry["id"],
+                class_name="Example class",
+                subclass=subclass,
+                level=2,
+                grant_type="automatic",
+            )
+        character = rpg.create_character("Subclass example", "dnd5e_2014")
+
+        state = rpg.create_guided_state(
+            character["id"],
+            source_state_id=character["active_state_id"],
+            class_name="Example class",
+            subclass="First path",
+            target_level=2,
+        )
+
+        self.assertEqual(state["subclass"], "First path")
+        self.assertEqual(
+            [entry["name"] for entry in rpg.list_entries(state["id"])],
+            ["First subclass feature"],
+        )
+        self.assertEqual(
+            rpg.list_library_subclasses("dnd5e_2014", "Example class"),
+            ["First path", "Other path"],
+        )
+        self.assertEqual(
+            rpg.list_library_subclasses(
+                "dnd5e_2014",
+                "Example class",
+                through_level=1,
+            ),
+            [],
+        )
+        with self.assertRaisesRegex(ValueError, "Choose a subclass"):
+            rpg.create_guided_state(
+                character["id"],
+                source_state_id=character["active_state_id"],
+                class_name="Example class",
+                target_level=2,
+            )
+        with self.assertRaisesRegex(ValueError, "cannot change"):
+            rpg.create_guided_state(
+                character["id"],
+                source_state_id=state["id"],
+                class_name="Example class",
+                subclass="Other path",
+                target_level=3,
+            )
 
 
 if __name__ == "__main__":

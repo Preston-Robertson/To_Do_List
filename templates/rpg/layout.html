@@ -7,6 +7,14 @@
 {% endblock %}
 {% block content %}
 <section class="rpg-workspace {% block rpg_page_class %}{% endblock %}" data-rpg-workspace>
+  <nav class="rpg-feature-nav" aria-label="Character tools">
+    <a href="/characters"
+       class="{% if not request.url.path.startswith('/characters/library') %}active{% endif %}"
+       {% if not request.url.path.startswith('/characters/library') %}aria-current="page"{% endif %}>Characters</a>
+    <a href="/characters/library"
+       class="{% if request.url.path.startswith('/characters/library') %}active{% endif %}"
+       {% if request.url.path.startswith('/characters/library') %}aria-current="page"{% endif %}>Library</a>
+  </nav>
   {% block rpg_content %}{% endblock %}
 </section>
 {% endblock %}

@@ -51,10 +51,26 @@
     const returnFocus = cardDetailDialog?.open
       ? dialogOpeners.get(cardDetailDialog)
       : button;
+    const parentDialog = button.closest("dialog");
+    if (parentDialog && parentDialog !== quickCollect) parentDialog.close();
     dialogById("card-detail-dialog")?.close();
+    quickCollect.querySelector("form")?.reset();
     quickCollect.querySelector("[data-cards-selected-id]").value = button.dataset.cardId || "";
     quickCollect.querySelector("[data-cards-selected-name]").textContent = button.dataset.cardName || "Selected card";
     openDialog(quickCollect, returnFocus || button);
+  });
+
+  const acquisitionDialog = dialogById("collection-acquisition-dialog");
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-collection-acquisition-edit]");
+    if (!button || !acquisitionDialog) return;
+    const minor = button.dataset.acquiredPriceMinor;
+    acquisitionDialog.querySelector("[data-acquisition-card-name]").textContent = button.dataset.cardName || "Selected card";
+    acquisitionDialog.querySelector("[data-acquisition-collection-id]").value = button.dataset.collectionId || "";
+    acquisitionDialog.querySelector("[data-acquisition-date]").value = button.dataset.acquiredDate || "";
+    acquisitionDialog.querySelector("[data-acquisition-price]").value = minor === "" ? "" : (Number(minor) / 100).toFixed(2);
+    acquisitionDialog.querySelector("[data-acquisition-currency]").value = button.dataset.acquiredCurrency || "USD";
+    openDialog(acquisitionDialog, button);
   });
 
   const cardDetailDialog = dialogById("card-detail-dialog");
@@ -185,12 +201,22 @@
   const deckViewMedia = window.matchMedia("(max-width: 700px)");
   const deckViewKey = () => `${DECK_VIEW_KEY}.${deckViewMedia.matches ? "mobile" : "desktop"}`;
 
+  function revealLoadedStackImage(image) {
+    if (image.closest(".deck-stack-card") && image.complete && image.naturalWidth > 0) {
+      image.classList.add("deck-stack-image-loaded");
+    }
+  }
+
   function loadDeckViewImages(view) {
     view.querySelectorAll("img[data-deck-image-src]").forEach((image) => {
       const source = image.dataset.deckImageSrc;
       if (!source) return;
+      if (image.closest(".deck-stack-card")) {
+        image.addEventListener("load", () => revealLoadedStackImage(image), { once: true });
+      }
       image.src = source;
       image.removeAttribute("data-deck-image-src");
+      revealLoadedStackImage(image);
     });
   }
 
@@ -242,6 +268,8 @@
     root.querySelectorAll?.(".deck-stack-card img").forEach((image) => {
       if (image.hasAttribute("src") && image.complete && image.naturalWidth === 0) {
         image.hidden = true;
+      } else {
+        revealLoadedStackImage(image);
       }
     });
   }

@@ -65,7 +65,13 @@ schema `user_version` are enabled by the repository adapter.
 - Table and Stacks views split Commander, Mainboard, Sideboard, and Maybeboard
   into distinct bands with custom categories nested beneath each board.
 - Plain-text deck export.
-- Collection quantity, foil, condition, acquired price, currency, and notes.
+- Collection quantity, foil, condition, purchase date, per-card purchase price,
+  currency, and notes. Existing holdings can be backfilled or corrected from
+  the Collection page.
+- Purchase cost, current market value, gain/loss, and percentage return for
+  each holding and the comparable portfolio. Repeated priced purchases use a
+  quantity-weighted unit cost. USD market gains exclude non-USD purchases and
+  cards without current prices rather than mixing currencies.
 - Owned-versus-required counts in each deck.
 - Card and deck value-history SVG charts.
 - Optional draw.io notes stored as validated XML.

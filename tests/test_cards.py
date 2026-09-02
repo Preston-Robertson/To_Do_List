@@ -143,10 +143,20 @@ class CardRepositoryTests(unittest.TestCase):
                 qty INTEGER NOT NULL, category TEXT, board TEXT NOT NULL,
                 UNIQUE(deck_id, card_id, board)
             );
+            CREATE TABLE collection (
+                id INTEGER PRIMARY KEY, card_id INTEGER NOT NULL,
+                qty INTEGER NOT NULL, foil INTEGER NOT NULL,
+                condition TEXT NOT NULL, acquired_date TEXT,
+                acquired_price_minor INTEGER, acquired_currency TEXT NOT NULL,
+                notes TEXT, UNIQUE(card_id, foil, condition)
+            );
             INSERT INTO games VALUES ('mtg', 'Magic', 1, 0);
             INSERT INTO cards VALUES (1, 'mtg', 'one', 'Example Card', NULL, NULL);
             INSERT INTO decks VALUES (1, 'mtg', 0, datetime('now'));
             INSERT INTO deck_cards VALUES (1, 1, 1, 2, NULL, 'main');
+            INSERT INTO collection VALUES (
+                1, 1, 2, 0, 'NM', '2026-01-01', 300, 'USD', NULL
+            );
         """)
         conn.close()
 
@@ -167,10 +177,16 @@ class CardRepositoryTests(unittest.TestCase):
             rows = conn.execute(
                 "SELECT category, qty FROM deck_cards ORDER BY id"
             ).fetchall()
+            collection_row = conn.execute(
+                "SELECT qty, acquired_qty FROM collection WHERE id = 1"
+            ).fetchone()
         self.assertEqual(category_column["notnull"], 1)
         self.assertEqual(
             [(row["category"], row["qty"]) for row in rows],
             [("", 2), ("Ramp", 4), ("Draw", 4)],
+        )
+        self.assertEqual(
+            (collection_row["qty"], collection_row["acquired_qty"]), (2, 2)
         )
 
     def test_scryfall_upsert_rejects_untrusted_images(self) -> None:
@@ -222,6 +238,7 @@ class CardRepositoryTests(unittest.TestCase):
         self.assertEqual(len(detail["printings"]), 2)
         self.assertEqual(detail["decks"][0]["qty"], 2)
         self.assertEqual(detail["collection"][0]["qty"], 1)
+        self.assertIn("current_value_usd_minor", detail["collection"][0])
         self.assertEqual([link["label"] for link in detail["links"]], ["Scryfall", "TCGplayer"])
         self.assertNotIn("raw_json", detail)
 
@@ -464,9 +481,32 @@ class CardRepositoryTests(unittest.TestCase):
         self.assertEqual(deck_row["price_usd_minor"], 6175)
         self.assertEqual(
             cards.collection_totals("mtg"),
-            {"qty": 3, "value_usd_minor": 3705},
+            {
+                "qty": 3,
+                "value_usd_minor": 3705,
+                "cost_basis_usd_minor": 1260,
+                "cost_basis_qty": 3,
+                "comparison_cost_usd_minor": 1260,
+                "comparison_value_usd_minor": 3705,
+                "comparison_qty": 3,
+                "gain_loss_usd_minor": 2445,
+                "gain_loss_basis_points": 19405,
+            },
         )
-        self.assertEqual(cards.list_collection("mtg")[0]["acquired_date"], "2026-08-01")
+        collection_row = cards.list_collection("mtg")[0]
+        self.assertEqual(collection_row["acquired_date"], "2026-08-01")
+        self.assertEqual(collection_row["purchase_cost_minor"], 1260)
+        self.assertEqual(collection_row["current_value_usd_minor"], 3705)
+        self.assertEqual(collection_row["gain_loss_usd_minor"], 2445)
+        self.assertEqual(collection_row["gain_loss_basis_points"], 19405)
+        self.assertTrue(cards.update_collection_acquisition(
+            collection_row["id"], "mtg",
+            acquired_date="2026-07-15", acquired_price="5.00",
+        ))
+        updated = cards.list_collection("mtg")[0]
+        self.assertEqual(updated["acquired_date"], "2026-07-15")
+        self.assertEqual(updated["purchase_cost_minor"], 1500)
+        self.assertEqual(updated["gain_loss_usd_minor"], 2205)
         export = cards.deck_export_text(deck_id)
         self.assertIn("5 Example Relic (TST) 7", export)
         cards.add_card_to_deck(deck_id, relic["id"], board="commander")
@@ -764,8 +804,79 @@ class CardRepositoryTests(unittest.TestCase):
                     (relic["id"],),
                 )
 
+    def test_repeated_purchases_use_weighted_cost_basis(self) -> None:
+        relic, _ = self.seed()
+        cards.add_to_collection(
+            relic["id"], qty=2, acquired_date="2026-08-10",
+            acquired_price="2.00", notes="first purchase",
+        )
+        cards.add_to_collection(
+            relic["id"], qty=1, acquired_date="2026-07-15",
+            acquired_price="5.00", notes="second purchase",
+        )
+
+        row = cards.list_collection("mtg")[0]
+
+        self.assertEqual(row["qty"], 3)
+        self.assertEqual(row["acquired_date"], "2026-07-15")
+        self.assertEqual(row["acquired_price_minor"], 300)
+        self.assertEqual(row["purchase_cost_minor"], 900)
+        self.assertEqual(row["notes"], "first purchase\nsecond purchase")
+
+    def test_partial_purchase_cost_counts_only_priced_copies(self) -> None:
+        relic, _ = self.seed()
+        cards.add_to_collection(relic["id"], qty=2)
+        cards.add_to_collection(relic["id"], qty=1, acquired_price="5.00")
+
+        row = cards.list_collection("mtg")[0]
+        totals = cards.collection_totals("mtg")
+
+        self.assertEqual((row["qty"], row["acquired_qty"]), (3, 1))
+        self.assertEqual(row["purchase_cost_minor"], 500)
+        self.assertEqual(row["gain_loss_usd_minor"], 735)
+        self.assertEqual(totals["cost_basis_qty"], 1)
+        self.assertEqual(totals["comparison_qty"], 1)
+
+        self.assertTrue(cards.update_collection_acquisition(
+            row["id"], "mtg", acquired_price="4.00"
+        ))
+        updated = cards.list_collection("mtg")[0]
+        self.assertEqual(updated["acquired_qty"], 3)
+        self.assertEqual(updated["purchase_cost_minor"], 1200)
+
+    def test_collection_comparison_excludes_incompatible_values(self) -> None:
+        relic, wizard = self.seed()
+        no_price_id = cards.create_manual_card("mtg", {"name": "No Price Card"})
+        cards.add_to_collection(
+            relic["id"], qty=2, acquired_price="4.20", acquired_currency="USD"
+        )
+        cards.add_to_collection(
+            wizard["id"], qty=1, acquired_price="3.00", acquired_currency="EUR"
+        )
+        cards.add_to_collection(
+            no_price_id, qty=1, acquired_price="1.00", acquired_currency="USD"
+        )
+
+        rows = {row["name"]: row for row in cards.list_collection("mtg")}
+        totals = cards.collection_totals("mtg")
+
+        self.assertIsNone(rows["Example Wizard"]["gain_loss_usd_minor"])
+        self.assertIsNone(rows["No Price Card"]["gain_loss_usd_minor"])
+        self.assertEqual(totals["qty"], 4)
+        self.assertEqual(totals["value_usd_minor"], 2670)
+        self.assertEqual(totals["cost_basis_usd_minor"], 940)
+        self.assertEqual(totals["cost_basis_qty"], 3)
+        self.assertEqual(totals["comparison_qty"], 2)
+        self.assertEqual(totals["comparison_cost_usd_minor"], 840)
+        self.assertEqual(totals["comparison_value_usd_minor"], 2470)
+        self.assertEqual(totals["gain_loss_usd_minor"], 1630)
+        self.assertEqual(totals["gain_loss_basis_points"], 19405)
+
     def test_filters_escape_mana_and_format_minor_units(self) -> None:
         self.assertEqual(cards_templating.money_minor(1235), "$12.35")
+        self.assertEqual(cards_templating.signed_money_minor(1235), "+$12.35")
+        self.assertEqual(cards_templating.signed_money_minor(-1235), "-$12.35")
+        self.assertEqual(cards_templating.percent_basis_points(19405), "+194.05%")
         self.assertNotIn("<script", cards_templating.format_mana("{<script>}"))
 
     def test_scryfall_refresh_is_streamed_audited_and_cleans_up(self) -> None:

@@ -401,6 +401,7 @@
 .cards-sparkline { width: 120px; height: 32px; display: block; }
 .cards-icon-button { width: 30px; height: 30px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--text-muted); cursor: pointer; }
 .cards-icon-button:hover { background: var(--danger-dim); color: #fff; }
+.cards-icon-button-edit:hover { background: var(--cards-accent-soft); color: var(--cards-accent-strong); }
 .cards-icon-button svg { width: 16px; height: 16px; }
 
 .deck-stack-view[hidden],
@@ -440,7 +441,8 @@
 .deck-stack-card + .deck-stack-card { margin-top: calc(-139.6825% + 52px); }
 .deck-stack-card:hover,
 .deck-stack-card:focus-visible { z-index: 1000; border-color: var(--cards-accent); transform: translateY(-4px); outline: 0; }
-.deck-stack-card img { position: relative; z-index: 1; width: 100%; height: 100%; display: block; object-fit: cover; }
+.deck-stack-card img { position: relative; z-index: 1; width: 100%; height: 100%; display: block; object-fit: cover; opacity: 0; transition: opacity 120ms ease; }
+.deck-stack-card img.deck-stack-image-loaded { opacity: 1; }
 .deck-stack-card img[hidden] { display: none; }
 .deck-stack-placeholder { position: absolute; inset: 0; z-index: 0; display: grid; place-content: center; gap: 5px; padding: 18px; background: linear-gradient(145deg,#18221e,#0e1210); text-align: center; }
 .deck-stack-placeholder b { overflow-wrap: anywhere; font-family: Georgia, serif; font-size: 16px; }
@@ -513,6 +515,13 @@
 .cards-stat-grid span { color: var(--text-muted); font-size: 9px; font-weight: 750; text-transform: uppercase; }
 .cards-stat-grid strong { font-family: Georgia, serif; font-size: 24px; letter-spacing: 0; }
 .cards-stat-grid .cards-stat-text { overflow-wrap: anywhere; font-family: inherit; font-size: 12px; }
+.cards-stat-grid small { color: var(--text-muted); font-size: 9px; }
+.value-positive { color: var(--cards-accent-strong) !important; }
+.value-negative { color: #f0a1a5 !important; }
+.cards-value-muted { color: var(--text-muted); font-size: 10px; }
+.collection-table td strong { color: var(--text); }
+.collection-table td small { color: var(--text-muted); white-space: nowrap; }
+.collection-actions-cell { display: flex; align-items: center; gap: 2px; }
 .cards-trend { padding: 14px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg-elev); }
 .cards-trend h2 { margin: 0 0 8px; font-size: 14px; }
 .cards-trend img { width: 100%; height: 140px; display: block; }
@@ -694,6 +703,7 @@ a.card-record-row { grid-template-columns: minmax(0, 1fr) auto; }
   .cards-search-list form { justify-content: stretch; flex-wrap: wrap; }
   .cards-search-list form .btn { flex: 1; }
   .cards-stat-grid { grid-template-columns: 1fr; }
+  .collection-value-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .cards-data-panel { align-items: stretch; flex-direction: column; }
   .cards-data-panel form { align-items: stretch; flex-direction: column; }
   .cards-notes { min-height: 480px; }

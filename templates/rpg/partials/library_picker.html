@@ -1,0 +1,41 @@
+{% set kind_labels = {'action': 'action', 'feature': 'feature', 'spell': 'spell', 'inventory': 'item', 'resource': 'resource', 'proficiency': 'proficiency', 'condition': 'condition'} %}
+<div class="rpg-library-picker">
+  <div class="rpg-form-kicker">{{ systems[state.system_code].short_name }} library</div>
+  <h2>Add {{ kind_labels[selected_kind] }}</h2>
+  <form class="rpg-picker-search" method="get"
+        action="/characters/{{ character_id }}/states/{{ state.id }}/library"
+        hx-get="/characters/{{ character_id }}/states/{{ state.id }}/library"
+        hx-target="#modal-body" hx-swap="innerHTML"
+        hx-trigger="input changed delay:250ms from:input[name=q], search from:input[name=q]">
+    <input type="hidden" name="kind" value="{{ selected_kind }}">
+    <label><span class="sr-only">Search library</span><input type="search" name="q" maxlength="160" value="{{ search_query }}" placeholder="Search {{ kind_labels[selected_kind] }} library" autocomplete="off" autofocus></label>
+  </form>
+
+    <form method="post" action="/characters/{{ character_id }}/states/{{ state.id }}/library"
+      hx-post="/characters/{{ character_id }}/states/{{ state.id }}/library" hx-swap="none"
+      data-rpg-picker-form>
+    <input type="hidden" name="kind" value="{{ selected_kind }}">
+    <div class="rpg-picker-list" role="group" aria-label="Library entries">
+      {% for entry in entries %}
+      {% set already_added = entry.id in existing_ids %}
+      <label class="rpg-picker-option {% if already_added %}added{% endif %}">
+        <input type="checkbox" name="library_entry_id" value="{{ entry.id }}" {% if already_added %}checked disabled{% endif %}>
+        <span class="rpg-picker-check" aria-hidden="true"></span>
+        <span class="rpg-picker-copy">
+          <strong>{{ entry.name }}</strong>
+          {% if entry.summary %}<small>{{ entry.summary }}</small>{% endif %}
+          <span>{% if entry.provider %}Open SRD{% else %}Local{% endif %}{% if entry.rank %} &middot; Rank {{ entry.rank }}{% endif %}{% if already_added %} &middot; Added{% endif %}</span>
+        </span>
+      </label>
+      {% else %}
+      <div class="rpg-picker-empty">No matching library entries.</div>
+      {% endfor %}
+    </div>
+    <div class="form-actions rpg-picker-actions">
+      <button type="button" class="btn btn-ghost"
+              hx-get="/characters/{{ character_id }}/states/{{ state.id }}/entries/new?kind={{ selected_kind }}"
+              hx-target="#modal-body" hx-swap="innerHTML">Custom entry</button>
+      <button type="submit" class="btn btn-primary" data-rpg-picker-submit disabled>Add selected</button>
+    </div>
+  </form>
+</div>

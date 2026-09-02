@@ -29,6 +29,10 @@ class CardRouteTests(unittest.TestCase):
             "collector_number": "9",
             "type_line": "Artifact",
             "prices": {"usd": "2.50"},
+            "image_uris": {
+                "small": "https://cards.scryfall.io/small/front/a/b/route-card.jpg",
+                "normal": "https://cards.scryfall.io/normal/front/a/b/route-card.jpg",
+            },
         }])
         self.card = cards.find_card("mtg", "Route Example")
         self.client = TestClient(application.app)
@@ -82,6 +86,7 @@ class CardRouteTests(unittest.TestCase):
         self.assertEqual(detail.headers["Cache-Control"], "no-store")
         self.assertIn('data-deck-view="stacks"', deck.text)
         self.assertIn("deck-stack-card", deck.text)
+        self.assertIn('class="deck-stack-image"', deck.text)
         self.assertIn("data-deck-image-src=", deck.text)
         self.assertNotIn('class="cards-sparkline" src=', deck.text)
 
@@ -239,7 +244,27 @@ class CardRouteTests(unittest.TestCase):
         )
         self.assertEqual(collected.status_code, 204)
         self.assertEqual(cards.collection_totals("mtg")["qty"], 2)
-        self.assertEqual(cards.list_collection("mtg")[0]["acquired_date"], "2026-08-02")
+        collection_row = cards.list_collection("mtg")[0]
+        self.assertEqual(collection_row["acquired_date"], "2026-08-02")
+        collection_page = self.client.get("/cards/mtg/collection")
+        self.assertIn("Purchase cost", collection_page.text)
+        self.assertIn("+$2.50", collection_page.text)
+        self.assertIn("+100.00%", collection_page.text)
+
+        updated = self.client.post(
+            "/cards/mtg/collection/acquisition",
+            data={
+                "collection_id": collection_row["id"],
+                "acquired_date": "2026-07-20",
+                "acquired_price": "2.00",
+                "acquired_currency": "USD",
+            },
+            headers=headers,
+        )
+        self.assertEqual(updated.status_code, 204)
+        updated_row = cards.list_collection("mtg")[0]
+        self.assertEqual(updated_row["acquired_date"], "2026-07-20")
+        self.assertEqual(updated_row["acquired_price_minor"], 200)
 
     def test_svg_charts_keep_private_cache_headers(self) -> None:
         deck_id = cards.create_deck("mtg", "Chart Deck")

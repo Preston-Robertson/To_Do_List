@@ -2,7 +2,7 @@
 
 {% macro add_entry_button(sheet, kind, label='Add') %}
 <button type="button" class="btn btn-tiny"
-        hx-get="/characters/{{ sheet.character.id }}/states/{{ sheet.state.id }}/entries/new?kind={{ kind }}"
+  hx-get="/characters/{{ sheet.character.id }}/states/{{ sheet.state.id }}/library?kind={{ kind }}"
         hx-target="#modal-body" hx-swap="innerHTML" onclick="openModal()">
   {{ label }}
 </button>

@@ -137,10 +137,25 @@ entries never share LuigiBot, Finance, or Trading Cards tables.
 Each character has one current level state and can retain multiple independent
 states for its build path. Cloning a state transactionally copies its sheet
 entries so later hit-point, spell, resource, inventory, or note changes do not
-rewrite earlier levels. The app stores user-entered summaries and optional
-source links; it does not mirror third-party rules compendiums. Character data
-is excluded from Assistant tools and global record search, and all character
-responses use `Cache-Control: no-store`.
+rewrite earlier levels. Reusable `library_entries` remain separate from
+state-owned `sheet_entries`; adding from the library creates an independent
+copy with provenance. `class_progressions` maps library entries to class,
+subclass, level, automatic-grant, and exact-count choice rules. Guided Level Up
+validates the complete selection before cloning and applying all grants in one
+SQLite transaction. Replacement-family keys remove obsolete imported feature
+versions only from the new snapshot.
+
+`luigi_web/rpg_srd.py` owns the optional 2014 SRD provider. Refresh is an
+explicit authenticated POST, never startup work. It fetches only an allow-listed
+set of fixed 5e-bits bulk URLs with redirects disabled, byte and row limits,
+and local shape validation. Raw downloads are not persisted. Provider records
+are reconciled transactionally by stable external key; stale provider records
+are archived and provider-owned progression mappings are rebuilt without
+changing manual library entries. Stored source/license metadata identifies SRD
+5.1 and CC BY 4.0. No D&D Beyond or 5e.tools scraping is used.
+
+Character and library data is excluded from Assistant tools, telemetry, and
+global record search. All character responses use `Cache-Control: no-store`.
 
 ## Authentication and request security
 

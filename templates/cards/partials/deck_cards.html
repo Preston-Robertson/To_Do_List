@@ -64,7 +64,7 @@
                   aria-label="View {{ card.name }} details">
             <span class="deck-stack-placeholder" aria-hidden="true"><b>{{ card.name }}</b><small>{{ card.type_line or 'No image available' }}</small></span>
             {% if card.image_normal or card.image_small %}
-            <img data-deck-image-src="{{ card.image_normal or card.image_small }}" alt="" loading="lazy" decoding="async">
+            <img class="deck-stack-image" data-deck-image-src="{{ card.image_normal or card.image_small }}" alt="" loading="lazy" decoding="async">
             {% endif %}
             <span class="deck-stack-label" aria-hidden="true"><strong>{{ card.name }}</strong><b>{{ card.qty }}x</b></span>
             <span class="deck-stack-owned {% if card.owned_qty >= card.qty %}complete{% endif %}">{{ card.owned_qty }} / {{ card.qty }} owned</span>

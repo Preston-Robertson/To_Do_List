@@ -79,9 +79,59 @@
     });
   }
 
+  function initPickerForms(root = document) {
+    root.querySelectorAll("[data-rpg-picker-form]").forEach((form) => {
+      if (form.dataset.rpgPickerReady === "true") return;
+      form.dataset.rpgPickerReady = "true";
+      const submit = form.querySelector("[data-rpg-picker-submit]");
+      const sync = () => {
+        const selected = form.querySelectorAll('input[name="library_entry_id"]:checked:not(:disabled)').length;
+        if (submit) submit.disabled = selected === 0;
+      };
+      form.addEventListener("change", sync);
+      sync();
+    });
+  }
+
+  function initLevelPlans(root = document) {
+    root.querySelectorAll("[data-rpg-level-plan]").forEach((form) => {
+      if (form.dataset.rpgLevelReady === "true") return;
+      form.dataset.rpgLevelReady = "true";
+      const groups = Array.from(form.querySelectorAll("[data-rpg-choice-group]"));
+      const submit = form.querySelector("[data-rpg-level-submit]");
+      const sync = () => {
+        const selectedLibraryIds = new Set(
+          Array.from(form.querySelectorAll('input[name="progression_id"]:checked'))
+            .map((input) => input.dataset.libraryId)
+        );
+        groups.forEach((group) => {
+          const choose = Number.parseInt(group.dataset.choose || "0", 10);
+          const inputs = Array.from(
+            group.querySelectorAll('input[name="progression_id"]:not([data-unavailable="true"])')
+          );
+          const selected = inputs.filter((input) => input.checked).length;
+          group.dataset.complete = String(selected === choose);
+          inputs.forEach((input) => {
+            const selectedElsewhere = (
+              !input.checked && selectedLibraryIds.has(input.dataset.libraryId)
+            );
+            input.disabled = !input.checked && (selected >= choose || selectedElsewhere);
+          });
+        });
+        if (submit) {
+          submit.disabled = groups.some((group) => group.dataset.complete !== "true");
+        }
+      };
+      form.addEventListener("change", sync);
+      sync();
+    });
+  }
+
   function init(root = document) {
     initTabs(root);
     initEntryForms(root);
+    initPickerForms(root);
+    initLevelPlans(root);
   }
 
   if (document.readyState === "loading") {

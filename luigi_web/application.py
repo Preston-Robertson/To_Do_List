@@ -17,16 +17,14 @@ import signal
 import threading
 import time
 import calendar as calendar_mod
-from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from . import db
 from . import recurrence
@@ -38,7 +36,6 @@ from . import operations
 from . import cards
 from . import cards_scryfall
 from . import cards_templating
-from . import rpg
 from .auth import (
     COOKIE_NAME,
     CSRF_COOKIE_NAME,
@@ -89,11 +86,11 @@ async def csrf_middleware(request: Request, call_next):
         response.headers["Cache-Control"] = "no-store"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
-    if request.url.path.startswith("/cards") and not request.url.path.endswith(".svg"):
+    if request.url.path.startswith("/characters"):
         response.headers["Cache-Control"] = "no-store"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
-    if request.url.path.startswith("/characters"):
+    if request.url.path.startswith("/cards") and not request.url.path.endswith(".svg"):
         response.headers["Cache-Control"] = "no-store"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
@@ -170,41 +167,19 @@ templates.env.globals["has_web_column"] = db.has_web_column
 templates.env.globals["completion_day_policy"] = task_events.server_time_policy
 
 
-def _text_form_value(value: Any, field: str) -> str:
-    if isinstance(value, StarletteUploadFile):
-        value.file.close()
-        raise HTTPException(422, f"{field} must be a text field")
-    return str(value)
-
-
-async def _form_dict(
-    request: Request,
-    *,
-    multi_keys: tuple[str, ...] = (),
-) -> dict[str, Any]:
-    """Read text form fields while preserving requested multi-value keys.
+async def _form_dict(request: Request) -> dict[str, Any]:
+    """Read a form into a dict, preserving multi-value ``recurring_days``.
 
     ``dict(await request.form())`` collapses repeated keys to just the last
-    value and can pass an unexpected ``UploadFile`` into scalar handlers.
+    value, which would silently drop every weekday except the last-checked
+    one. The DB layer's ``parse_recurring_days`` accepts either a list or a
+    CSV string, so we hand it the raw list.
     """
     form = await request.form()
-    data: dict[str, Any] = {
-        key: _text_form_value(value, key)
-        for key, value in form.items()
-    }
-    for key in multi_keys:
-        if key in form:
-            data[key] = [
-                _text_form_value(value, key) for value in form.getlist(key)
-            ]
+    data = dict(form)
+    if "recurring_days" in form:
+        data["recurring_days"] = form.getlist("recurring_days")
     return data
-
-
-def _bounded_error_detail(exc: Exception, limit: int = 240) -> str:
-    detail = f"{type(exc).__name__}: {exc}"
-    if len(detail) <= limit:
-        return detail
-    return detail[:max(0, limit - 3)] + "..."
 
 
 def _validate_recurring_form(data: dict[str, Any]) -> None:
@@ -289,10 +264,6 @@ def _startup_schema_check() -> None:
         cards_scryfall.start_scheduler()
     except Exception as exc:
         logger.warning("Trading Cards startup failed: %s", exc)
-    try:
-        rpg.init_db()
-    except Exception as exc:
-        logger.warning("Characters startup failed: %s", exc)
 
 
 @app.on_event("shutdown")
@@ -617,7 +588,7 @@ def task_rules_page(request: Request):
 
 @app.post("/task-rules/dependencies", dependencies=[Depends(require_auth)])
 async def dependency_create(request: Request):
-    form = await _form_dict(request)
+    form = dict(await request.form())
     try:
         dependent = _operation_task(str(form.get("dependent") or ""))
         blocker = _operation_task(str(form.get("blocker") or ""))
@@ -640,7 +611,7 @@ def dependency_delete(row_uuid: str):
 
 @app.post("/task-rules/reminders", dependencies=[Depends(require_auth)])
 async def reminder_rule_create(request: Request):
-    form = await _form_dict(request)
+    form = dict(await request.form())
     try:
         task = _operation_task(str(form.get("task_ref") or ""))
         operations.create_reminder_rule({
@@ -696,7 +667,7 @@ def reminder_snooze(row_uuid: str, days: int = Form(default=1)):
 @app.post("/tasks", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 async def tasks_create(request: Request):
     _require_v2()
-    form = await _form_dict(request)
+    form = dict(await request.form())
     row_uuid = db.create_task(form)
     row = db.get_task(row_uuid)
     return templates.TemplateResponse(
@@ -714,7 +685,7 @@ async def tasks_create(request: Request):
 async def tasks_quick_create(request: Request):
     """Small header form for the common one-off task creation path."""
     _require_v2()
-    form = await _form_dict(request)
+    form = dict(await request.form())
     task = str(form.get("task") or "").strip()
     if not task:
         raise HTTPException(422, "Task name is required")
@@ -863,7 +834,7 @@ def tasks_new_form(request: Request):
 )
 async def tasks_update(request: Request, row_uuid: str):
     _require_v2()
-    form = await _form_dict(request)
+    form = dict(await request.form())
     try:
         db.update_task(row_uuid, form)
     except ValueError as exc:
@@ -885,7 +856,7 @@ async def tasks_update(request: Request, row_uuid: str):
 @app.post("/tasks/{row_uuid}/status", dependencies=[Depends(require_auth)])
 async def tasks_set_status(request: Request, row_uuid: str):
     _require_v2()
-    form = await _form_dict(request)
+    form = dict(await request.form())
     new_status = form.get("status", "")
     try:
         db.set_task_status(row_uuid, new_status)
@@ -904,7 +875,7 @@ async def tasks_toggle_complete(request: Request, row_uuid: str):
     before = db.get_task(row_uuid)
     if not before:
         raise HTTPException(404)
-    form = await _form_dict(request)
+    form = await request.form()
     effective_date = str(form.get("effective_date") or "").strip() or None
     try:
         transition = db.toggle_task_completed(
@@ -985,7 +956,7 @@ async def tasks_snooze(request: Request, row_uuid: str):
     before = db.get_task(row_uuid)
     if not before:
         raise HTTPException(404)
-    form = await _form_dict(request)
+    form = dict(await request.form())
     try:
         days = int(form.get("days", "1"))
     except ValueError:
@@ -1022,7 +993,7 @@ def recurring_page(request: Request):
 @app.post("/recurring", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 async def recurring_create(request: Request):
     _require_v2()
-    form = await _form_dict(request, multi_keys=("recurring_days",))
+    form = await _form_dict(request)
     _validate_recurring_form(form)
     row_uuid = db.create_recurring(form)
     row = db.get_recurring(row_uuid)
@@ -1084,7 +1055,7 @@ def recurring_edit_form(request: Request, row_uuid: str):
 )
 async def recurring_update(request: Request, row_uuid: str):
     _require_v2()
-    form = await _form_dict(request, multi_keys=("recurring_days",))
+    form = await _form_dict(request)
     _validate_recurring_form(form)
     try:
         db.update_recurring(row_uuid, form)
@@ -1107,7 +1078,7 @@ async def recurring_update(request: Request, row_uuid: str):
 @app.post("/recurring/{row_uuid}/status", dependencies=[Depends(require_auth)])
 async def recurring_set_status(request: Request, row_uuid: str):
     _require_v2()
-    form = await _form_dict(request)
+    form = dict(await request.form())
     new_status = form.get("status", "")
     try:
         db.set_recurring_status(row_uuid, new_status)
@@ -1126,7 +1097,7 @@ async def recurring_toggle_complete(request: Request, row_uuid: str):
     before = db.get_recurring(row_uuid)
     if not before:
         raise HTTPException(404)
-    form = await _form_dict(request)
+    form = await request.form()
     effective_date = str(form.get("effective_date") or "").strip() or None
     try:
         transition = db.toggle_recurring_completed(
@@ -1220,7 +1191,7 @@ async def recurring_snooze(request: Request, row_uuid: str):
     before = db.get_recurring(row_uuid)
     if not before:
         raise HTTPException(404)
-    form = await _form_dict(request)
+    form = dict(await request.form())
     try:
         days = int(form.get("days", "1"))
     except ValueError:
@@ -1365,7 +1336,7 @@ def gnw_new_form(section: str, request: Request):
 @app.post("/gnw/{section}/search", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 async def gnw_search(section: str, request: Request):
     _gnw_section(section)
-    form = await _form_dict(request)
+    form = dict(await request.form())
     query = str(form.get("query") or "").strip()
     if not query:
         raise HTTPException(422, "Search text is required")
@@ -1374,7 +1345,7 @@ async def gnw_search(section: str, request: Request):
         error = None
     except Exception as exc:  # noqa: BLE001
         results = []
-        error = _bounded_error_detail(exc)
+        error = f"{type(exc).__name__}: {exc}"
     return templates.TemplateResponse(
         "partials/media_search_results.html",
         {
@@ -1393,7 +1364,7 @@ async def gnw_search(section: str, request: Request):
 @app.post("/gnw/{section}/add", dependencies=[Depends(require_auth)])
 async def gnw_add_item(section: str, request: Request):
     _gnw_section(section)
-    form = await _form_dict(request)
+    form = dict(await request.form())
     profile = str(form.get("profile") or "").strip()
     status = str(form.get("status") or "backlog")
     try:
@@ -1435,7 +1406,7 @@ def gnw_steam_stats(request: Request, profile: str, title: str, app_id: str):
         error = None
     except Exception as exc:  # noqa: BLE001
         stats = None
-        error = _bounded_error_detail(exc)
+        error = f"{type(exc).__name__}: {exc}"
     return templates.TemplateResponse(
         "partials/steam_stats.html",
         {"request": request, "stats": stats, "error": error, "profile": profile, "title": title},
@@ -1445,7 +1416,7 @@ def gnw_steam_stats(request: Request, profile: str, title: str, app_id: str):
 @app.post("/gnw/{section}/status", dependencies=[Depends(require_auth)])
 async def gnw_set_status(section: str, request: Request):
     _gnw_section(section)
-    form = await _form_dict(request)
+    form = dict(await request.form())
     profile = (form.get("profile") or "").strip()
     title = (form.get("title") or "").strip()
     status = (form.get("status") or "").strip()
@@ -1487,7 +1458,7 @@ def gnw_edit_form(section: str, request: Request, profile: str, title: str):
 )
 async def gnw_update(section: str, request: Request):
     _gnw_section(section)
-    form = await _form_dict(request)
+    form = dict(await request.form())
     profile = (form.get("profile") or "").strip()
     title = (form.get("title") or "").strip()
     if not profile or not title:
@@ -1521,7 +1492,7 @@ async def gnw_update(section: str, request: Request):
 )
 async def gnw_pick(section: str, request: Request):
     _gnw_section(section)
-    form = await _form_dict(request)
+    form = dict(await request.form())
     profile = (form.get("profile") or "").strip() or None
     pick = gnw.random_pick(section, profile)
     return templates.TemplateResponse(
@@ -1675,7 +1646,7 @@ def discipline_new_form(request: Request):
 @app.post("/discipline", dependencies=[Depends(require_auth)])
 async def discipline_create(request: Request):
     _require_v2()
-    form = await _form_dict(request)
+    form = dict(await request.form())
     try:
         db.create_discipline(form)
     except ValueError as exc:
@@ -1712,7 +1683,7 @@ def discipline_edit_form(request: Request, row_uuid: str):
 @app.post("/discipline/{row_uuid}", dependencies=[Depends(require_auth)])
 async def discipline_update(request: Request, row_uuid: str):
     _require_v2()
-    form = await _form_dict(request)
+    form = dict(await request.form())
     try:
         db.update_discipline(row_uuid, form)
     except ValueError as exc:
@@ -1779,7 +1750,7 @@ async def discipline_today(row_uuid: str, request: Request):
         raise HTTPException(404, "discipline not found")
     if not int(discipline.get("active") or 0):
         raise HTTPException(409, "inactive disciplines cannot be marked")
-    form = await _form_dict(request)
+    form = dict(await request.form())
     action = str(form.get("action") or "mark").strip().lower()
     if action not in {"mark", "unmark"}:
         raise HTTPException(400, "action must be mark or unmark")
@@ -1828,7 +1799,7 @@ async def discipline_toggle(request: Request):
     saved) and the frontend shows a toast with the reason.
     """
     _require_v2()
-    form = await _form_dict(request)
+    form = dict(await request.form())
     task = form.get("task", "")
     catagory = form.get("catagory") or None
     day = form.get("day", "")
@@ -1949,7 +1920,7 @@ def follow_ups_new_form(request: Request):
 @app.post("/follow-ups", dependencies=[Depends(require_auth)])
 async def follow_ups_create(request: Request):
     _require_v2()
-    form = await _form_dict(request)
+    form = dict(await request.form())
     db.create_follow_up(form)
     return Response(status_code=204, headers={
         "HX-Trigger": _hx_trigger(
@@ -1984,7 +1955,7 @@ def follow_ups_edit_form(request: Request, row_uuid: str):
 @app.post("/follow-ups/{row_uuid}", dependencies=[Depends(require_auth)])
 async def follow_ups_update(request: Request, row_uuid: str):
     _require_v2()
-    form = await _form_dict(request)
+    form = dict(await request.form())
     db.update_follow_up(row_uuid, form)
     return Response(status_code=204, headers={
         "HX-Trigger": _hx_trigger(
@@ -2359,11 +2330,11 @@ def review_page(request: Request, scope: str = "daily"):
 @app.post("/review/{scope}", dependencies=[Depends(require_auth)])
 async def review_save(scope: str, request: Request):
     _require_v2()
-    form = await _form_dict(request, multi_keys=("completed_steps",))
+    form = await request.form()
     try:
         review.save_session(
             scope,
-            completed_steps=form.get("completed_steps", []),
+            completed_steps=form.getlist("completed_steps"),
             notes=str(form.get("notes") or ""),
         )
     except ValueError as exc:
@@ -2560,10 +2531,9 @@ def admin_page(request: Request):
     writable, unwritable_reason = env_file.env_file_writable(env_path)
     try:
         current_env = env_file.read_env_file(env_path)
-    except Exception:  # e.g. permission error on read
-        logger.exception("Could not read the Admin environment file")
+    except Exception as exc:  # e.g. permission error on read
         current_env = {}
-        env_read_error = "Could not read the environment file. Check server logs."
+        env_read_error = f"{type(exc).__name__}: {exc}"
     else:
         env_read_error = ""
     return templates.TemplateResponse(
@@ -2606,25 +2576,9 @@ def _integration_result(name: str, check) -> dict[str, Any]:
         return {
             "name": name,
             "ok": False,
-            "detail": _bounded_error_detail(exc),
+            "detail": f"{type(exc).__name__}: {exc}",
             "ms": round((time.perf_counter() - started) * 1000),
         }
-
-
-def _run_integration_checks(
-    checks: list[tuple[str, Callable[[], Any]]],
-) -> list[dict[str, Any]]:
-    if not checks:
-        return []
-    with ThreadPoolExecutor(
-        max_workers=min(8, len(checks)),
-        thread_name_prefix="admin-health",
-    ) as executor:
-        futures = [
-            executor.submit(_integration_result, name, check)
-            for name, check in checks
-        ]
-        return [future.result() for future in futures]
 
 
 def _llm_integration_health() -> str:
@@ -2704,21 +2658,21 @@ def admin_integrations(request: Request):
     def check_operations():
         return operations.storage_health()
 
-    checks = _run_integration_checks([
-        ("PostgreSQL", check_db),
-        ("Discipline storage", check_discipline),
-        ("Task event history", check_task_events),
-        ("Google Sheets", check_sheets),
-        ("Steam", check_steam),
-        ("TVMaze", check_tvmaze),
-        ("AniList", check_anilist),
-        ("YouTube", check_youtube),
-        ("LLM", _llm_integration_health),
-        ("Git checkout", check_git),
-        ("Environment file", check_env),
-        ("Finance storage", check_finance),
-        ("Task rules and reminders", check_operations),
-    ])
+    checks = [
+        _integration_result("PostgreSQL", check_db),
+        _integration_result("Discipline storage", check_discipline),
+        _integration_result("Task event history", check_task_events),
+        _integration_result("Google Sheets", check_sheets),
+        _integration_result("Steam", check_steam),
+        _integration_result("TVMaze", check_tvmaze),
+        _integration_result("AniList", check_anilist),
+        _integration_result("YouTube", check_youtube),
+        _integration_result("LLM", _llm_integration_health),
+        _integration_result("Git checkout", check_git),
+        _integration_result("Environment file", check_env),
+        _integration_result("Finance storage", check_finance),
+        _integration_result("Task rules and reminders", check_operations),
+    ]
     return templates.TemplateResponse(
         "partials/admin_integrations.html",
         {"request": request, "checks": checks, "checked_at": _dt.now().strftime("%H:%M:%S")},
@@ -2732,9 +2686,9 @@ async def admin_gnw_credentials(request: Request):
     Writes it to the app-managed path (see gnw.credentials_path) so no
     host-side file placement is needed, then hot-reloads the Sheets client.
     """
-    form = await _form_dict(request)
+    form = await request.form()
     raw = form.get("credentials", "")
-    ok, message = gnw.save_credentials(str(raw))
+    ok, message = gnw.save_credentials(raw if isinstance(raw, str) else "")
     return templates.TemplateResponse(
         "partials/admin_gnw_result.html",
         {"request": request, "ok": ok, "message": message,
@@ -2754,16 +2708,15 @@ async def admin_env_save(request: Request):
       * The file itself does the atomic write; we just prepare the payload.
     """
     env_path = env_file.env_file_path(REPO_DIR)
-    form = await _form_dict(request)
+    form = await request.form()
 
     try:
         current = env_file.read_env_file(env_path)
-    except Exception:
-        logger.exception("Could not read the Admin environment file before saving")
+    except Exception as exc:
         return templates.TemplateResponse(
             "partials/admin_env_result.html",
             {"request": request, "ok": False,
-             "error": "Could not read the environment file. Check server logs.",
+             "error": f"could not read {env_path}: {exc}",
              "changed": [], "unchanged_secrets": [],
              "hot_reloaded": [], "restart_needed": []},
         )
@@ -2801,12 +2754,11 @@ async def admin_env_save(request: Request):
              "changed": [], "unchanged_secrets": unchanged_secrets,
              "hot_reloaded": [], "restart_needed": []},
         )
-    except Exception:
-        logger.exception("Could not update the Admin environment file")
+    except Exception as exc:
         return templates.TemplateResponse(
             "partials/admin_env_result.html",
             {"request": request, "ok": False,
-             "error": "Could not update the environment file. Check server logs.",
+             "error": f"{type(exc).__name__}: {exc}",
              "changed": [], "unchanged_secrets": unchanged_secrets,
              "hot_reloaded": [], "restart_needed": []},
         )

@@ -50,7 +50,7 @@
       {% endif %}
       <button type="button" class="btn btn-primary card-collect-action"
               data-cards-quick-collect data-card-id="{{ card.id }}" data-card-name="{{ card.name }}">
-        Add to collection
+        Record purchase
       </button>
     </section>
 
@@ -136,7 +136,7 @@
       </div>
 
       <div id="card-collection" class="card-info-panel" role="tabpanel">
-        {% if card.collection %}<div class="card-record-list">{% for record in card.collection %}<div class="card-record-row"><span><strong>{{ record.qty }}x · {{ 'Foil' if record.foil else 'Regular' }} · {{ record.condition }}</strong><small>{% if record.acquired_date %}Acquired {{ record.acquired_date }} · {% endif %}{{ record.acquired_price_minor | money_minor(record.acquired_currency) }}{% if record.notes %} · {{ record.notes }}{% endif %}</small></span></div>{% endfor %}</div>{% else %}<div class="cards-empty"><h3>Not in collection</h3><p>Use Add to collection to record a copy.</p></div>{% endif %}
+        {% if card.collection %}<div class="card-record-list">{% for record in card.collection %}<div class="card-record-row"><span><strong>{{ record.qty }}x · {{ 'Foil' if record.foil else 'Regular' }} · {{ record.condition }}</strong><small>{% if record.acquired_date %}Bought {{ record.acquired_date }} · {% endif %}Paid {{ record.purchase_cost_minor | money_minor(record.acquired_currency) }} · Now {{ record.current_value_usd_minor | money_minor }}{% if record.gain_loss_usd_minor is not none %} · <b class="{% if record.gain_loss_usd_minor > 0 %}value-positive{% elif record.gain_loss_usd_minor < 0 %}value-negative{% endif %}">{{ record.gain_loss_usd_minor | signed_money_minor }}{% if record.gain_loss_basis_points is not none %} ({{ record.gain_loss_basis_points | percent_basis_points }}){% endif %}</b>{% endif %}{% if record.notes %} · {{ record.notes }}{% endif %}</small></span></div>{% endfor %}</div>{% else %}<div class="cards-empty"><h3>Not in collection</h3><p>Use Add to collection to record a copy.</p></div>{% endif %}
       </div>
     </section>
   </div>

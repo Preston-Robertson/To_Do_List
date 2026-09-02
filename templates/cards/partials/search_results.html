@@ -13,9 +13,9 @@
       <input type="hidden" name="card_id" value="{{ card.id }}"><input type="number" name="qty" value="1" min="1" max="9999" aria-label="Quantity"><select name="board" aria-label="Board"><option value="main">Main</option><option value="side">Side</option><option value="maybe">Maybe</option></select><button class="btn btn-primary btn-small" type="submit">Add</button><button class="btn btn-small" type="submit" name="set_as_commander" value="1">Commander</button>
     </form>
     {% elif for_collection %}
-    <form method="post" action="/cards/{{ current_game }}/collection" hx-post="/cards/{{ current_game }}/collection" hx-swap="none">
-      <input type="hidden" name="card_id" value="{{ card.id }}"><input type="number" name="qty" value="1" min="1" max="9999" aria-label="Quantity"><select name="condition" aria-label="Condition"><option>NM</option><option>LP</option><option>MP</option><option>HP</option><option>DMG</option></select><label class="cards-check"><input type="checkbox" name="foil" value="1"> Foil</label><button class="btn btn-primary btn-small" type="submit">Add</button>
-    </form>
+    <button type="button" class="btn btn-primary btn-small"
+            data-cards-quick-collect data-card-id="{{ card.id }}"
+            data-card-name="{{ card.name }}">Record purchase</button>
     {% endif %}
   </li>
   {% endfor %}

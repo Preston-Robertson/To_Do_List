@@ -61,23 +61,10 @@ def _dsn() -> URL:
     )
 
 
-def _connect_timeout() -> int:
-    try:
-        timeout = int(os.environ.get("LUIGI_WEB_PG_CONNECT_TIMEOUT", "5"))
-    except ValueError:
-        timeout = 5
-    return min(max(timeout, 1), 30)
-
-
 def get_engine() -> Engine:
     global _engine
     if _engine is None:
-        _engine = create_engine(
-            _dsn(),
-            connect_args={"connect_timeout": _connect_timeout()},
-            pool_pre_ping=True,
-            future=True,
-        )
+        _engine = create_engine(_dsn(), pool_pre_ping=True, future=True)
     return _engine
 
 
@@ -546,9 +533,6 @@ def _create_task_like(table: str, data: dict[str, Any], recurring_default: int) 
     interval_enabled = recurring_val and schedule_type not in {"weekdays", "monthly"}
     weekdays_enabled = recurring_val and schedule_type != "monthly"
     monthly_enabled = recurring_val and schedule_type == "monthly" and monthly is not None
-    monthly_ordinal, monthly_weekday = (
-        monthly if monthly_enabled and monthly is not None else (None, None)
-    )
     payload = {
         "uuid": row_uuid,
         "task": data.get("task", "").strip(),
@@ -578,8 +562,8 @@ def _create_task_like(table: str, data: dict[str, Any], recurring_default: int) 
             parse_recurring_days(data.get("recurring_days"))
             if weekdays_enabled else None
         ),
-        "recurring_month_ordinal": monthly_ordinal,
-        "recurring_month_weekday": monthly_weekday,
+        "recurring_month_ordinal": monthly[0] if monthly_enabled else None,
+        "recurring_month_weekday": monthly[1] if monthly_enabled else None,
         "project": data.get("project") or None,
         "archived": 0,
     }

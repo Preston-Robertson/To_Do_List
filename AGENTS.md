@@ -58,8 +58,8 @@ web-only features, including Finance.
   search. Scryfall bulk files are temporary, image URLs are allow-listed, and
   all persisted prices use integer minor units plus currency.
 - Character records stay out of LLM tools and global record search. Store only
-  user-entered rules summaries and source links; do not mirror third-party
-  compendiums in the repository.
+  user-entered rules summaries or explicitly imported open-license records with
+  source/license metadata. Do not mirror compendium datasets in the repository.
 
 ## Architecture
 
@@ -73,6 +73,8 @@ web-only features, including Finance.
 - `luigi_web/cards_routes.py`: authenticated Trading Cards HTTP routes.
 - `luigi_web/rpg.py` / `rpg_routes.py`: isolated character sheets, level states,
   calculations, and authenticated HTTP routes.
+- `luigi_web/rpg_srd.py`: explicit bounded 2014 SRD refresh and normalization;
+  it performs no startup networking and retains no raw bulk files.
 - `luigi_web/cards_importer.py` / `cards_scryfall.py` / `cards_pokemon.py`:
   text-deck import and authenticated catalog refresh providers.
 - `luigi_web/feedback.py` / `feedback_routes.py`: local-only Feedback inbox.
@@ -96,6 +98,8 @@ web-only features, including Finance.
 - Verify writes before reporting success; never let UI state imply an
   uncommitted or failed mutation.
 - Do not add third-party CDN dependencies. Browser assets are served locally.
+- Rules providers must use fixed allow-listed bulk URLs, strict response limits,
+  explicit user-triggered refresh, and complete source/license attribution.
 - New public documentation must use placeholders such as `<postgres-host>` and
   must not include private hostnames, container IDs, LAN addresses, or usernames.
 - Preview mutations require a separate deployment unlock and the fixed

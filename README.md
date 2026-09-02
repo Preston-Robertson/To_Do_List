@@ -19,7 +19,8 @@ the shared LuigiBot repository.
   charts/tables with backlog health and health-aware weighted picks.
 - **Characters:** private D&D 5e (2014) and Pathfinder 2e sheets with live
   resources, abilities, saves, skills, spells, equipment, notes, and cloned
-  level-path states.
+  level-path states, plus a reusable local rules library and guided class
+  progression.
 - **Finance:** separately unlocked accounts, transactions, budgets,
   investments, net worth, CSV import, reports, alerts, audit history, and
   exports. Finance data is isolated from LuigiBot and the LLM.
@@ -74,6 +75,30 @@ Finance is designed around data minimization:
 
 Read [`SECURITY.md`](SECURITY.md) before storing real financial data. HTTPS and
 `LUIGI_WEB_SECURE_COOKIES=1` are strongly recommended.
+
+## Character library and level paths
+
+The authenticated Character Library stores reusable actions, features, spells,
+equipment, resources, proficiencies, and conditions for either supported game
+system. Adding a library entry to a sheet copies it into that level state, so
+character-specific edits never rewrite the source record or an earlier state.
+Library entries can also be mapped to class levels as automatic grants or
+exact-count choices; guided Level Up clones the current state, applies those
+rules transactionally, and keeps upgraded feature families from accumulating
+obsolete versions.
+
+D&D 5e (2014) can be populated with an explicit **Refresh open SRD** action.
+The refresh downloads a fixed, bounded set of English 2014 bulk JSON files
+from the [5e API data project](https://github.com/5e-bits/5e-database), validates
+them locally, and retains only normalized library records. It does not run at
+startup, retain raw payloads, or scrape D&D Beyond or 5e.tools. Manual records
+are preserved when provider records are reconciled. Pathfinder 2e library
+records are currently user-created.
+
+This feature includes material from the D&D 5e System Reference Document 5.1
+by Wizards of the Coast, available from the
+[D&D SRD page](https://www.dndbeyond.com/srd), and licensed under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 ## Quick start
 
@@ -227,4 +252,6 @@ Repository guidance:
 
 ## License
 
-No license has been declared. Add one before accepting external contributions.
+No license has been declared for Luigi Web itself. Runtime-imported SRD 5.1
+material retains its CC BY 4.0 attribution described above. Add a project
+license before accepting external contributions.

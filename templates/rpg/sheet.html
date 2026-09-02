@@ -30,9 +30,16 @@
   <section class="rpg-level-path" aria-labelledby="rpg-level-path-title">
     <div class="rpg-path-heading">
       <div><span>Level path</span><strong id="rpg-level-path-title">{{ state.label }}</strong></div>
-      <button type="button" class="rpg-path-add" title="Add level state" aria-label="Add level state"
-              hx-get="/characters/{{ character.id }}/states/new?source={{ state.id }}"
-              hx-target="#modal-body" hx-swap="innerHTML" onclick="openModal()">+</button>
+            <div class="rpg-path-controls">
+        {% if state.level < 20 %}
+        <button type="button" class="btn btn-tiny"
+          hx-get="/characters/{{ character.id }}/states/{{ state.id }}/level-up"
+          hx-target="#modal-body" hx-swap="innerHTML" onclick="openModal()">Level up</button>
+        {% endif %}
+        <button type="button" class="rpg-path-add" title="Add custom level state" aria-label="Add custom level state"
+          hx-get="/characters/{{ character.id }}/states/new?source={{ state.id }}"
+          hx-target="#modal-body" hx-swap="innerHTML" onclick="openModal()">+</button>
+            </div>
     </div>
     <nav class="rpg-state-track" aria-label="Character level states">
       {% for path_state in sheet.states %}

@@ -774,6 +774,31 @@ def collection_add(
     return _refresh(request, f"/cards/{game_code}/collection")
 
 
+@router.post("/{game_code}/collection/acquisition")
+def collection_acquisition_update(
+    request: Request,
+    game_code: str,
+    collection_id: int = Form(...),
+    acquired_date: str = Form(""),
+    acquired_price: str = Form(""),
+    acquired_currency: str = Form("USD"),
+) -> Response:
+    _require_game(game_code)
+    try:
+        updated = cards.update_collection_acquisition(
+            collection_id,
+            game_code,
+            acquired_date=acquired_date,
+            acquired_price=acquired_price,
+            acquired_currency=acquired_currency,
+        )
+    except ValueError as exc:
+        raise _value_error(exc) from exc
+    if not updated:
+        raise HTTPException(404, "Collection entry not found")
+    return _refresh(request, f"/cards/{game_code}/collection")
+
+
 @router.post("/{game_code}/collection/{collection_id}/delete")
 def collection_delete(
     request: Request,

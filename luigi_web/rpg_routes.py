@@ -1,13 +1,15 @@
 """Authenticated routes for tabletop RPG characters and level-state sheets."""
 from __future__ import annotations
 
+import json
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
-from . import rpg
+from . import rpg, rpg_srd
 from .auth import require_auth
 from .paths import STATIC_DIR, TEMPLATES_DIR
 
@@ -40,8 +42,12 @@ def _render(template_name: str, context: dict[str, Any]) -> Response:
 
 def _redirect(request: Request, url: str) -> Response:
     if request.headers.get("HX-Request") == "true":
-        return Response(status_code=204, headers={"HX-Redirect": url})
-    return RedirectResponse(url, status_code=303)
+        response: Response = Response(status_code=204, headers={"HX-Redirect": url})
+    else:
+        response = RedirectResponse(url, status_code=303)
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    return response
 
 
 def _form_dict(form: Any) -> dict[str, Any]:
@@ -71,6 +77,43 @@ def _require_entry(state_id: int, entry_id: int) -> dict[str, Any]:
     if entry is None:
         raise HTTPException(404, "Sheet entry not found")
     return entry
+
+
+def _require_library_entry(library_entry_id: int) -> dict[str, Any]:
+    entry = rpg.get_library_entry(library_entry_id)
+    if entry is None:
+        raise HTTPException(404, "Library entry not found")
+    return entry
+
+
+def _canonical_option(value: Any, options: list[str]) -> str:
+    requested = str(value or "").strip().casefold()
+    return next((option for option in options if option.casefold() == requested), "")
+
+
+def _default_class(state: dict[str, Any], classes: list[str]) -> str:
+    current = str(state.get("class_name") or "").strip().casefold()
+    return next(
+        (
+            class_name for class_name in classes
+            if current == class_name.casefold()
+            or current.startswith(f"{class_name.casefold()} ")
+        ),
+        classes[0] if classes else "",
+    )
+
+
+def _sheet_redirect(character_id: int, state_id: int, kind: str = "") -> str:
+    tabs = {
+        "action": "actions",
+        "spell": "spells",
+        "inventory": "inventory",
+        "feature": "features",
+        "proficiency": "features",
+        "condition": "features",
+        "resource": "overview",
+    }
+    return f"/characters/{character_id}?state={state_id}#{tabs.get(kind, 'overview')}"
 
 
 def _sheet_values(form: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
@@ -173,6 +216,147 @@ async def character_create(request: Request) -> Response:
     except ValueError as exc:
         raise _value_error(exc) from exc
     return _redirect(request, f"/characters/{character['id']}")
+
+
+@router.get("/library", response_class=HTMLResponse)
+def library_page(
+    request: Request,
+    system: str = Query(default="dnd5e_2014"),
+    kind: str = Query(default=""),
+    q: str = Query(default=""),
+    archived: bool = Query(default=False),
+    refreshed: bool = Query(default=False),
+) -> Response:
+    rpg.init_db()
+    try:
+        entries = rpg.list_library_entries(
+            system,
+            kind=kind or None,
+            query=q,
+            include_archived=archived,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return _render(
+        "rpg/library.html",
+        _ctx(
+            request,
+            page_title="Character Library",
+            entries=entries,
+            system_filter=system,
+            kind_filter=kind,
+            search_query=q,
+            include_archived=archived,
+            refreshed=refreshed,
+        ),
+    )
+
+
+@router.get("/library/new", response_class=HTMLResponse)
+def library_new_form(
+    request: Request,
+    system: str = Query(default="dnd5e_2014"),
+    kind: str = Query(default="feature"),
+) -> Response:
+    if system not in rpg.SYSTEMS or kind not in rpg.ENTRY_KINDS:
+        raise HTTPException(400, "Choose a valid game system and library section")
+    return _render(
+        "rpg/partials/library_form.html",
+        _ctx(
+            request,
+            entry=None,
+            progressions=[],
+            selected_system=system,
+            selected_kind=kind,
+        ),
+    )
+
+
+@router.post("/library")
+async def library_create(request: Request) -> Response:
+    form = _form_dict(await request.form())
+    try:
+        entry = rpg.create_library_entry(form.pop("system_code", ""), **form)
+    except ValueError as exc:
+        raise _value_error(exc) from exc
+    return _redirect(request, f"/characters/library?system={entry['system_code']}")
+
+
+@router.post("/library/srd/refresh")
+def library_srd_refresh(request: Request) -> Response:
+    try:
+        rpg_srd.refresh_dnd_2014()
+    except ValueError as exc:
+        raise _value_error(exc) from exc
+    except (httpx.HTTPError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise HTTPException(502, "The open SRD provider could not be refreshed") from exc
+    return _redirect(
+        request,
+        "/characters/library?system=dnd5e_2014&refreshed=true",
+    )
+
+
+@router.get("/library/{library_entry_id}/edit", response_class=HTMLResponse)
+def library_edit_form(request: Request, library_entry_id: int) -> Response:
+    entry = _require_library_entry(library_entry_id)
+    return _render(
+        "rpg/partials/library_form.html",
+        _ctx(
+            request,
+            entry=entry,
+            progressions=rpg.list_class_progressions(library_entry_id=library_entry_id),
+            selected_system=entry["system_code"],
+            selected_kind=entry["kind"],
+        ),
+    )
+
+
+@router.post("/library/{library_entry_id}")
+async def library_update(request: Request, library_entry_id: int) -> Response:
+    entry = _require_library_entry(library_entry_id)
+    form = _form_dict(await request.form())
+    form.pop("system_code", None)
+    try:
+        rpg.update_library_entry(library_entry_id, **form)
+    except ValueError as exc:
+        raise _value_error(exc) from exc
+    return _redirect(request, f"/characters/library?system={entry['system_code']}")
+
+
+@router.post("/library/{library_entry_id}/archive")
+async def library_archive(request: Request, library_entry_id: int) -> Response:
+    entry = _require_library_entry(library_entry_id)
+    form = _form_dict(await request.form())
+    try:
+        rpg.set_library_entry_archived(library_entry_id, form.get("archived", "1"))
+    except ValueError as exc:
+        raise _value_error(exc) from exc
+    return _redirect(request, f"/characters/library?system={entry['system_code']}")
+
+
+@router.post("/library/{library_entry_id}/progressions")
+async def library_progression_create(request: Request, library_entry_id: int) -> Response:
+    entry = _require_library_entry(library_entry_id)
+    form = _form_dict(await request.form())
+    try:
+        rpg.add_class_progression(library_entry_id, **form)
+    except ValueError as exc:
+        raise _value_error(exc) from exc
+    return _redirect(request, f"/characters/library?system={entry['system_code']}")
+
+
+@router.post("/library/{library_entry_id}/progressions/{progression_id}/delete")
+def library_progression_delete(
+    request: Request,
+    library_entry_id: int,
+    progression_id: int,
+) -> Response:
+    entry = _require_library_entry(library_entry_id)
+    try:
+        rpg.delete_class_progression(library_entry_id, progression_id)
+    except ValueError as exc:
+        raise _value_error(exc) from exc
+    return _redirect(request, f"/characters/library?system={entry['system_code']}")
 
 
 @router.get("/{character_id}", response_class=HTMLResponse)
@@ -301,6 +485,158 @@ def state_edit_form(request: Request, character_id: int, state_id: int) -> Respo
         "rpg/partials/sheet_form.html",
         _ctx(request, sheet=sheet),
     )
+
+
+@router.get("/{character_id}/states/{state_id}/library", response_class=HTMLResponse)
+def state_library_picker(
+    request: Request,
+    character_id: int,
+    state_id: int,
+    kind: str = Query(default="feature"),
+    q: str = Query(default=""),
+) -> Response:
+    state = _require_state(character_id, state_id)
+    if kind not in rpg.ENTRY_KINDS:
+        raise HTTPException(400, "Unknown sheet section")
+    try:
+        entries = rpg.list_library_entries(
+            state["system_code"],
+            kind=kind,
+            query=q,
+            limit=250,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    existing_ids = {
+        int(entry["library_entry_id"])
+        for entry in rpg.list_entries(state_id)
+        if entry.get("library_entry_id") is not None
+    }
+    return _render(
+        "rpg/partials/library_picker.html",
+        _ctx(
+            request,
+            character_id=character_id,
+            state=state,
+            entries=entries,
+            existing_ids=existing_ids,
+            selected_kind=kind,
+            search_query=q,
+        ),
+    )
+
+
+@router.post("/{character_id}/states/{state_id}/library")
+async def state_library_add(request: Request, character_id: int, state_id: int) -> Response:
+    _require_state(character_id, state_id)
+    form = await request.form()
+    try:
+        library_ids = [int(value) for value in form.getlist("library_entry_id")]
+    except (TypeError, ValueError) as exc:
+        raise _value_error(ValueError("Choose valid library entries")) from exc
+    if not library_ids:
+        raise _value_error(ValueError("Choose at least one library entry"))
+    try:
+        rpg.add_library_entries_to_state(state_id, library_ids)
+    except ValueError as exc:
+        raise _value_error(exc) from exc
+    return _redirect(
+        request,
+        _sheet_redirect(character_id, state_id, str(form.get("kind") or "")),
+    )
+
+
+@router.get("/{character_id}/states/{state_id}/level-up", response_class=HTMLResponse)
+def guided_level_form(
+    request: Request,
+    character_id: int,
+    state_id: int,
+    class_name: str = Query(default=""),
+    subclass: str = Query(default=""),
+    target_level: int | None = Query(default=None),
+) -> Response:
+    state = _require_state(character_id, state_id)
+    classes = rpg.list_library_classes(state["system_code"])
+    selected_class = _canonical_option(class_name, classes) or _default_class(state, classes)
+    suggested_level = min(20, int(state["level"]) + 1)
+    selected_level = target_level if target_level is not None else suggested_level
+    subclasses = (
+        rpg.list_library_subclasses(
+            state["system_code"],
+            selected_class,
+            through_level=selected_level,
+        )
+        if selected_class else []
+    )
+    source_subclass = str(state.get("subclass") or "").strip()
+    selected_subclass = source_subclass or (
+        _canonical_option(subclass, subclasses)
+        or (subclasses[0] if len(subclasses) == 1 else "")
+    )
+    plan = None
+    if selected_class and int(state["level"]) < 20:
+        try:
+            plan = rpg.level_up_plan(
+                state["system_code"],
+                selected_class,
+                from_level=state["level"],
+                target_level=selected_level,
+                subclass=selected_subclass,
+            )
+        except ValueError as exc:
+            raise _value_error(exc) from exc
+    return _render(
+        "rpg/partials/level_up_form.html",
+        _ctx(
+            request,
+            character_id=character_id,
+            state=state,
+            classes=classes,
+            subclasses=subclasses,
+            selected_class=selected_class,
+            selected_subclass=selected_subclass,
+            selected_level=selected_level,
+            plan=plan,
+            existing_library_ids={
+                int(entry["library_entry_id"])
+                for entry in rpg.list_entries(state_id)
+                if entry.get("library_entry_id") is not None
+            },
+        ),
+    )
+
+
+@router.post("/{character_id}/states/{state_id}/level-up")
+async def guided_level_create(request: Request, character_id: int, state_id: int) -> Response:
+    state = _require_state(character_id, state_id)
+    form = await request.form()
+    classes = rpg.list_library_classes(state["system_code"])
+    class_name = _canonical_option(form.get("class_name"), classes)
+    if not class_name:
+        raise _value_error(ValueError("Choose a class with a recorded level path"))
+    subclasses = rpg.list_library_subclasses(state["system_code"], class_name)
+    raw_subclass = str(form.get("subclass") or "").strip()
+    subclass = _canonical_option(raw_subclass, subclasses)
+    if raw_subclass and not subclass:
+        source_subclass = str(state.get("subclass") or "").strip()
+        if raw_subclass.casefold() == source_subclass.casefold():
+            subclass = source_subclass
+        else:
+            raise _value_error(ValueError("Choose a valid subclass"))
+    try:
+        selected_progression_ids = [int(value) for value in form.getlist("progression_id")]
+        new_state = rpg.create_guided_state(
+            character_id,
+            source_state_id=state_id,
+            class_name=class_name,
+            subclass=subclass,
+            target_level=form.get("target_level"),
+            selected_progression_ids=selected_progression_ids,
+            label=form.get("label", ""),
+        )
+    except (TypeError, ValueError) as exc:
+        raise _value_error(ValueError(str(exc))) from exc
+    return _redirect(request, _sheet_redirect(character_id, int(new_state["id"])))
 
 
 @router.post("/{character_id}/states/{state_id}")
