@@ -18,6 +18,8 @@ finance-backup-*.json
 data/copilot/
 data/feedback.db
 data/feedback.db-*
+data/maintainer.db
+data/maintainer.db-*
 data/review.db
 data/review.db-*
 data/operations.db
@@ -39,6 +41,14 @@ venv/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Generated module selection and wheel output
+/data/modules.json
+/build/
+/dist/
+/examples/example-module/build/
+/examples/example-module/dist/
+/unittest-output*.txt
 
 # IDE
 .vscode/

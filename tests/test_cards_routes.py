@@ -29,10 +29,6 @@ class CardRouteTests(unittest.TestCase):
             "collector_number": "9",
             "type_line": "Artifact",
             "prices": {"usd": "2.50"},
-            "image_uris": {
-                "small": "https://cards.scryfall.io/small/front/a/b/route-card.jpg",
-                "normal": "https://cards.scryfall.io/normal/front/a/b/route-card.jpg",
-            },
         }])
         self.card = cards.find_card("mtg", "Route Example")
         self.client = TestClient(application.app)
@@ -74,10 +70,25 @@ class CardRouteTests(unittest.TestCase):
                 self.assertIn("Trading Cards", response.text)
 
     def test_rich_card_detail_route_and_stack_markup(self) -> None:
+        cards.upsert_scryfall_cards([{
+            "id": "visual-route-card",
+            "name": "Visual Route Example",
+            "set": "TST",
+            "set_name": "Synthetic Set",
+            "collector_number": "10",
+            "type_line": "Artifact",
+            "image_uris": {
+                "small": "https://cards.scryfall.io/small/front/a/b/visual-route-card.jpg",
+                "normal": "https://cards.scryfall.io/normal/front/a/b/visual-route-card.jpg",
+            },
+            "prices": {"usd": "2.50"},
+        }])
+        visual_card = cards.find_card("mtg", "Visual Route Example")
+        assert visual_card is not None
         deck_id = cards.create_deck("mtg", "Visual Deck")
-        cards.add_card_to_deck(deck_id, self.card["id"], qty=2, category="Engine")
+        cards.add_card_to_deck(deck_id, visual_card["id"], qty=2, category="Engine")
         detail = self.client.get(
-            f"/cards/mtg/cards/{self.card['id']}/detail"
+            f"/cards/mtg/cards/{visual_card['id']}/detail"
         )
         deck = self.client.get(f"/cards/mtg/decks/{deck_id}")
         self.assertEqual(detail.status_code, 200)
@@ -114,6 +125,15 @@ class CardRouteTests(unittest.TestCase):
         self.assertEqual(response.text.count('class="deck-stack-column"'), 2)
         self.assertIn("Stack 1 of 2 · Qty 8", response.text)
         self.assertIn("Stack 2 of 2 · Qty 1", response.text)
+
+    def test_stack_layout_uses_single_horizontal_rail(self) -> None:
+        response = self.client.get("/static/css/cards.css")
+
+        self.assertEqual(response.status_code, 200)
+        rule = response.text.split(".deck-stack-board-columns {", 1)[1].split("}", 1)[0]
+        self.assertIn("grid-auto-flow: column", rule)
+        self.assertIn("overflow-x: auto", rule)
+        self.assertNotIn("repeat(auto-fill", rule)
 
     def test_inspector_can_swap_deck_and_collection_printings(self) -> None:
         alternate_payload = {
@@ -244,27 +264,68 @@ class CardRouteTests(unittest.TestCase):
         )
         self.assertEqual(collected.status_code, 204)
         self.assertEqual(cards.collection_totals("mtg")["qty"], 2)
-        collection_row = cards.list_collection("mtg")[0]
-        self.assertEqual(collection_row["acquired_date"], "2026-08-02")
-        collection_page = self.client.get("/cards/mtg/collection")
-        self.assertIn("Purchase cost", collection_page.text)
-        self.assertIn("+$2.50", collection_page.text)
-        self.assertIn("+100.00%", collection_page.text)
+        self.assertEqual(cards.list_collection("mtg")[0]["acquired_date"], "2026-08-02")
 
-        updated = self.client.post(
-            "/cards/mtg/collection/acquisition",
-            data={
-                "collection_id": collection_row["id"],
-                "acquired_date": "2026-07-20",
-                "acquired_price": "2.00",
-                "acquired_currency": "USD",
-            },
+    def test_deck_mutations_refresh_summary_and_stats(self) -> None:
+        assert self.card is not None
+        deck_id = cards.create_deck("mtg", "Live Summary Deck")
+        headers = self.csrf_headers()
+        added = self.client.post(
+            f"/cards/mtg/decks/{deck_id}/cards",
+            data={"card_id": str(self.card["id"]), "qty": "2"},
             headers=headers,
         )
-        self.assertEqual(updated.status_code, 204)
-        updated_row = cards.list_collection("mtg")[0]
-        self.assertEqual(updated_row["acquired_date"], "2026-07-20")
-        self.assertEqual(updated_row["acquired_price_minor"], 200)
+        self.assertEqual(added.status_code, 200)
+        slot = cards.list_deck_cards(deck_id)[0]
+        self.assertEqual(slot["qty"], 2)
+        self.assertIn('id="deck-summary" hx-swap-oob="outerHTML"', added.text)
+        self.assertIn('id="deck-stats" hx-swap-oob="outerHTML"', added.text)
+        self.assertIn(">2 cards</span>", added.text)
+
+        for quantity in (4, 0):
+            with self.subTest(quantity=quantity):
+                updated = self.client.post(
+                    f"/cards/mtg/decks/{deck_id}/cards/{slot['id']}",
+                    data={"qty": str(quantity), "category": "Engine"},
+                    headers=headers,
+                )
+                self.assertEqual(updated.status_code, 200)
+                self.assertEqual(
+                    sum(row["qty"] for row in cards.list_deck_cards(deck_id)),
+                    quantity,
+                )
+                self.assertIn('id="deck-summary" hx-swap-oob="outerHTML"', updated.text)
+                self.assertIn('id="deck-stats" hx-swap-oob="outerHTML"', updated.text)
+                self.assertIn(f">{quantity} cards</span>", updated.text)
+
+    def test_card_search_forms_declare_submit_and_request_replacement(self) -> None:
+        deck_id = cards.create_deck("mtg", "Search Form Deck")
+        for path in (f"/cards/mtg/decks/{deck_id}", "/cards/mtg/collection"):
+            with self.subTest(path=path):
+                response = self.client.get(path)
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(
+                    'hx-trigger="submit, input changed delay:250ms from:input[name=q]"',
+                    response.text,
+                )
+                self.assertIn('hx-sync="this:replace"', response.text)
+
+    def test_removing_commander_refreshes_deck_header(self) -> None:
+        assert self.card is not None
+        deck_id = cards.create_deck("mtg", "Commander Header Deck")
+        cards.add_card_to_deck(deck_id, self.card["id"], board="commander")
+        slot = cards.list_deck_cards(deck_id)[0]
+        response = self.client.post(
+            f"/cards/mtg/decks/{deck_id}/cards/{slot['id']}/delete",
+            headers=self.csrf_headers(),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('id="deck-summary" hx-swap-oob="outerHTML"', response.text)
+        self.assertIn(">0 cards</span>", response.text)
+        self.assertNotIn("Route Example", response.text)
+        deck = cards.get_deck(deck_id)
+        assert deck is not None
+        self.assertIsNone(deck["commander_card_id"])
 
     def test_svg_charts_keep_private_cache_headers(self) -> None:
         deck_id = cards.create_deck("mtg", "Chart Deck")

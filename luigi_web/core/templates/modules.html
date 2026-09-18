@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="module-page" aria-labelledby="modules-title" data-module-page data-module-saved="{{ 'true' if saved else 'false' }}">
+  <header class="page-header module-header">
+    <h1 id="modules-title">Modules</h1>
+    <dl class="module-counts" aria-label="Module counts">
+      <div><dt>Installed</dt><dd>{{ catalog|length }}</dd></div>
+      <div><dt>Enabled</dt><dd>{{ enabled_ids|length }}</dd></div>
+    </dl>
+  </header>
+
+  <p class="module-notice module-notice-error error" data-module-error role="alert" tabindex="-1" {% if not error %}hidden{% endif %}>{{ error }}</p>
+  {% if saved %}
+  <p class="module-notice{% if pending_restart %} module-notice-restart{% else %} module-notice-saved{% endif %}" data-module-notice role="status" tabindex="-1">
+    {{ shell_icon('rotate-ccw' if pending_restart else 'check') }}
+    <span>Selection saved.{% if pending_restart %} Restart required.{% endif %}</span>
+  </p>
+  {% elif pending_restart %}
+  <p class="module-notice module-notice-restart" data-module-notice role="status" tabindex="-1">
+    {{ shell_icon('rotate-ccw') }}<span>Restart required to apply saved changes.</span>
+  </p>
+  {% endif %}
+  {% if environment_managed %}
+  <p class="module-notice module-notice-managed">{{ shell_icon('lock-keyhole') }}<span>Managed by deployment configuration.</span></p>
+  {% endif %}
+
+  <form method="post" action="/modules" class="module-form" data-module-form data-environment-managed="{{ 'true' if environment_managed else 'false' }}">
+    <div class="module-toolbar">
+      <div class="module-filter">
+        {{ shell_icon('search') }}
+        <label class="sr-only" for="module-filter">Filter modules</label>
+        <input id="module-filter" type="search" placeholder="Filter modules" data-module-filter autocomplete="off" aria-controls="module-list">
+        <button type="button" class="shell-icon-button" data-module-clear title="Clear filter" aria-label="Clear filter" hidden>{{ shell_icon('x') }}</button>
+      </div>
+      <output class="module-filter-count" data-module-filter-count aria-live="polite">{{ catalog|length }} installed</output>
+    </div>
+    <fieldset class="module-list" id="module-list">
+      <legend class="sr-only">Module selection</legend>
+      {% for module in catalog %}
+      {% set is_enabled = module.id in enabled_ids %}
+      {% set is_selected = module.id in selected_ids %}
+      <label class="module-row" data-module-row data-module-name="{{ module.label|lower }}"
+             data-module-search="{{ module.label }} {{ module.id }} {{ module.source }} {{ module.requires|join(' ') }}"
+             data-module-active="{{ 'true' if is_enabled else 'false' }}">
+        <span class="module-symbol" aria-hidden="true">{{ shell_icon(module.navigation[0].icon if module.navigation else 'sparkles') }}</span>
+        <span class="module-copy">
+          <strong>{{ module.label }}</strong>
+          <small id="module-meta-{{ module.id }}">
+            <span class="module-source">{{ module.source }}</span>
+            {% if module.requires %}
+            <span class="module-dependencies">Requires {% for required_id in module.requires %}{{ catalog|selectattr('id', 'equalto', required_id)|map(attribute='label')|first|default(required_id) }}{% if not loop.last %}, {% endif %}{% endfor %}</span>
+            {% endif %}
+          </small>
+        </span>
+        <span class="module-status">
+          <span class="module-state {% if is_enabled %}is-enabled{% endif %}">{{ module_status.get(module.id, 'enabled') if is_enabled else 'disabled' }}</span>
+          <small class="module-pending" data-module-pending {% if is_selected == is_enabled %}hidden{% endif %}>Restart pending</small>
+        </span>
+        <input class="module-toggle" type="checkbox" name="enabled" value="{{ module.id }}" data-requires="{{ module.requires|join(',') }}"
+               aria-label="Enable {{ module.label }}" aria-describedby="module-meta-{{ module.id }}"
+               {% if is_selected %}checked{% endif %} {% if environment_managed %}disabled{% endif %}>
+      </label>
+      {% else %}
+      <p class="module-empty">No modules installed.</p>
+      {% endfor %}
+    </fieldset>
+    <div class="module-filter-empty" data-module-empty role="status" hidden>
+      {{ shell_icon('search') }}<strong>No matching modules.</strong>
+    </div>
+    <footer class="module-savebar">
+      <span class="module-change-state" id="module-change-state" data-module-change-state role="status" aria-live="polite">{% if saved %}Selection saved.{% if pending_restart %} Restart required.{% endif %}{% else %}{{ selected_ids|length }} selected{% endif %}</span>
+      <div class="module-save-actions">
+        <button type="reset" class="shell-icon-button" data-module-reset title="Reset unsaved selection" aria-label="Reset unsaved selection" data-shell-tooltip="Reset unsaved selection" disabled>{{ shell_icon('rotate-ccw') }}</button>
+        <button type="submit" class="btn btn-primary module-save" data-module-save aria-describedby="module-change-state" {% if environment_managed %}disabled{% endif %}>
+          {{ shell_icon('save') }}<span data-module-save-label>Save selection</span>
+        </button>
+      </div>
+    </footer>
+  </form>
+</section>
+{% endblock %}

@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "luigi-web"
+version = "0.1.0"
+description = "A modular, server-rendered Luigi Web host"
+requires-python = ">=3.11"
+dynamic = ["dependencies"]
+
+[project.scripts]
+luigi-web = "luigi_web.core.cli:main"
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["luigi_web", "luigi_web.*"]
+namespaces = false
+
+[tool.setuptools.package-data]
+luigi_web = [
+    "core/templates/**/*.html",
+    "core/static/**/*",
+    "modules/*/templates/**/*.html",
+    "modules/*/static/**/*",
+]
+
+[tool.setuptools.exclude-package-data]
+"*" = [
+    "**/__pycache__/*", "**/*.pyc", "**/.env*", "**/LOCAL_*",
+    "**/*.db", "**/*.db-*", "**/*.sqlite*", "**/*credentials*",
+]

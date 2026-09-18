@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "luigi-example"
+version = "0.1.0"
+description = "A read-only external module for Luigi Web"
+requires-python = ">=3.11"
+dependencies = ["luigi-web>=0.1,<0.2"]
+
+[project.entry-points."luigi_web.modules"]
+example = "luigi_example.manifest:module"
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["luigi_example", "luigi_example.*"]
+namespaces = false
+
+[tool.setuptools.package-data]
+luigi_example = ["templates/*.html", "static/*.css"]

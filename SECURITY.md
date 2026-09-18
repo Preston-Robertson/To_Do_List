@@ -60,14 +60,31 @@ commands: Preview mutations pass through the fixed root-owned helper and narrow
 sudoers rule documented in `docs/preview-deployment.md`.
 
 The local Feedback database is excluded from the Assistant and global search.
-Nothing is transmitted automatically; exports require explicit review and are
-served with no-store cache controls.
+Exports require explicit review and are served with no-store cache controls.
+An explicit **Queue for maintainer** action separately approves a redacted copy
+of selected request fields and acceptance criteria for GitHub Copilot and a
+draft GitHub pull request. Raw Feedback and its database are not exposed to the
+worker. Approval never includes Finance, task, card, character, environment, or
+deployment records.
+
+The autonomous maintainer runs as a separate OS identity. Its Copilot session
+uses custom bounded repository tools only; shell, web, MCP, Git, deployment,
+email, queue, and secret tools are disabled. The controller owns publishing
+credentials, accepts only credential-free HTTPS repository configuration, and
+cannot merge or deploy. Agent-authored code runs only in pull-request CI, where
+checkout credentials are removed and workflow permissions are read-only.
+Branch protection and human review remain required. Email is notification-only
+and replies are never treated as authorization. Full boundaries and setup are
+documented in [`docs/autonomous-maintainer.md`](docs/autonomous-maintainer.md).
 
 ## Storage and backups
 
 - Shared task data lives in the LuigiBot PostgreSQL database.
 - Finance lives in the app-owned SQLite path from `LUIGI_WEB_FINANCE_DB`.
 - Finance database files, exports, and backups are gitignored.
+- Raw Feedback and the sanitized maintainer queue use separate SQLite files.
+- Maintainer credentials and its private clone live outside the repository and
+  outside the web service's readable paths.
 - Downloaded exports use `Cache-Control: no-store`.
 - Store backups on encrypted media with access controls appropriate for
   financial information.

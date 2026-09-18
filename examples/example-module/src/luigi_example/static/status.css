@@ -1,0 +1,53 @@
+.example-module {
+  width: 100%;
+  max-width: 960px;
+  margin-inline: auto;
+}
+
+.example-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.example-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--success);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.example-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+}
+
+.example-details > div {
+  min-width: 0;
+  padding: 20px 16px 20px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.example-details dt {
+  margin-bottom: 6px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.example-details dd {
+  margin: 0;
+  color: var(--text);
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 540px) {
+  .example-details { grid-template-columns: minmax(0, 1fr); }
+}

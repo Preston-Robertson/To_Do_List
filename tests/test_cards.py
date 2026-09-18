@@ -242,6 +242,33 @@ class CardRepositoryTests(unittest.TestCase):
         self.assertEqual([link["label"] for link in detail["links"]], ["Scryfall", "TCGplayer"])
         self.assertNotIn("raw_json", detail)
 
+    def test_removing_last_commander_entry_clears_deck_reference(self) -> None:
+        relic, wizard = self.seed()
+        deck_id = cards.create_deck("mtg", "Commander Removal Deck")
+        cards.add_card_to_deck(deck_id, wizard["id"])
+        for category in ("First", "Second"):
+            cards.add_card_to_deck(
+                deck_id, relic["id"], board="commander", category=category,
+            )
+        slots = [
+            row for row in cards.list_deck_cards(deck_id)
+            if row["board"] == "commander"
+        ]
+        self.assertTrue(cards.remove_deck_card(deck_id, slots[0]["id"]))
+        deck = cards.get_deck(deck_id)
+        assert deck is not None
+        self.assertEqual(deck["commander_card_id"], relic["id"])
+
+        self.assertTrue(cards.update_deck_card(deck_id, slots[1]["id"], 0))
+        deck = cards.get_deck(deck_id)
+        assert deck is not None
+        self.assertIsNone(deck["commander_card_id"])
+        self.assertIsNone(deck["commander_name"])
+        self.assertEqual(
+            [row["card_id"] for row in cards.list_deck_cards(deck_id)],
+            [wizard["id"]],
+        )
+
     def test_deck_printing_swap_preserves_and_merges_slots(self) -> None:
         base = {
             "name": "Swap Example", "oracle_id": "swap-oracle",

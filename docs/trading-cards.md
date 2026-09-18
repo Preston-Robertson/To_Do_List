@@ -54,6 +54,11 @@ schema `user_version` are enabled by the repository adapter.
 - Deck create, edit, archive, delete, tag, and commander workflows.
 - Mainboard, sideboard, maybeboard, and commander card groups.
 - Persistent Table and grouped overlapping Stacks deck views.
+- Compact deck library, secondary-action menu, and editable mobile Table rows.
+  View switching still works when browser preference storage is unavailable.
+- Deck totals and statistics refresh after successful card mutations. Card
+  search supports Enter without leaving its dialog; loading and error states
+  keep an explicit close action.
 - Archidekt, Moxfield, MTGO, MTGA, and plain-text list parsing.
 - Dry-run import preview and one-transaction import application.
 - Board and custom category preservation from text imports. `Mainboard`,
@@ -136,3 +141,25 @@ URLs.
 
 The database and bulk directory are gitignored. Production paths must be
 writable by the Luigi Web service account and kept outside public backups.
+
+## Disposable GUI preview
+
+From the repository root, the optional development preview runs with synthetic
+cards and decks in a temporary database:
+
+```powershell
+python scripts/preview_cards.py
+```
+
+It prints an available loopback URL, uses a fresh local session with CSRF
+protection, and removes its database on normal shutdown. It does not load
+deployment environment files or start LuigiBot, Finance, chat, or background
+provider integrations. Catalog refresh and diagram embeds are disabled.
+Never expose this development preview through a proxy or public network.
+
+Verify deck create, search, add, quantity/category edits, import, export, and
+delete at 1440x900 and 390x844. Include blocked browser storage, delayed detail
+responses, failed requests, and the hundred-card fixture.
+
+Deck-action icons are locally vendored from Lucide v0.468.0; their license is
+included in `static/icons/lucide/LICENSE`. No runtime CDN is used.

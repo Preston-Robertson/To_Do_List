@@ -21,6 +21,9 @@ web-only features, including Finance.
 - Finance CSV imports are previewed and normalized locally; raw uploads are not
   retained after the request.
 - Secrets belong in process environment files and must remain gitignored.
+- Raw Feedback stays local. Only an explicitly approved, privacy-screened copy
+  may enter the maintainer queue, Copilot prompt, email notification, or draft
+  pull request. Never copy Finance, task, card, character, or environment data.
 
 ## Data ownership
 
@@ -39,6 +42,9 @@ web-only features, including Finance.
 - Characters uses a separate app-owned SQLite database configured by
   `LUIGI_WEB_RPG_DB`. Character, level-state, and sheet-entry records must not
   share tables with LuigiBot, Finance, or Trading Cards.
+- Autonomous maintenance uses a separate SQLite queue configured by
+  `LUIGI_WEB_MAINTAINER_DB`; it must not share a database with raw Feedback or
+  any application data domain.
 - The coordinated shared Discipline redesign is documented in
   `docs/discipline-v2-plan.md`.
 
@@ -60,34 +66,71 @@ web-only features, including Finance.
 - Character records stay out of LLM tools and global record search. Store only
   user-entered rules summaries or explicitly imported open-license records with
   source/license metadata. Do not mirror compendium datasets in the repository.
+- The maintainer may create draft PRs only from explicitly approved queue
+  records. It must not merge, deploy, execute generated code while holding
+  secrets, consume email replies, or grant itself broader tools or permissions.
 
 ## Architecture
 
 - `app.py`: compatibility entry point for existing `uvicorn app:app` deployments.
-- `luigi_web/application.py`: routes, startup, and view-model shaping.
+- `luigi_web/application.py`: core FastAPI host, middleware, module composition,
+  startup, and transitional shared helpers for already-existing modules.
+- `luigi_web/core/module_registry.py`: versioned manifests, built-in catalog,
+  approved installed entry points, dependencies, routes, and lifecycle hooks.
+- `luigi_web/core/module_settings.py` / `modules_routes.py`: atomic validated
+  next-restart selection and authenticated module management; environment-managed
+  selections are read-only in the UI.
+- `luigi_web/core/templating.py`: shared shell context, namespaced external
+  templates, and packaged module assets.
+- `luigi_web/core/cli.py`: `luigi-web` command with application-free `--help`
+  and one Uvicorn worker.
+- `luigi_web/modules/<id>/manifest.py` / `routes.py` / `templates/`: feature
+  declarations, HTTP controllers, and domain pages/partials. Built-in IDs are
+  tasks, discipline, planning, media, cards, characters, finance, assistant,
+  admin, preview, and feedback; all remain selected by default.
+- Planning requires Tasks and Discipline; Assistant requires Tasks, Discipline,
+  and Media. Disabled modules do not mount routes or run lifecycle hooks.
 - `luigi_web/auth.py`: main session, finance unlock, and CSRF helpers.
-- `luigi_web/db.py`: LuigiBot shared-schema adapter.
-- `luigi_web/finance.py`: app-owned Finance repository, imports, reports, and audit log.
-- `luigi_web/finance_routes.py`: separately authenticated Finance HTTP routes.
-- `luigi_web/cards.py`: app-owned trading-card catalog, deck, and collection repository.
-- `luigi_web/cards_routes.py`: authenticated Trading Cards HTTP routes.
-- `luigi_web/rpg.py` / `rpg_routes.py`: isolated character sheets, level states,
-  calculations, and authenticated HTTP routes.
-- `luigi_web/rpg_srd.py`: explicit bounded 2014 SRD refresh and normalization;
-  it performs no startup networking and retains no raw bulk files.
-- `luigi_web/cards_importer.py` / `cards_scryfall.py` / `cards_pokemon.py`:
-  text-deck import and authenticated catalog refresh providers.
-- `luigi_web/feedback.py` / `feedback_routes.py`: local-only Feedback inbox.
-- `luigi_web/task_events.py`: adapter for the LuigiBot-owned shared event ledger.
-- `luigi_web/preview.py` / `preview_routes.py`: constrained Preview helper client/UI.
-- `luigi_web/gnw.py`: Game'N'Watch Google Sheets and public catalog integrations.
-- `luigi_web/llm.py`: OpenAI-compatible and isolated GitHub Copilot providers.
-- `luigi_web/env_file.py`: allow-listed Admin environment editor.
-- `luigi_web/recurrence.py`: dependency-free recurrence and calendar projection math.
+- `luigi_web/modules/tasks/repository.py`: LuigiBot shared-schema adapter used
+  by both Tasks and Discipline; `luigi_web/db.py` is its identity alias, not an
+  independent Discipline repository. The host still imports this bundled adapter.
+- `luigi_web/modules/tasks/operations.py` / `backup.py` / `events.py` /
+  `recurrence.py`: task rules, shared-task backup, LuigiBot event-ledger adapter,
+  and dependency-free recurrence/calendar projection math.
+- `luigi_web/modules/planning/repository.py`: app-owned Daily/Weekly Review state.
+- `luigi_web/modules/finance/repository.py` / `routes.py`: app-owned Finance
+  imports, reports, audit log, and separately authenticated HTTP routes.
+- `luigi_web/modules/cards/repository.py` / `routes.py`: trading-card catalog,
+  deck, collection, and authenticated HTTP routes; `importer.py`, `scryfall.py`,
+  and `pokemon.py` own text import and authenticated catalog refresh providers.
+- `luigi_web/modules/characters/repository.py` / `routes.py`: isolated character
+  sheets, level states, calculations, and authenticated HTTP routes; `srd.py`
+  owns explicit bounded 2014 SRD refresh and normalization, with no startup
+  networking or retained raw bulk files.
+- `luigi_web/modules/feedback/repository.py` / `routes.py`: local Feedback inbox
+  and explicit maintainer approval UI; `maintainer.py` owns the privacy-screened
+  durable queue, and `maintainer_agent.py` / `maintainer_worker.py` own bounded
+  coding tools and the one-job draft-PR controller.
+- `luigi_web/modules/preview/service.py` / `routes.py`: constrained Preview
+  helper client/UI.
+- `luigi_web/modules/media/service.py`: Game'N'Watch Google Sheets and public
+  catalog integrations.
+- `luigi_web/modules/assistant/providers.py` / `tools.py`: OpenAI-compatible
+  and isolated GitHub Copilot providers with bounded tools.
+- `luigi_web/modules/admin/environment.py`: allow-listed Admin environment editor.
+- Legacy implementation imports use `sys.modules` identity shims; core APIs,
+  rather than transitional application globals, define the external-module API.
 - `luigi_web/clock.py`: configured single-user timezone and legacy UTC conversion.
-- `luigi_web/paths.py`: repository-root filesystem anchors shared after packaging.
-- `templates/`: server-rendered pages and HTMX partials.
-- `static/`: local CSS, JavaScript, icons, and vendored browser libraries.
+- `luigi_web/paths.py`: packaged resource roots and optional `LUIGI_WEB_DATA_DIR`,
+  source-checkout, or installed per-user writable defaults.
+- `luigi_web/core/templates/`: four shared shell/login/module/command templates.
+- `luigi_web/core/static/`: local CSS, JavaScript, IBM Plex Sans fonts, Lucide
+  icons, and vendored browser libraries; public `/static` URLs are unchanged.
+- External package resources use namespaced templates and `/module-assets/{id}`.
+- `pyproject.toml`: installable `luigi-web` 0.1.0 host, Python 3.11+, with runtime
+  dependencies retained from `requirements.txt` and packaged templates/assets.
+- `examples/example-module/`: independently installable version-1 module using
+  core APIs; `docs/modules.md` documents selection, packaging, and module contracts.
 - `tests/`: offline regression tests using synthetic data only.
 
 ## Editing rules
@@ -111,8 +154,18 @@ web-only features, including Finance.
 From the repository root:
 
 ```powershell
+pip install "setuptools>=68" wheel
 python -m unittest discover -s tests -v
+python scripts/validate_repo.py
+git diff --check
 ```
+
+Packaging tests build and install host/example wheels in disposable directories.
+The wheel test class is skipped if `setuptools` or `wheel` is missing; skipped
+checks do not establish wheel verification. The validator compiles the shared
+template loader's HTML and checks selected mounted routes without startup hooks;
+full built-in route coverage requires selecting all built-ins. The example's
+packaging tests also validate its external template namespace and assets.
 
 Also validate:
 

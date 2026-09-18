@@ -4,24 +4,103 @@
 
 Luigi Web is a FastAPI/Jinja2 application using server-rendered HTML, HTMX,
 and locally hosted browser assets. It combines several intentionally separate
-data domains behind one authenticated interface.
+data domains behind one authenticated interface. It is a modular monolith:
+purpose-built Python feature packages share a core host and one worker, not
+separate services or fully independent task-domain repositories.
 
 | Domain | Storage owner | Adapter |
 |---|---|---|
-| Tasks, recurring tasks, Discipline, follow-up rules | LuigiBot PostgreSQL schema | `luigi_web/db.py` |
-| Finance | Luigi Web SQLite database | `luigi_web/finance.py` |
-| Games and shows | Game'N'Watch Google Sheet | `luigi_web/gnw.py` |
-| Chat history | Process memory | `luigi_web/llm.py` |
-| Web-only task metadata fallback | Gitignored JSON | `luigi_web/db.py` |
-| Feedback inbox | Luigi Web SQLite database | `luigi_web/feedback.py` |
-| Daily/Weekly Review sessions | Luigi Web SQLite database | `luigi_web/review.py` |
-| Task dependencies and reminders | Luigi Web SQLite database | `luigi_web/operations.py` |
-| Tabletop characters and level states | Luigi Web SQLite database | `luigi_web/rpg.py` |
-| Preview deployment | Root helper + isolated worktree/service/database | `luigi_web/preview.py` |
+| Tasks, recurring tasks, Discipline, follow-up rules | LuigiBot PostgreSQL schema | [../luigi_web/modules/tasks/repository.py](../luigi_web/modules/tasks/repository.py) |
+| Finance | Luigi Web SQLite database | [../luigi_web/modules/finance/repository.py](../luigi_web/modules/finance/repository.py) |
+| Trading-card catalog, decks, collection, and prices | One isolated Luigi Web SQLite database | [../luigi_web/modules/cards/repository.py](../luigi_web/modules/cards/repository.py) |
+| Games and shows | Game'N'Watch Google Sheet | [../luigi_web/modules/media/service.py](../luigi_web/modules/media/service.py) |
+| Chat history | Process memory | [../luigi_web/modules/assistant/providers.py](../luigi_web/modules/assistant/providers.py) |
+| Web-only task metadata fallback | Gitignored JSON | [../luigi_web/modules/tasks/repository.py](../luigi_web/modules/tasks/repository.py) |
+| Feedback inbox | Luigi Web SQLite database | [../luigi_web/modules/feedback/repository.py](../luigi_web/modules/feedback/repository.py) |
+| Sanitized maintainer queue | Shared app/worker SQLite database | [../luigi_web/modules/feedback/maintainer.py](../luigi_web/modules/feedback/maintainer.py) |
+| Daily/Weekly Review sessions | Luigi Web SQLite database | [../luigi_web/modules/planning/repository.py](../luigi_web/modules/planning/repository.py) |
+| Task dependencies and reminders | Luigi Web SQLite database | [../luigi_web/modules/tasks/operations.py](../luigi_web/modules/tasks/operations.py) |
+| Tabletop characters and level states | Luigi Web SQLite database | [../luigi_web/modules/characters/repository.py](../luigi_web/modules/characters/repository.py) |
+| Preview deployment | Root helper + isolated worktree/service/database | [../luigi_web/modules/preview/service.py](../luigi_web/modules/preview/service.py) |
 
-Production code lives in the `luigi_web/` package. Root `app.py` is a small
-compatibility entry point so existing `uvicorn app:app` development commands
-and systemd deployments continue to work without a coordinated cutover.
+Production code lives in [../luigi_web](../luigi_web).
+[../app.py](../app.py) remains the compatibility entry point for existing
+`uvicorn app:app` development commands and systemd deployments. Relocated
+legacy modules use `sys.modules` identity aliases, not copied exports, so
+existing imports and monkeypatches still refer to the same implementation.
+In particular, [../luigi_web/db.py](../luigi_web/db.py) aliases the shared Tasks
+repository used by both Tasks and Discipline. Disabling Tasks does not turn
+Discipline into an independent database client.
+
+## Core and feature packages
+
+[../luigi_web/application.py](../luigi_web/application.py) is the core host:
+authentication/CSRF middleware, core endpoints, module mounting, lifecycle
+coordination, and transitional helpers for already-existing modules. Feature
+HTTP controllers now live at `luigi_web/modules/<id>/routes.py`; their
+templates live under the same feature package. New external modules use core
+APIs and request/app state, not application globals.
+
+The core is deliberately small in responsibility:
+
+- [../luigi_web/core/module_registry.py](../luigi_web/core/module_registry.py)
+  defines the versioned manifest contract, built-in catalog, dependency
+  checks, approved installed entry-point discovery, route validation,
+  authentication/availability injection, and lifecycle ordering.
+- [../luigi_web/core/module_settings.py](../luigi_web/core/module_settings.py)
+  validates and atomically saves the next-restart selection, separately from
+  feature records and credentials.
+- [../luigi_web/core/modules_routes.py](../luigi_web/core/modules_routes.py)
+  supplies the authenticated listing, filters, toggles, and save workflow.
+  It does not install packages, change deployment approval, or restart the host.
+- [../luigi_web/core/templating.py](../luigi_web/core/templating.py) supplies
+  the shared shell context, namespaced external templates, and module assets.
+- [../luigi_web/core/cli.py](../luigi_web/core/cli.py) implements `luigi-web`;
+  its help path does not import the application.
+
+All 11 built-ins remain enabled by default. Planning requires Tasks and
+Discipline; Assistant requires Tasks, Discipline, and Media. Selection resolves
+from an explicit registry argument, then `LUIGI_WEB_MODULES`, then the saved
+file, then all built-ins. `/modules` saves changes for the next restart, with
+environment-managed selections read-only. Disabling a module leaves data in
+place and avoids its router imports and lifecycle hooks, but compatibility
+imports still include the bundled shared adapter. Core-only and Cards-only
+startup do not initialize PostgreSQL; Cards-only does not initialize Finance.
+
+External modules are installed packages with approved `luigi_web.modules`
+entry points, not arbitrary Git URLs installed through the GUI. Approval loads
+trusted manifest code; enabling loads the router. Routes use
+`/extensions/{id}` and cannot claim reserved or conflicting routes. Lifecycle
+startup failures mark modules unavailable and block dependents without taking
+down unrelated modules; invalid manifests and route construction can still
+prevent host startup. There is no plugin sandbox: module code has the host's
+process secrets and data privileges. Separate processes/containers with an
+explicit HTTP contract are required for a real isolation boundary.
+
+See [modules.md](modules.md) for the full selection, storage, packaging, and
+external API contract, and
+[../examples/example-module/README.md](../examples/example-module/README.md)
+for the working independent package. The framework and example are shipped
+in this tree; feature repositories have not all been split or published.
+
+## Stack decision
+
+Retain Python, FastAPI, Jinja, and HTMX. These workflows are primarily async
+I/O and database interactions, and the existing stack has mature offline
+regression tests. There is no performance evidence supporting a full language
+or framework rewrite at this point. Adding a React/TypeScript build pipeline
+now would add build and deployment cost without an established requirement.
+
+Gradual TypeScript for a measured browser-maintenance need, or an independent
+Rust/Go service for a measured workload, remains possible. Neither is a
+prerequisite for modularity or a replacement already delivered by this
+refactor. Keep the server-rendered contract until a specific need justifies
+an additional boundary.
+
+Before extracting an independently reusable task repository, move task Undo
+and remaining shared host helpers behind stable core service contracts.
+Preserve the LuigiBot shared schema and its ownership; this refactor does not
+introduce schema migrations or claim complete domain independence.
 
 ## Shared LuigiBot schema
 
@@ -145,7 +224,9 @@ validates the complete selection before cloning and applying all grants in one
 SQLite transaction. Replacement-family keys remove obsolete imported feature
 versions only from the new snapshot.
 
-`luigi_web/rpg_srd.py` owns the optional 2014 SRD provider. Refresh is an
+[../luigi_web/modules/characters/srd.py](../luigi_web/modules/characters/srd.py)
+owns the optional 2014 SRD provider, with the legacy import retained as an
+identity alias. Refresh is an
 explicit authenticated POST, never startup work. It fetches only an allow-listed
 set of fixed 5e-bits bulk URLs with redirects disabled, byte and row limits,
 and local shape validation. Raw downloads are not persisted. Provider records
@@ -168,14 +249,32 @@ data on plain HTTP.
 
 ## Frontend
 
-- `templates/base.html` owns the responsive sidebar, command palette, drawers,
-  and toast surfaces.
-- `static/css/app.css` contains the visual system and responsive layouts.
-- `static/js/app.js` owns progressive enhancement, HTMX events, Board/List
-  switching, command navigation, and local preferences.
-- HTMX and SortableJS are served from `static/js/vendor`; no CDN is required.
+- [../luigi_web/core/templates/base.html](../luigi_web/core/templates/base.html)
+  owns the module-aware responsive sidebar, command palette, drawers, and
+  toast surfaces. It is one of four shared HTML templates; domain pages and
+  partials live under their feature packages.
+- [../luigi_web/core/static/css/app.css](../luigi_web/core/static/css/app.css)
+  retains the feature visual system;
+  [../luigi_web/core/static/css/shell.css](../luigi_web/core/static/css/shell.css)
+  supplies the shared shell, responsive layouts, local IBM Plex Sans fonts,
+  and reduced-motion styles. Lucide SVG icons are served locally.
+- [../luigi_web/core/static/js/appearance.js](../luigi_web/core/static/js/appearance.js)
+  restores the remembered Light, Dark, or System preference; System follows
+  the browser's color-scheme preference.
+- [../luigi_web/core/static/js/shell.js](../luigi_web/core/static/js/shell.js)
+  enhances navigation and module selection;
+  [../luigi_web/core/static/js/app.js](../luigi_web/core/static/js/app.js)
+  retains HTMX events, Board/List switching, commands, and local preferences.
+- HTMX and SortableJS are served from
+  [../luigi_web/core/static/js/vendor](../luigi_web/core/static/js/vendor);
+  fonts, icons, and browser libraries need no third-party CDN.
 - Media Insights loads the vendored Chart.js build only on its page and keeps
   accessible data tables as the underlying readable representation.
+
+Shared resource relocation does not change public `/static/...` URLs. External
+modules use namespaced templates from `create_templates(package=..., namespace=...)`
+and packaged static files under `/module-assets/{id}/...`. Static resources
+must never contain private records or credentials.
 
 ## Local feedback
 
@@ -184,6 +283,14 @@ Feedback uses a separate app-owned SQLite database configured by
 optional local path without query strings. It never captures form fields,
 tokens, Finance data, chat history, or environment values. JSON/Markdown
 downloads require explicit review and use `Cache-Control: no-store`.
+
+An explicit **Queue for maintainer** action copies only privacy-screened request
+fields and acceptance criteria into `LUIGI_WEB_MAINTAINER_DB`. The daily worker
+can read that queue but not the raw Feedback database. Its repository clone,
+Copilot runtime, and publishing credentials live in a private worker directory
+that the web service cannot access. The worker produces draft pull requests;
+it has no merge or deployment operation. See
+[`autonomous-maintainer.md`](autonomous-maintainer.md).
 
 ## Preview boundary
 
@@ -206,15 +313,38 @@ helpers only. Finance is excluded by policy and code.
 
 ## Runtime
 
-The provided systemd unit runs one Uvicorn worker because Undo snapshots, chat
-history, integration clients, and live configuration are process-local. All
-machine-specific values come from an environment file.
+The provided systemd unit and installed CLI run one Uvicorn worker because Undo
+snapshots, chat history, integration clients, and live configuration are
+process-local. Module selection changes require a restart. All machine-specific
+values come from an environment file.
+
+[../pyproject.toml](../pyproject.toml) defines `luigi-web` 0.1.0 for Python 3.11+,
+preserving the runtime dependencies from
+[../requirements.txt](../requirements.txt). Wheels include core and feature
+templates/assets. [../luigi_web/paths.py](../luigi_web/paths.py) anchors those
+packaged resources separately from writable defaults: optional
+`LUIGI_WEB_DATA_DIR`, the legacy source `data/` directory, or platform per-user
+storage when installed. Existing per-feature storage overrides remain valid.
 
 ## Validation
 
 ```powershell
+pip install "setuptools>=68" wheel
 python -m unittest discover -s tests -v
+python scripts/validate_repo.py
+git diff --check
 ```
 
-Frontend changes also require template compilation, unique-route validation,
-`git diff --check`, and desktop/mobile browser review.
+Use a clean development process without production credentials. The validator
+compiles the shared template loader's HTML and checks mounted route
+registrations without running startup hooks; route coverage depends on module
+selection. Select all built-ins explicitly when checking the complete host.
+The independent example's packaging tests additionally compile and serve its
+namespaced template from installed wheels in disposable environments.
+
+Wheel tests require both `setuptools` and `wheel`; the wheel test class is
+skipped if either is missing. Report skipped packaging checks rather than
+claiming installed-wheel verification from an otherwise successful suite.
+Frontend changes also require responsive browser review at 1440x900 and
+390x844, including appearance persistence and reduced motion, using only
+synthetic records.

@@ -1,0 +1,11 @@
+[Unit]
+Description=Run one approved Luigi Web maintenance job daily
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=30m
+Persistent=true
+Unit=luigi-maintainer.service
+
+[Install]
+WantedBy=timers.target

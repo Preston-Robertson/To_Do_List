@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block head_scripts %}
+<link rel="stylesheet" href="/module-assets/example/status.css">
+{% endblock %}
+{% block content %}
+<section class="example-module" aria-labelledby="example-title">
+  <header class="page-header example-header">
+    <h1 id="example-title">{{ module.label }}</h1>
+    <span class="example-state" role="status">{{ shell_icon('blocks') }}{{ module_status|capitalize }}</span>
+  </header>
+  <dl class="example-details">
+    <div><dt>Module ID</dt><dd>{{ module.id }}</dd></div>
+    <div><dt>Package</dt><dd>{{ module.package }}</dd></div>
+    <div><dt>API version</dt><dd>{{ module.api_version }}</dd></div>
+    <div><dt>Source</dt><dd>External package</dd></div>
+  </dl>
+</section>
+{% endblock %}

@@ -1,0 +1,52 @@
+[Unit]
+Description=Luigi Web autonomous maintainer (one approved job)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/luigi-web/maintainer.env
+
+[Service]
+Type=oneshot
+User=luigi-maintainer
+Group=luigi-maintainer
+SupplementaryGroups=luigi-maintainer-queue
+WorkingDirectory=/opt/luigi-web
+EnvironmentFile=/etc/luigi-web/maintainer.env
+Environment=HOME=/var/lib/luigi-maintainer
+Environment=XDG_CONFIG_HOME=/var/lib/luigi-maintainer/config
+Environment=XDG_DATA_HOME=/var/lib/luigi-maintainer/share
+Environment=LUIGI_MAINTAINER_STATE_DIR=/var/lib/luigi-maintainer
+Environment=LUIGI_MAINTAINER_QUEUE_DIR=/var/lib/luigi-maintainer-queue
+Environment=LUIGI_WEB_MAINTAINER_DB=/var/lib/luigi-maintainer-queue/maintainer.db
+ExecStart=/opt/luigi-web/.venv/bin/python -m luigi_web.maintainer_worker
+TimeoutStartSec=2h
+UMask=0007
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/opt/luigi-web
+ReadWritePaths=/var/lib/luigi-maintainer /var/lib/luigi-maintainer-queue
+InaccessiblePaths=-/opt/luigi-web/data
+InaccessiblePaths=-/opt/luigi-web/.env -/opt/luigi-web/luigi.env
+InaccessiblePaths=-/opt/luigi-web/gnw-credentials.json
+InaccessiblePaths=-/opt/luigi-web/task-web-metadata.json
+InaccessiblePaths=-/opt/luigi-web/LOCAL_DEPLOYMENT.md
+InaccessiblePaths=-/opt/luigi-web/LOCAL_FEATURE_REQUESTS.md
+InaccessiblePaths=-/etc/luigi-web/credentials.env
+InaccessiblePaths=-/etc/luigi-web/preview.env
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+ProtectProc=invisible
+ProcSubset=pid
+ProtectClock=true
+ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+SystemCallArchitectures=native

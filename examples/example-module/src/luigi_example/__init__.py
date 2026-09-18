@@ -1,0 +1,1 @@
+"""Standalone example module for the Luigi Web public module API."""

@@ -1,0 +1,9 @@
+<div id="deck-stats"{% if refresh_summary %} hx-swap-oob="outerHTML"{% endif %}>
+  <div class="cards-stat-grid">
+    <div><span>Total cards</span><strong>{{ total_qty }}</strong></div>
+    <div><span>Market value</span><strong>{{ total_price_minor | money_minor }}</strong></div>
+    <div><span>Board sections</span><strong>{{ deck_sections|length }}</strong></div>
+    <div><span>Categories</span><strong>{{ category_count }}</strong></div>
+  </div>
+  <div class="cards-trend"><h2>Value trend</h2><img src="/cards/{{ current_game }}/decks/{{ deck.id }}/value-trend.svg?days=180" alt="Deck value over the last 180 days" width="600" height="140"></div>
+</div>

@@ -1,0 +1,99 @@
+{% extends "cards/layout.html" %}
+{% from "cards/partials/icons.html" import icon %}
+{% block cards_content %}
+<header class="deck-detail-header">
+  <div class="deck-detail-overlay">
+    <div>
+      <a class="cards-back-link" href="/cards/{{ current_game }}/decks">{{ icon('arrow-left') }} Decks</a>
+      <h1>{{ deck.name }}</h1>
+      {% include "cards/partials/deck_summary.html" %}
+      {% if tags %}<div class="cards-tag-row">{% for tag in tags %}<span>{{ tag.name }}</span>{% endfor %}</div>{% endif %}
+    </div>
+    <div class="deck-header-actions">
+      <button type="button" class="btn btn-primary" data-cards-dialog-open="add-card-dialog">{{ icon('plus') }} Add card</button>
+      <details class="deck-action-menu">
+        <summary class="btn" aria-label="Deck actions">Actions {{ icon('chevron-down') }}</summary>
+        <div class="deck-action-options">
+          <button type="button" data-cards-dialog-open="edit-deck-dialog">{{ icon('pencil') }} Edit deck</button>
+          <button type="button" data-cards-dialog-open="tags-dialog">{{ icon('tags') }} Edit tags</button>
+          <button type="button" data-cards-dialog-open="import-cards-dialog">{{ icon('upload') }} Import cards</button>
+          <a href="/cards/{{ current_game }}/decks/{{ deck.id }}/export.txt">{{ icon('download') }} Export deck</a>
+          <form method="post" action="/cards/{{ current_game }}/decks/{{ deck.id }}/delete"
+                hx-post="/cards/{{ current_game }}/decks/{{ deck.id }}/delete" hx-swap="none"
+                hx-confirm="Delete this deck? The catalog and collection stay intact.">
+            <button type="submit" class="deck-delete-action">{{ icon('trash-2') }} Delete deck</button>
+          </form>
+        </div>
+      </details>
+    </div>
+  </div>
+</header>
+
+{% if flash %}
+<div class="cards-flash" role="status"><strong>{{ flash.imported }}</strong> cards added{% if flash.missing %}<span>{{ flash.missing }} unmatched</span>{% endif %}{% if flash.unparsed %}<span>{{ flash.unparsed }} unparsed</span>{% endif %}</div>
+{% endif %}
+
+<div class="cards-detail-tabs" role="tablist" aria-label="Deck sections" data-cards-tabs>
+  <button type="button" class="active" id="deck-cards-tab" data-cards-tab="cards-panel" role="tab" aria-selected="true" aria-controls="cards-panel">Cards</button>
+  <button type="button" id="deck-stats-tab" data-cards-tab="stats-panel" role="tab" aria-selected="false" aria-controls="stats-panel" tabindex="-1">Stats</button>
+  <button type="button" id="deck-notes-tab" data-cards-tab="notes-panel" role="tab" aria-selected="false" aria-controls="notes-panel" tabindex="-1"{% if not drawio_url %} disabled title="Diagram editor unavailable"{% endif %}>Diagram</button>
+</div>
+
+<section id="cards-panel" class="cards-tab-panel active" role="tabpanel" aria-labelledby="deck-cards-tab">
+  {% include "cards/partials/deck_cards.html" %}
+</section>
+
+<section id="notes-panel" class="cards-tab-panel" role="tabpanel" aria-labelledby="deck-notes-tab">
+  {% if drawio_url %}
+  <div class="cards-notes" data-card-notes data-deck-id="{{ deck.id }}"
+       data-load-url="/cards/{{ current_game }}/decks/{{ deck.id }}/notes"
+       data-drawio-url="{{ drawio_url }}">
+    <div class="cards-notes-toolbar"><span data-notes-status>Open the diagram to begin</span><button type="button" class="btn" data-notes-save>Save</button></div>
+    <iframe title="{{ deck.name }} diagram" sandbox="allow-scripts allow-same-origin allow-forms allow-downloads" referrerpolicy="no-referrer"></iframe>
+  </div>
+  {% else %}
+  <div class="cards-empty"><h2>Diagram editor disabled</h2><p>Configure a trusted HTTPS draw.io embed URL in Admin to enable deck diagrams.</p></div>
+  {% endif %}
+</section>
+
+<section id="stats-panel" class="cards-tab-panel" role="tabpanel" aria-labelledby="deck-stats-tab">
+  {% include "cards/partials/deck_stats.html" %}
+</section>
+
+<dialog class="cards-dialog cards-dialog-wide" id="add-card-dialog">
+  <div class="cards-dialog-body">
+    <header><h2>Add card</h2><button type="button" data-cards-dialog-close aria-label="Close">&times;</button></header>
+    <form class="cards-live-search" hx-get="/cards/{{ current_game }}/search" hx-target="#deck-search-results" hx-trigger="submit, input changed delay:250ms from:input[name=q]" hx-sync="this:replace">
+      <input type="hidden" name="for_deck" value="{{ deck.id }}"><label><span class="sr-only">Search cards</span><input type="search" name="q" placeholder="Search card names" autocomplete="off" autofocus></label>
+    </form>
+    <p class="cards-action-status" data-deck-add-status role="status" aria-live="polite"></p>
+    <div id="deck-search-results" class="cards-search-results"></div>
+    <footer><button type="button" class="btn" data-cards-dialog-close>Close</button></footer>
+  </div>
+</dialog>
+
+<dialog class="cards-dialog" id="tags-dialog">
+  <form method="post" action="/cards/{{ current_game }}/decks/{{ deck.id }}/tags" hx-post="/cards/{{ current_game }}/decks/{{ deck.id }}/tags" hx-swap="none">
+    <header><h2>Deck tags</h2><button type="button" data-cards-dialog-close aria-label="Close">&times;</button></header>
+    <label>Comma-separated tags<input name="tags" value="{{ tags | map(attribute='name') | join(', ') }}" maxlength="840" autofocus></label>
+    <footer><button type="button" class="btn" data-cards-dialog-close>Cancel</button><button class="btn btn-primary" type="submit">Save tags</button></footer>
+  </form>
+</dialog>
+
+<dialog class="cards-dialog" id="edit-deck-dialog">
+  <form method="post" action="/cards/{{ current_game }}/decks/{{ deck.id }}" hx-post="/cards/{{ current_game }}/decks/{{ deck.id }}" hx-swap="none">
+    <header><h2>Edit deck</h2><button type="button" data-cards-dialog-close aria-label="Close">&times;</button></header>
+    <div class="cards-form-grid"><label class="cards-field-wide">Name<input name="name" value="{{ deck.name }}" maxlength="200" required></label><label class="cards-field-wide">Format<input name="format" value="{{ deck.format or '' }}" maxlength="80"></label><label class="cards-field-wide">Description<textarea name="description" rows="5" maxlength="10000">{{ deck.description or '' }}</textarea></label><input type="hidden" name="archived" value="0"><label class="cards-check cards-field-wide"><input type="checkbox" name="archived" value="1" {% if deck.archived %}checked{% endif %}> Archive this deck</label></div>
+    <footer><button type="button" class="btn" data-cards-dialog-close>Cancel</button><button class="btn btn-primary" type="submit">Save deck</button></footer>
+  </form>
+</dialog>
+
+<dialog class="cards-dialog cards-dialog-wide" id="import-cards-dialog">
+  <form method="post" action="/cards/{{ current_game }}/decks/{{ deck.id }}/import" hx-post="/cards/{{ current_game }}/decks/{{ deck.id }}/import" hx-swap="none" data-card-import-form data-preview-url="/cards/{{ current_game }}/import/preview">
+    <header><h2>Import into {{ deck.name }}</h2><button type="button" data-cards-dialog-close aria-label="Close">&times;</button></header>
+    <label>Card list<textarea name="text" rows="15" required placeholder="Mainboard&#10;[Ramp]&#10;4 Example Relic (TST) 7&#10;[Interaction]&#10;2 Example Spell&#10;Sideboard&#10;[Answers]&#10;1 Example Answer"></textarea></label>
+    <div class="cards-import-preview" data-import-preview aria-live="polite"></div>
+    <footer><button type="button" class="btn" data-cards-dialog-close>Cancel</button><button type="button" class="btn" data-import-preview-button>Preview</button><button class="btn btn-primary" type="submit">Import cards</button></footer>
+  </form>
+</dialog>
+{% endblock %}

@@ -1,0 +1,63 @@
+{% extends "cards/layout.html" %}
+{% block cards_content %}
+<header class="cards-page-header">
+  <div><p class="cards-kicker">{{ game.name }}</p><h1>Collection</h1><p>{{ totals.qty }} cards</p></div>
+  <button type="button" class="btn btn-primary" data-cards-dialog-open="collection-add-dialog">Record purchase</button>
+</header>
+{% if totals.qty %}
+<div class="cards-stat-grid collection-value-summary">
+  <div><span>Market value</span><strong>{{ totals.value_usd_minor | money_minor }}</strong><small>All {{ totals.qty }} cards</small></div>
+  <div><span>Purchase cost</span><strong>{% if totals.cost_basis_qty %}{{ totals.cost_basis_usd_minor | money_minor }}{% else %}-{% endif %}</strong><small>{{ totals.cost_basis_qty }} cards with USD cost</small></div>
+  <div><span>Gain / loss</span><strong class="{% if totals.gain_loss_usd_minor > 0 %}value-positive{% elif totals.gain_loss_usd_minor < 0 %}value-negative{% endif %}">{% if totals.comparison_qty %}{{ totals.gain_loss_usd_minor | signed_money_minor }}{% else %}-{% endif %}</strong><small>{{ totals.comparison_qty }} comparable cards</small></div>
+  <div><span>Return</span><strong class="{% if totals.gain_loss_basis_points is not none and totals.gain_loss_basis_points > 0 %}value-positive{% elif totals.gain_loss_basis_points is not none and totals.gain_loss_basis_points < 0 %}value-negative{% endif %}">{{ totals.gain_loss_basis_points | percent_basis_points }}</strong><small>USD purchases with market prices</small></div>
+</div>
+{% endif %}
+<form method="get" class="cards-filter-bar"><label class="cards-search-field"><span class="sr-only">Filter collection</span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input type="search" name="q" value="{{ q }}" placeholder="Filter by card name"></label><button class="btn" type="submit">Apply</button></form>
+<div class="cards-table-scroll cards-collection-list">
+<table class="collection-table">
+  <thead><tr><th scope="col">Card</th><th scope="col">Set</th><th scope="col">Qty</th><th scope="col">Variant</th><th scope="col">Condition</th><th scope="col">Paid</th><th scope="col">Now</th><th scope="col">Gain / loss</th><th scope="col">Decks</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+  <tbody>
+  {% for item in rows %}
+  <tr>
+    <td class="collection-card-cell"><button type="button" class="deck-card-name card-detail-trigger" data-card-detail-url="/cards/{{ current_game }}/cards/{{ item.card_id }}/detail?collection_id={{ item.id }}">{% if item.image_small %}<img src="{{ item.image_small }}" alt="" loading="lazy" data-card-preview="{{ item.image_normal or item.image_small }}">{% endif %}<span><strong>{{ item.name }}</strong>{% if item.notes %}<small>{{ item.notes }}</small>{% endif %}</span></button></td>
+    <td data-label="Set">{{ item.set_code|upper if item.set_code else '-' }}{% if item.collector_number %} · {{ item.collector_number }}{% endif %}</td>
+    <td data-label="Quantity">{{ item.qty }}</td>
+    <td data-label="Variant">{{ 'Foil' if item.foil else 'Regular' }}</td>
+    <td data-label="Condition">{{ item.condition }}</td>
+    <td data-label="Paid">{% if item.purchase_cost_minor is not none %}<strong>{{ item.purchase_cost_minor | money_minor(item.acquired_currency) }}</strong><br><small>{{ item.acquired_price_minor | money_minor(item.acquired_currency) }} each{% if item.acquired_qty != item.qty %} · {{ item.acquired_qty }} of {{ item.qty }} costed{% endif %}{% if item.acquired_date %} · {{ item.acquired_date }}{% endif %}</small>{% elif item.acquired_date %}<span>-</span><br><small>{{ item.acquired_date }}</small>{% else %}<span class="cards-value-muted">Not recorded</span>{% endif %}</td>
+    <td data-label="Now">{% if item.current_value_usd_minor is not none %}<strong>{{ item.current_value_usd_minor | money_minor }}</strong><br><small>{{ item.current_unit_usd_minor | money_minor }} each</small>{% else %}<span class="cards-value-muted">No market price</span>{% endif %}</td>
+    <td data-label="Gain / loss">{% if item.gain_loss_usd_minor is not none %}<strong class="{% if item.gain_loss_usd_minor > 0 %}value-positive{% elif item.gain_loss_usd_minor < 0 %}value-negative{% endif %}">{{ item.gain_loss_usd_minor | signed_money_minor }}</strong>{% if item.gain_loss_basis_points is not none %}<br><small>{{ item.gain_loss_basis_points | percent_basis_points }}</small>{% endif %}{% elif item.acquired_price_minor is not none and item.acquired_currency != 'USD' %}<span class="cards-value-muted">Currency differs</span>{% else %}<span class="cards-value-muted">Not available</span>{% endif %}</td>
+    <td data-label="Decks">{{ item.in_decks }}</td>
+    <td class="collection-actions-cell">
+      <button type="button" class="cards-icon-button cards-icon-button-edit" aria-label="Edit purchase for {{ item.name }}" data-collection-acquisition-edit data-collection-id="{{ item.id }}" data-card-name="{{ item.name }}" data-acquired-date="{{ item.acquired_date or '' }}" data-acquired-price-minor="{{ item.acquired_price_minor if item.acquired_price_minor is not none else '' }}" data-acquired-currency="{{ item.acquired_currency }}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l11-11-4-4L4 16v4ZM13 7l4 4"/></svg></button>
+      <form method="post" action="/cards/{{ current_game }}/collection/{{ item.id }}/delete" hx-post="/cards/{{ current_game }}/collection/{{ item.id }}/delete" hx-swap="none" hx-confirm="Remove this collection entry?"><button type="submit" class="cards-icon-button" aria-label="Remove {{ item.name }}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg></button></form>
+    </td>
+  </tr>
+  {% else %}<tr><td colspan="10"><div class="cards-empty"><h2>Your collection is empty</h2><p>Add cards from the catalog or search below.</p></div></td></tr>{% endfor %}
+  </tbody>
+</table>
+</div>
+
+<dialog class="cards-dialog cards-dialog-wide" id="collection-add-dialog">
+  <div class="cards-dialog-body">
+    <header><h2>Choose a card</h2><button type="button" data-cards-dialog-close aria-label="Close">&times;</button></header>
+    <form class="cards-live-search" hx-get="/cards/{{ current_game }}/search" hx-target="#collection-search-results" hx-trigger="submit, input changed delay:250ms from:input[name=q]" hx-sync="this:replace"><input type="hidden" name="for_collection" value="true"><label><span class="sr-only">Search cards</span><input type="search" name="q" placeholder="Search card names" autocomplete="off" autofocus></label></form>
+    <div id="collection-search-results" class="cards-search-results"></div>
+    <footer><button type="button" class="btn" data-cards-dialog-close>Close</button></footer>
+  </div>
+</dialog>
+
+<dialog class="cards-dialog" id="collection-acquisition-dialog">
+  <form method="post" action="/cards/{{ current_game }}/collection/acquisition" hx-post="/cards/{{ current_game }}/collection/acquisition" hx-swap="none">
+    <header><h2>Edit purchase</h2><button type="button" data-cards-dialog-close aria-label="Close">&times;</button></header>
+    <p class="cards-selected-name" data-acquisition-card-name></p>
+    <input type="hidden" name="collection_id" data-acquisition-collection-id>
+    <div class="cards-form-grid">
+      <label>Purchase date<input type="date" name="acquired_date" data-acquisition-date></label>
+      <label>Price paid per card<input type="number" name="acquired_price" min="0" step="0.01" inputmode="decimal" data-acquisition-price></label>
+      <label>Currency<select name="acquired_currency" data-acquisition-currency><option>USD</option><option>EUR</option></select></label>
+    </div>
+    <footer><button type="button" class="btn" data-cards-dialog-close>Cancel</button><button class="btn btn-primary" type="submit">Save purchase</button></footer>
+  </form>
+</dialog>
+{% endblock %}

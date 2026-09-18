@@ -1,0 +1,1 @@
+"""Shared application services and the feature-module contract."""

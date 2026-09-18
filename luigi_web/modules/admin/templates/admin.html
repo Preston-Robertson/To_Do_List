@@ -1,0 +1,356 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="board-header admin-header">
+  <div class="admin-heading">
+    <h1>Admin</h1>
+    <div class="admin-heading-meta">
+      <span class="admin-live-dot {% if schema_version is none %}is-warning{% endif %}" aria-hidden="true"></span>
+      <span>Schema {{ schema_version if schema_version is not none else 'unavailable' }}</span>
+      <span aria-hidden="true">·</span>
+      <span>{{ git_branch or 'detached' }}</span>
+    </div>
+  </div>
+  <nav class="admin-section-nav" aria-label="Admin sections">
+    <a href="#admin-runtime">Runtime</a>
+    <a href="#admin-health">Health</a>
+    <a href="#admin-maintenance">Maintenance</a>
+    {% if module_enabled('media') %}
+    <a href="#admin-integrations">Integrations</a>
+    {% endif %}
+    <a href="#admin-environment">Environment</a>
+  </nav>
+</section>
+
+<section class="admin-grid">
+  <article class="widget admin-panel admin-panel-runtime" id="admin-runtime">
+    <header class="widget-header"><h2>Runtime</h2></header>
+    <div class="widget-body">
+      <dl class="kv">
+        <dt>Repo</dt>          <dd><code>{{ repo_dir }}</code></dd>
+        <dt>Python</dt>        <dd><code>{{ python_exe }}</code></dd>
+        <dt>Git branch</dt>    <dd><code>{{ git_branch or '—' }}</code></dd>
+        <dt>Git HEAD</dt>      <dd><code>{{ git_head or '—' }}</code></dd>
+        <dt>Last commit</dt>   <dd><code>{{ git_last or '—' }}</code></dd>
+        <dt>Schema version</dt><dd><code>{{ schema_version if schema_version is not none else 'Unavailable' }}</code></dd>
+      </dl>
+    </div>
+  </article>
+
+  <article class="widget admin-panel admin-panel-health" id="admin-health">
+    <header class="widget-header">
+      <h2>Integration health</h2>
+      <button class="btn btn-tiny" hx-get="/admin/integrations"
+              hx-target="#integration-health" hx-indicator="#health-spinner"
+              hx-disabled-elt="this">Test again</button>
+      <span id="health-spinner" class="htmx-indicator" role="status">checking…</span>
+    </header>
+    <div class="widget-body" id="integration-health"
+         hx-get="/admin/integrations" hx-trigger="load" hx-swap="innerHTML">
+      <span class="muted-hint">checking integrations…</span>
+    </div>
+  </article>
+
+  <article class="widget admin-panel admin-panel-maintenance" id="admin-maintenance">
+    <header class="widget-header"><h2>Self-update</h2></header>
+    <div class="widget-body">
+      <div class="admin-operation-list">
+        <div class="admin-operation">
+          <div>
+            <strong>Install latest version</strong>
+            <span>Fetch, fast-forward, then install pinned dependencies.</span>
+          </div>
+          <button
+            class="btn btn-primary"
+            hx-post="/admin/update"
+            hx-target="#admin-result"
+            hx-swap="innerHTML"
+            hx-indicator="#admin-spinner"
+            hx-disabled-elt="this"
+            hx-confirm="Pull latest code and reinstall dependencies?"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7L20 8"/><path d="M20 3v5h-5"/></svg>
+            Update
+          </button>
+        </div>
+        <div class="admin-operation is-danger">
+          <div>
+            <strong>Restart service</strong>
+            <span>Apply installed code and settings through systemd.</span>
+          </div>
+          <button
+            class="btn btn-danger"
+            hx-post="/admin/restart"
+            hx-target="#admin-result"
+            hx-swap="innerHTML"
+            hx-disabled-elt="this"
+            hx-confirm="Restart the service now?"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v10"/><path d="M6.3 5.7a8 8 0 1 0 11.4 0"/></svg>
+            Restart
+          </button>
+        </div>
+      </div>
+      <span id="admin-spinner" class="htmx-indicator" role="status">working…</span>
+
+      <div id="admin-result" class="admin-result"></div>
+    </div>
+  </article>
+
+  {% if module_enabled('tasks') %}
+  <article class="widget admin-panel admin-panel-backup">
+    <header class="widget-header"><h2>Shared task backup</h2></header>
+    <div class="widget-body">
+      <p class="muted-hint">
+        Full JSON snapshot of shared task data and app-managed task metadata.
+        The export is read-only and never changes the database.
+      </p>
+      <details class="admin-notes">
+        <summary>Backup contents</summary>
+        <p>
+          Includes <code>tasks</code>, <code>recurring_tasks</code>,
+          <code>discipline_list</code>, <code>discipline_completions</code>, and
+          <code>follow_up_tasks</code>. Finance, Feedback, Review notes, rules,
+          credentials, and deployment settings are excluded.
+        </p>
+      </details>
+      <div class="form-actions admin-form-actions">
+        {# Plain <a> so the browser handles the file download natively;
+           HTMX would swap the JSON blob into the page instead. #}
+        <a class="btn btn-primary" href="/admin/backup" download>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+          Download JSON
+        </a>
+        <button class="btn" type="button" hx-get="/admin/restore"
+          hx-target="#modal-body" onclick="openModal()">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21V9"/><path d="m7 14 5-5 5 5"/><path d="M5 3h14"/></svg>
+          Restore
+        </button>
+      </div>
+    </div>
+  </article>
+  {% endif %}
+
+  {% if module_enabled('media') %}
+  <article class="widget widget-full admin-panel" id="admin-integrations">
+    <header class="widget-header">
+      <h2>Game’N’Watch credentials</h2>
+      {% if gnw.enabled %}
+        <span class="chip">connected</span>
+      {% elif gnw.exists %}
+        <span class="chip chip-muted">key saved</span>
+      {% else %}
+        <span class="chip chip-muted">not set</span>
+      {% endif %}
+    </header>
+    <div class="widget-body">
+      <p class="muted-hint">
+        Paste the Google <strong>service-account</strong>
+        <code>credentials.json</code> below to enable the
+        <a href="/games">Games</a> / <a href="/shows">Shows</a> tabs — no need
+        to SSH into the host. It’s written to
+        <code>{{ gnw.path }}</code> (mode <code>600</code>) and applied live.
+      </p>
+      <dl class="kv">
+        <dt>Status</dt>
+        <dd>
+          {% if gnw.enabled %}<code>connected</code>
+          {% elif gnw.exists and not gnw.sheet_id_set %}<code>key saved — Sheet ID still needed</code>
+          {% elif gnw.exists %}<code>{{ gnw.reason }}</code>
+          {% else %}<code>no key saved yet</code>{% endif %}
+        </dd>
+        <dt>Service account</dt>
+        <dd><code>{{ gnw.client_email or '—' }}</code></dd>
+        <dt>Sheet ID</dt>
+        <dd><code>{{ 'set' if gnw.sheet_id_set else 'not set (add LUIGI_WEB_GNW_SHEET_ID below)' }}</code></dd>
+      </dl>
+
+      <details class="admin-editor" {% if not gnw.exists %}open{% endif %}>
+        <summary>{{ 'Replace credentials' if gnw.exists else 'Add credentials' }}</summary>
+        <div class="admin-editor-body">
+          <form
+            hx-post="/admin/gnw-credentials"
+            hx-target="#gnw-cred-result"
+            hx-swap="innerHTML"
+            hx-indicator="#gnw-cred-spinner"
+          >
+            <label class="env-label" for="gnw-credentials">
+              <span class="env-desc">Contents of <code>credentials.json</code></span>
+            </label>
+            <textarea
+              class="admin-code-input"
+              id="gnw-credentials"
+              name="credentials"
+              rows="8"
+              spellcheck="false"
+              autocomplete="off"
+              placeholder='{&#10;  "type": "service_account",&#10;  "project_id": "…",&#10;  "private_key": "-----BEGIN PRIVATE KEY-----…",&#10;  "client_email": "…@….iam.gserviceaccount.com",&#10;  …&#10;}'
+            ></textarea>
+            <div class="form-actions admin-form-actions">
+              <button
+                type="submit"
+                class="btn btn-primary"
+                hx-disabled-elt="this"
+                hx-confirm="Save these service-account credentials to disk?"
+              >Save credentials</button>
+              <span id="gnw-cred-spinner" class="htmx-indicator" role="status">saving…</span>
+            </div>
+            <div id="gnw-cred-result" class="admin-result"></div>
+          </form>
+        </div>
+      </details>
+    </div>
+  </article>
+  {% endif %}
+
+  <article class="widget widget-full admin-panel" id="admin-environment">
+    <header class="widget-header">
+      <h2>Environment file</h2>
+      <span class="chip chip-muted"><code>{{ env_file_path }}</code></span>
+    </header>
+    <div class="widget-body">
+      {% if protected_env_keys_present %}
+        <div class="admin-banner-err">
+          <strong>Security migration required:</strong>
+          <code>{{ protected_env_keys_present|join(', ') }}</code>
+          {% if protected_env_keys_present|length == 1 %}is{% else %}are{% endif %}
+          still stored in this app-managed file. Move
+          {% if protected_env_keys_present|length == 1 %}it{% else %}them{% endif %}
+          to a root-owned systemd credential file, then remove
+          {% if protected_env_keys_present|length == 1 %}the line{% else %}those lines{% endif %}
+          from this file. Authentication tokens cannot be changed in Admin.
+        </div>
+      {% endif %}
+      {% if env_read_error %}
+        <div class="admin-banner-err">
+          Cannot read env file: <code>{{ env_read_error }}</code>
+        </div>
+      {% elif not env_file_exists %}
+        <div class="admin-banner-err">
+          File does not exist. Create it (with the required
+          <code>LUIGI_WEB_*</code> secrets) before editing here.
+        </div>
+      {% elif not env_writable %}
+        <div class="admin-banner-err">
+          File is <strong>read-only</strong> for this process:
+          <code>{{ env_unwritable_reason }}</code>.<br>
+          Fix on the host, then reload this page. Recommended: move the file
+          to <code>/opt/luigi-web/luigi.env</code> owned by the service user
+          (<code>luigi-web</code>, mode <code>600</code>) and point
+          <code>EnvironmentFile=</code> in the systemd unit + the
+          <code>LUIGI_WEB_ENV_FILE</code> env var at the new path.
+        </div>
+      {% else %}
+        <p class="muted-hint">
+          Changes are written to <code>{{ env_file_path }}</code>. Only the
+          keys listed below are managed here — comments and any other lines
+          in the file are preserved untouched.
+          <strong>Values take effect after a restart.</strong>
+        </p>
+        {% if env_unwritable_reason %}
+          <div class="admin-banner-warn">
+            <strong>Non-atomic saves:</strong> {{ env_unwritable_reason }}.
+            Writes work, but a hard crash mid-save could leave the file
+            half-written. To upgrade to atomic saves, move the file to a
+            directory the service user owns (recommended:
+            <code>/opt/luigi-web/luigi.env</code>).
+          </div>
+        {% endif %}
+        <p class="muted-hint">
+          Secrets are masked. Leave a secret field blank to keep its current
+          value — only type into it when you actually want to change it.
+          Authentication tokens are deliberately excluded and must be managed
+          in the protected host configuration.
+        </p>
+      {% endif %}
+
+      <form
+        class="env-form"
+        hx-post="/admin/env"
+        hx-target="#env-result"
+        hx-swap="innerHTML"
+        hx-indicator="#env-spinner"
+        {% if not env_writable %}onsubmit="return false;"{% endif %}
+      >
+        <div class="env-toolbar">
+          <label class="env-search" for="env-filter">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+            <span class="sr-only">Filter settings</span>
+            <input id="env-filter" type="search" autocomplete="off"
+              placeholder="Filter settings" data-env-filter>
+          </label>
+          <span class="env-filter-status" data-env-filter-status aria-live="polite">All settings</span>
+          <button class="btn btn-ghost btn-tiny" type="button" data-env-expand
+            aria-expanded="false">Expand all</button>
+        </div>
+
+        <div class="env-groups" data-env-groups>
+          {% for group in env_groups %}
+          <details class="env-group" data-env-group {% if loop.first %}open{% endif %}>
+            <summary>
+              <span>{{ group.group }}</span>
+              <span class="env-group-count">{{ group.entries|length }}</span>
+            </summary>
+            <fieldset class="env-group-fields">
+              <legend class="sr-only">{{ group.group }}</legend>
+              {% for e in group.entries %}
+                {% set spec = e.spec %}
+                <div class="env-row" data-env-row>
+                <label for="env-{{ spec.name }}" class="env-label">
+                  <span class="env-key"><code>{{ spec.name }}</code></span>
+                  <span class="env-desc">{{ spec.description }}</span>
+                </label>
+                {% if spec.is_secret %}
+                  <div class="env-secret" data-env-secret>
+                    <input
+                      id="env-{{ spec.name }}"
+                      name="{{ spec.name }}"
+                      type="password"
+                      autocomplete="off"
+                      placeholder="{% if e.has_value %}{{ e.display }} (leave blank to keep){% else %}(not set){% endif %}"
+                      {% if not env_writable %}disabled{% endif %}
+                    >
+                    <button
+                      type="button"
+                      class="btn btn-ghost btn-tiny"
+                      data-env-toggle
+                      aria-label="Show {{ spec.name }}"
+                      aria-pressed="false"
+                      title="Show value"
+                    >
+                      <svg class="env-eye" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+                      <svg class="env-eye-off" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 3 18 18"/><path d="M10.6 6.2A11.4 11.4 0 0 1 12 6c6.5 0 10 6 10 6a18.5 18.5 0 0 1-2.1 2.8M6.6 6.6C3.6 8.4 2 12 2 12s3.5 6 10 6a10.7 10.7 0 0 0 3.4-.6"/><path d="M9.9 9.9A3 3 0 0 0 14.1 14.1"/></svg>
+                    </button>
+                  </div>
+                {% else %}
+                  <input
+                    id="env-{{ spec.name }}"
+                    name="{{ spec.name }}"
+                    type="{{ spec.input_type }}"
+                    value="{{ e.value }}"
+                    autocomplete="off"
+                    {% if not env_writable %}disabled{% endif %}
+                  >
+                {% endif %}
+                </div>
+              {% endfor %}
+            </fieldset>
+          </details>
+          {% endfor %}
+        </div>
+
+        <div class="form-actions admin-save-bar">
+          <button
+            type="submit"
+            class="btn btn-primary"
+            {% if not env_writable %}disabled{% endif %}
+            hx-disabled-elt="this"
+            hx-confirm="Save changes to the env file? Restart required to apply."
+          >Save changes</button>
+          <span id="env-spinner" class="htmx-indicator" role="status">saving…</span>
+        </div>
+        <div id="env-result" class="admin-result"></div>
+      </form>
+    </div>
+  </article>
+</section>
+{% endblock %}

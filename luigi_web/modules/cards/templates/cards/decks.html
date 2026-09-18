@@ -1,0 +1,68 @@
+{% extends "cards/layout.html" %}
+{% from "cards/partials/icons.html" import icon %}
+{% block cards_content %}
+<header class="cards-page-header">
+  <div><p class="cards-kicker">{{ game.name }}</p><h1>Decks</h1><p>{{ decks|length }} {{ 'deck' if decks|length == 1 else 'decks' }}</p></div>
+  <div class="cards-header-actions">
+    <button type="button" class="btn" data-cards-dialog-open="import-deck-dialog">{{ icon('upload') }} Import</button>
+    <button type="button" class="btn btn-primary" data-cards-dialog-open="new-deck-dialog">{{ icon('plus') }} New deck</button>
+  </div>
+</header>
+
+<form method="get" class="cards-filter-bar cards-deck-filters" aria-label="Deck filters">
+  <label class="cards-search-field"><span class="sr-only">Search decks</span>{{ icon('search') }}<input type="search" name="q" value="{{ q }}" placeholder="Search decks"></label>
+  <select name="tag" aria-label="Filter by tag"><option value="">All tags</option>{% for tag in all_tags %}<option value="{{ tag.name }}" {% if active_tag|lower == tag.name|lower %}selected{% endif %}>{{ tag.name }}</option>{% endfor %}</select>
+  <label class="cards-check"><input type="checkbox" name="include_archived" value="true" {% if include_archived %}checked{% endif %}> Include archived</label>
+  <button type="submit" class="btn">Apply</button>
+  {% if q or active_tag or include_archived %}<a class="btn" href="/cards/{{ current_game }}/decks">Clear</a>{% endif %}
+</form>
+
+{% if decks %}
+<div class="cards-deck-grid">
+  {% for deck in decks %}
+  <a class="deck-tile" href="/cards/{{ current_game }}/decks/{{ deck.id }}">
+    <span class="deck-tile-art" aria-hidden="true">
+      {% if deck.cover_image or deck.commander_image %}<img src="{{ deck.cover_image or deck.commander_image }}" alt="" loading="lazy" decoding="async">{% else %}{{ icon('layers') }}{% endif %}
+    </span>
+    <span class="deck-tile-copy">
+      <strong>{{ deck.name }}</strong>
+      <span>{{ deck.format or 'No format' }}</span>
+      <span class="deck-tile-metrics"><span><b>{{ deck.card_count }}</b> cards</span><b>{{ deck.price_usd_minor | money_minor }}</b></span>
+      {% if deck.commander_name %}<span class="deck-tile-commander">{{ deck.commander_name }}</span>{% endif %}
+      {% if deck.archived %}<span class="cards-status-chip">Archived</span>{% endif %}
+    </span>
+  </a>
+  {% endfor %}
+</div>
+{% else %}
+<div class="cards-empty">
+  <h2>{{ 'No matching decks' if q or active_tag else 'No decks yet' }}</h2>
+  {% if q or active_tag %}<a href="/cards/{{ current_game }}/decks">Clear filters</a>{% else %}<button type="button" class="btn btn-primary" data-cards-dialog-open="new-deck-dialog">{{ icon('plus') }} New deck</button>{% endif %}
+</div>
+{% endif %}
+
+<dialog class="cards-dialog" id="new-deck-dialog">
+  <form method="post" action="/cards/{{ current_game }}/decks"
+        hx-post="/cards/{{ current_game }}/decks" hx-swap="none">
+    <header><h2>New deck</h2><button type="button" data-cards-dialog-close aria-label="Close">&times;</button></header>
+    <div class="cards-form-grid">
+      <label class="cards-field-wide">Name<input name="name" maxlength="200" required autofocus></label>
+      <label class="cards-field-wide">Format<input name="format_" value="commander" maxlength="80"></label>
+    </div>
+    <footer><button type="button" class="btn" data-cards-dialog-close>Cancel</button><button type="submit" class="btn btn-primary">Create deck</button></footer>
+  </form>
+</dialog>
+
+<dialog class="cards-dialog cards-dialog-wide" id="import-deck-dialog">
+  <form method="post" action="/cards/{{ current_game }}/decks/import"
+        hx-post="/cards/{{ current_game }}/decks/import" hx-swap="none">
+    <header><h2>Import deck</h2><button type="button" data-cards-dialog-close aria-label="Close">&times;</button></header>
+    <div class="cards-form-grid">
+      <label>Name<input name="name" maxlength="200" required autofocus></label>
+      <label>Format<input name="format_" value="commander" maxlength="80"></label>
+      <label class="cards-field-wide">Card list<textarea name="text" rows="15" required placeholder="Commander&#10;1 Example Commander (TST) 1 *CMDR*&#10;Mainboard&#10;[Ramp]&#10;4 Example Relic&#10;[Interaction]&#10;2 Example Spell&#10;Sideboard&#10;[Answers]&#10;1 Example Answer"></textarea></label>
+    </div>
+    <footer><button type="button" class="btn" data-cards-dialog-close>Cancel</button><button type="submit" class="btn btn-primary">Create and import</button></footer>
+  </form>
+</dialog>
+{% endblock %}
