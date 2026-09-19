@@ -7,8 +7,14 @@ from typing import Any
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
 from ...auth import require_auth
+from .preference_routes import router as preference_router
+from .home_preview import router as home_preview_router
+from .home_routes import get_home_state, router as home_router
 
 router = APIRouter()
+router.include_router(preference_router)
+router.include_router(home_preview_router)
+router.include_router(home_router)
 
 
 def startup(app: FastAPI | None = None) -> None:
@@ -403,61 +409,17 @@ async def review_save(scope: str, request: Request):
 def home_page(request: Request):
     from ... import application as host
 
-    host._require_v2()
-    host._reactivate_recurring()
-    today = host.clock.local_today()
-    monday = today - timedelta(days=today.weekday())
-    open_tasks = host.db.list_open_tasks(limit=25)
-    disciplines_pending = host.db.list_disciplines_pending_today()
-    disc_week = host.db.weekly_discipline_counts(today)
-    task_week = host.db.weekly_task_completion_counts(today)
-    overdue_tasks = host.db.list_overdue_tasks(limit=10)
-    upcoming_tasks = host.db.list_upcoming_tasks(days=7, limit=10)
-    recent_completions = host.db.list_recent_completions(limit=8)
-    discipline_streaks = host.db.list_discipline_streaks(limit=8)
-    follow_ups = host.db.list_follow_ups_preview(limit=8)
-    recent_activity = host.db.list_recent_activity(limit=15, days=14)
-    weekly_review = host.db.weekly_review()
-    disciplines_at_risk = host.db.list_disciplines_at_risk()
-    # Game'N'Watch: "currently playing/watching" widgets. Best-effort — never
-    # let a Sheets hiccup break the home page.
-    gnw_playing: list[dict[str, Any]] = []
-    gnw_watching: list[dict[str, Any]] = []
-    gnw_enabled = host._module_enabled("media", request) and host.gnw.is_enabled()
-    if gnw_enabled:
-        try:
-            gnw_playing = [i for i in host.gnw.list_items("games") if i["status"] == "playing"][:8]
-            gnw_watching = [i for i in host.gnw.list_items("shows") if i["status"] == "watching"][:8]
-        except Exception:  # noqa: BLE001
-            gnw_playing, gnw_watching = [], []
-    assistant_enabled = host._module_enabled("assistant", request)
-    provider = host._LLM_PROVIDER if assistant_enabled else None
+    state = get_home_state(request)
+    today = date.fromisoformat(state["today"])
     return host.templates.TemplateResponse(
         "home.html",
         {
             "request": request,
             "active_nav": "home",
             "page_title": "Home",
-            "open_tasks": open_tasks,
-            "disciplines_pending": disciplines_pending,
-            "disc_week": disc_week,
-            "task_week": task_week,
-            "overdue_tasks": overdue_tasks,
-            "upcoming_tasks": upcoming_tasks,
-            "recent_completions": recent_completions,
-            "discipline_streaks": discipline_streaks,
-            "follow_ups": follow_ups,
-            "recent_activity": recent_activity,
-            "weekly_review": weekly_review,
-            "disciplines_at_risk": disciplines_at_risk,
-            "gnw_enabled": gnw_enabled,
-            "gnw_playing": gnw_playing,
-            "gnw_watching": gnw_watching,
-            "week_of": monday.isoformat(),
+            "home_state": state,
             "today_iso": today.isoformat(),
-            "chat_enabled": assistant_enabled and not isinstance(provider, host.llm_mod.DisabledProvider),
-            "chat_provider": getattr(provider, "name", "disabled"),
-            "chat_model": getattr(provider, "model", ""),
-            "chat_disabled_reason": getattr(provider, "reason", "Assistant module is disabled"),
+            "home_date": today.strftime("%A, %B %d"),
         },
+        headers={"Cache-Control": "no-store"},
     )

@@ -1,0 +1,22 @@
+{% from "cards/partials/icons.html" import icon %}
+{% if holding %}<h3>{{ holding.card_name }}</h3><p>{{ holding.qty }} copies held</p>{% else %}<h3>Removed holdings</h3>{% endif %}
+<div class="collection-lot-list">
+{% for lot in lots %}
+<article class="collection-lot">
+  <header><strong>Purchase #{{ lot.id }}</strong><span class="collection-source">{{ {'entered':'Actual paid','market_estimate':'Market estimate','unknown':'Unknown cost','legacy_summary':'Legacy summary'}[lot.price_source] }}</span></header>
+  <p>{{ lot.original_name }} &middot; {{ lot.original_set or '-' }} {{ lot.original_number or '' }} &middot; {{ 'Foil' if lot.foil else 'Regular' }} &middot; {{ lot.condition }}</p>
+  <dl><div><dt>Purchase date</dt><dd>{{ lot.acquired_date or 'Unknown' }}</dd></div><div><dt>Unit cost</dt><dd>{{ lot.unit_price_minor | money_minor(lot.currency) if lot.unit_price_minor is not none else 'Unknown' }}</dd></div><div><dt>Copies</dt><dd>{{ lot.remaining_qty }} held / {{ lot.qty }} recorded</dd></div><div><dt>Exact recorded cost</dt><dd>{{ (lot.priced_qty * lot.unit_price_minor) | money_minor(lot.currency) if lot.unit_price_minor is not none and lot.priced_qty else 'Unknown' }}</dd></div><div><dt>Recorded</dt><dd>{{ lot.recorded_at }}</dd></div>{% if lot.snapshot_date %}<div><dt>Market snapshot</dt><dd>{{ lot.snapshot_date }} &middot; {{ lot.snapshot_source }}</dd></div>{% endif %}{% if lot.corrected_at %}<div><dt>Corrected</dt><dd>{{ lot.corrected_at }}</dd></div>{% endif %}{% if lot.removed_at %}<div><dt>Removed</dt><dd>{{ lot.removed_at }}</dd></div>{% endif %}</dl>
+  {% if lot.notes %}<p class="collection-notes">{{ lot.notes }}</p>{% endif %}
+  {% if lot.price_source == 'legacy_summary' %}<p class="collection-provenance">Legacy aggregate &middot; {{ lot.priced_qty }} costed copies &middot; individual purchases unavailable</p>{% endif %}
+  {% if holding and lot.remaining_qty %}
+  <details><summary>{{ icon('pencil') }} Correct purchase #{{ lot.id }}</summary>
+    <form method="post" action="/cards/{{ current_game }}/collection/acquisition" data-collection-submit data-collection-purchase>
+      <input type="hidden" name="collection_id" value="{{ holding.id }}"><input type="hidden" name="lot_id" value="{{ lot.id }}"><input type="hidden" name="card_id" value="{{ lot.original_card_id }}">
+      {% include 'cards/partials/collection_purchase_fields.html' %}
+      <p data-collection-form-error role="alert" hidden></p><button type="submit" class="btn">{{ icon('save') }} Save correction</button>
+    </form>
+  </details>
+  {% endif %}
+</article>
+{% else %}<p>No purchases recorded</p>{% endfor %}
+</div>

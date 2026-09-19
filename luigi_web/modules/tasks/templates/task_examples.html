@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% macro module_enabled(name) %}{% endmacro %}
+{% macro task_row(task, blocked=false) %}
+<li class="te-task{% if task.done %} is-done{% endif %}" data-task-id="{{ task.id }}">
+  <label class="te-check-target"><input type="checkbox" data-te-complete {% if task.done %}checked{% endif %} aria-label="{{ 'Reopen' if task.done else 'Complete' }} {{ task.title }}"></label>
+  <div class="te-task-copy">
+    <span class="te-task-title">{{ task.title }}</span>
+    <div class="te-meta"><span data-te-project>{{ task.project }}</span><span data-te-priority>{{ task.priority }} priority</span><span data-te-date>{{ task.due or 'No due date' }}</span><time data-te-completed {% if not task.done or not task.completedAt %}hidden{% endif %} datetime="{{ task.completedAt|default('', true) }}">{% if task.done and task.completedAt %}Completed {{ task.completedAt }}{% endif %}</time><span class="te-badge" data-te-recurring {% if not task.recurring %}hidden{% endif %}>Recurring</span><span class="te-badge te-blocked" data-te-blocked {% if not blocked %}hidden{% endif %}>Blocked</span></div>
+  </div>
+  <div class="te-tools">
+    <button type="button" class="te-icon" data-te-action="edit-task" aria-label="Edit {{ task.title }}" title="Edit task">{{ shell_icon('pencil') }}</button>
+    <button type="button" class="te-icon" data-te-action="delete-task" aria-label="Delete {{ task.title }}" title="Delete task">{{ shell_icon('trash-2') }}</button>
+  </div>
+</li>
+{% endmacro %}
+{% macro rule_row(rule) %}
+{% set source = example_seed.tasks | selectattr('id', 'equalto', rule.source) | first %}
+{% set target = example_seed.tasks | selectattr('id', 'equalto', rule.target) | first %}
+<li class="te-rule" data-rule-id="{{ rule.id }}">
+  <div class="te-rule-copy"><span class="te-rule-type">{{ {'completion': 'Completion trigger', 'dependency': 'Dependency', 'reminder': 'Reminder'}[rule.type] }}</span>
+    <p class="te-rule-summary">{% if rule.type == 'completion' %}When {{ source.title }} completes, create a new copy of {{ target.title }}.{% elif rule.type == 'dependency' %}{{ target.title }} waits for {{ source.title }}.{% else %}Remind {{ source.title }} {{ rule.lead }} minutes before due date.{% endif %}</p>
+  </div>
+  <label class="te-enabled"><input type="checkbox" data-te-enabled {% if rule.enabled %}checked{% endif %} aria-label="Enabled: {{ source.title }}">Enabled</label>
+  <div class="te-tools">
+    <button type="button" class="te-icon" data-te-action="edit-rule" aria-label="Edit {{ rule.type }} rule for {{ source.title }}" title="Edit rule">{{ shell_icon('pencil') }}</button>
+    <button type="button" class="te-icon" data-te-action="delete-rule" aria-label="Delete {{ rule.type }} rule for {{ source.title }}" title="Delete rule">{{ shell_icon('trash-2') }}</button>
+  </div>
+</li>
+{% endmacro %}
+{% block head_scripts %}
+<link rel="stylesheet" href="/module-assets/tasks/task-examples.css?v={{ asset_version }}">
+<script src="/module-assets/tasks/task-examples.js?v={{ asset_version }}" defer></script>
+{% endblock %}
+{% block content %}
+<div class="task-examples" id="task-examples">
+  <header class="te-header">
+    <div class="te-heading"><h1>Tasks</h1><span class="te-badge">Synthetic example</span></div>
+    <a href="/tasks" class="te-back">{{ shell_icon('arrow-left') }} Back to Tasks</a>
+  </header>
+  <div class="te-tabs" role="tablist" aria-label="Tasks examples">
+    <button type="button" role="tab" id="te-list-tab" aria-selected="true" aria-controls="te-list-panel" tabindex="0">{{ shell_icon('list') }} List workspace</button>
+    <button type="button" role="tab" id="te-automation-tab" aria-selected="false" aria-controls="te-automation-panel" tabindex="-1">{{ shell_icon('settings-2') }} Automation</button>
+  </div>
+  <section id="te-list-panel" role="tabpanel" aria-labelledby="te-list-tab" tabindex="0">
+    <div class="te-toolbar">
+      <form method="dialog" id="te-capture" class="te-capture">
+        <label class="sr-only" for="te-capture-title">Task title</label><input id="te-capture-title" placeholder="Task title" maxlength="160" required autocomplete="off">
+        <button type="submit" class="te-button te-primary">{{ shell_icon('plus') }} Add task</button>
+      </form>
+      <div class="te-filters">
+        <label>Filter<input id="te-search" type="search" placeholder="Filter tasks" autocomplete="off"></label>
+        <label>Status<select id="te-filter"><option value="all">All tasks</option><option value="open">Open</option><option value="done">Completed</option></select></label>
+        <label>Project<select id="te-project"><option value="">All projects</option>{% for project in example_seed.tasks | map(attribute='project') | unique | sort %}<option>{{ project }}</option>{% endfor %}</select></label>
+        <label>Sort<select id="te-sort"><option value="order">List order</option><option value="title">Title</option><option value="priority">Priority</option><option value="due">Due date</option></select></label>
+      </div>
+    </div>
+    <div class="te-section-heading"><h2>Task list</h2><span id="te-count">{{ example_seed.tasks | length }} tasks</span></div>
+    <ul id="te-task-list" class="te-list" aria-label="Example tasks">
+      {% for task in example_seed.tasks %}
+      {% set block = namespace(value=false) %}
+      {% for rule in example_seed.rules if rule.type == 'dependency' and rule.enabled and rule.target == task.id and not task.done %}
+      {% set source = example_seed.tasks | selectattr('id', 'equalto', rule.source) | first %}
+      {% if not source.done %}{% set block.value = true %}{% endif %}
+      {% endfor %}
+      {{ task_row(task, block.value) }}
+      {% endfor %}
+    </ul>
+    <p id="te-task-empty" class="te-empty" hidden>No matching tasks.</p>
+  </section>
+  <section id="te-automation-panel" role="tabpanel" aria-labelledby="te-automation-tab" tabindex="0" hidden>
+    <div class="te-section-heading"><h2>Automation</h2><button type="button" class="te-button te-primary" id="te-add-rule" data-te-action="add-rule">{{ shell_icon('plus') }} Add rule</button></div>
+    <div class="te-tabs te-subtabs" role="tablist" aria-label="Automation views">
+      {% for kind, label in [('completion', 'Completion triggers'), ('dependency', 'Dependencies'), ('reminder', 'Reminders')] %}
+      <button type="button" role="tab" id="te-{{ kind }}-tab" aria-selected="{{ 'true' if loop.first else 'false' }}" aria-controls="te-{{ kind }}-panel" tabindex="{{ '0' if loop.first else '-1' }}" data-te-kind="{{ kind }}">{{ label }}</button>
+      {% endfor %}
+    </div>
+    {% for kind, label in [('completion', 'Completion triggers'), ('dependency', 'Dependencies'), ('reminder', 'Reminders')] %}
+    <section id="te-{{ kind }}-panel" role="tabpanel" aria-labelledby="te-{{ kind }}-tab" tabindex="0" {% if not loop.first %}hidden{% endif %}>
+      <ul class="te-list" id="te-{{ kind }}-list" aria-label="{{ label }}">{% for rule in example_seed.rules if rule.type == kind %}{{ rule_row(rule) }}{% endfor %}</ul>
+      <p class="te-empty" id="te-{{ kind }}-empty" hidden>No rules.</p>
+    </section>
+    {% endfor %}
+  </section>
+  <div class="te-status-bar"><p id="te-status" role="status" aria-live="polite" aria-atomic="true"></p><div class="te-tools"><button type="button" class="te-button" id="te-undo" data-te-action="undo" disabled>{{ shell_icon('rotate-ccw') }} Undo</button><button type="button" class="te-icon" data-te-action="reset" aria-label="Reset examples" title="Reset examples">{{ shell_icon('rotate-ccw') }}</button></div></div>
+  <dialog class="te-dialog" id="te-task-dialog" aria-labelledby="te-task-heading">
+    <div class="te-dialog-heading"><h2 id="te-task-heading">Edit task</h2><button type="button" class="te-icon" data-te-action="close" aria-label="Close task editor" title="Close">{{ shell_icon('x') }}</button></div>
+    <form method="dialog" id="te-task-form">
+      <label class="te-field">Task title<input id="te-task-title" required maxlength="160" autocomplete="off" autofocus></label>
+      <label class="te-field">Project<input id="te-task-project" required maxlength="80" autocomplete="off"></label>
+      <div class="te-form-grid"><label class="te-field">Priority<select id="te-task-priority"><option>High</option><option>Normal</option><option>Low</option></select></label><label class="te-field">Due date<input type="date" id="te-task-due" min="1900-01-01" max="9999-12-31"></label></div>
+      <label class="te-enabled"><input type="checkbox" id="te-task-recurring">Recurring</label>
+      <div class="te-dialog-actions"><button type="button" class="te-button" data-te-action="close">Cancel</button><button type="submit" class="te-button te-primary">{{ shell_icon('check') }} Save changes</button></div>
+    </form>
+  </dialog>
+  <dialog class="te-dialog" id="te-rule-dialog" aria-labelledby="te-rule-heading">
+    <div class="te-dialog-heading"><h2 id="te-rule-heading">Add rule</h2><button type="button" class="te-icon" data-te-action="close" aria-label="Close rule editor" title="Close">{{ shell_icon('x') }}</button></div>
+    <form method="dialog" id="te-rule-form">
+      <label class="te-field">Type<select id="te-rule-type" autofocus><option value="completion">Completion trigger</option><option value="dependency">Dependency</option><option value="reminder">Reminder</option></select></label>
+      <label class="te-field"><span id="te-source-label">After completing</span><select id="te-rule-source" required></select></label>
+      <label class="te-field" id="te-target-field"><span id="te-target-label">Create a new copy of</span><select id="te-rule-target" required></select></label>
+      <label class="te-field" id="te-lead-field" hidden>Lead time (minutes)<input type="number" id="te-rule-lead" min="1" max="525600" step="1" value="30" required disabled></label>
+      <label class="te-enabled"><input type="checkbox" id="te-rule-enabled" checked>Enabled</label>
+      <div class="te-dialog-actions"><button type="button" class="te-button" data-te-action="close">Cancel</button><button type="submit" class="te-button te-primary">{{ shell_icon('check') }} Save rule</button></div>
+    </form>
+  </dialog>
+  <dialog class="te-dialog" id="te-delete-dialog" aria-labelledby="te-delete-heading" aria-describedby="te-delete-description">
+    <h2 id="te-delete-heading">Delete task?</h2><p id="te-delete-description"></p>
+    <form method="dialog" id="te-delete-form"><div class="te-dialog-actions"><button type="button" class="te-button" data-te-action="close" autofocus>Cancel</button><button type="submit" class="te-button te-danger">{{ shell_icon('trash-2') }} Delete</button></div></form>
+  </dialog>
+  <template id="te-task-template">{{ task_row(example_seed.tasks[0]) }}</template>
+  <template id="te-rule-template">{{ rule_row(example_seed.rules[0]) }}</template>
+  <script type="application/json" id="te-seed">{{ example_seed | tojson }}</script>
+</div>
+{% endblock %}

@@ -137,6 +137,36 @@ class TaskBackupTests(unittest.TestCase):
         with self.assertRaisesRegex(task_backup.RestoreError, "duplicate key"):
             task_backup.parse_backup(json.dumps(payload).encode())
 
+    def test_restore_cannot_overwrite_consumed_recurring_history(self) -> None:
+        from luigi_web.modules.tasks import occurrences
+
+        engine = self._engine()
+        self.addCleanup(engine.dispose)
+        row_uuid = "44444444-4444-4444-8444-444444444444"
+        with engine.begin() as connection, patch.dict(os.environ, {"LUIGI_WEB_RECURRENCE_OWNER": "web"}):
+            occurrences.ensure_storage(connection)
+            connection.execute(text("INSERT INTO recurring_tasks (uuid, task, completed, completed_time, status) VALUES (:uuid, 'Example recurring', 1, '2030-04-10T12:00:00', 'Completed')"), {"uuid": row_uuid})
+            connection.execute(text(f"INSERT INTO {occurrences.TABLE_NAME} (parent_uuid, child_uuid, series_uuid, completed_at, due_date, generated_at) VALUES (:uuid, 'example-child', :uuid, '2030-04-10T12:00:00', '2030-04-17', '2030-04-17T08:00:00')"), {"uuid": row_uuid})
+        for metadata_only in (False, True):
+            with self.subTest(metadata_only=metadata_only):
+                payload = self._payload()
+                if metadata_only:
+                    payload["web_metadata"]["recurring_tasks"][row_uuid] = {"project": "Example changed project"}
+                else:
+                    payload["tables"]["recurring_tasks"] = [{"uuid": row_uuid, "task": "Example recurring", "completed": 0, "status": "Not Started"}]
+                parsed = task_backup.parse_backup(json.dumps(payload).encode())
+                with patch.object(db, "get_engine", return_value=engine), patch.object(db, "_WEB_META_PATH", str(self.metadata_path)):
+                    with self.assertRaisesRegex(task_backup.RestoreError, "recurring history"):
+                        task_backup.preview_restore(parsed)
+                    with self.assertRaisesRegex(task_backup.RestoreError, "recurring history"):
+                        task_backup.restore_backup(parsed)
+                with engine.connect() as connection:
+                    row = connection.execute(text("SELECT completed, completed_time FROM recurring_tasks WHERE uuid=:uuid"), {"uuid": row_uuid}).one()
+                    self.assertEqual(str(row.completed), "1")
+                    self.assertEqual(row.completed_time, "2030-04-10T12:00:00")
+                    self.assertEqual(connection.execute(text("SELECT COUNT(*) FROM tasks")).scalar_one(), 0)
+                self.assertFalse(self.metadata_path.exists())
+
     def test_prepare_bounds_pending_preview_backlog(self) -> None:
         tokens = [
             f"preview-{index}"

@@ -90,6 +90,7 @@ def admin_page(request: Request):
             "git_last": host._git_status_line(),
             "python_exe": sys.executable,
             "schema_version": host._STARTUP_SCHEMA["version"],
+            "recurrence_status": host.recurrence_status() if host._module_enabled("tasks", request) else None,
             "env_file_path": str(env_path),
             "env_file_exists": env_path.exists(),
             "env_writable": writable,

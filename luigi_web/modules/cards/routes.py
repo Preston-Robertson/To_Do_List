@@ -15,6 +15,7 @@ from . import pokemon as cards_pokemon
 from . import scryfall as cards_scryfall
 from . import sparkline as cards_sparkline
 from . import templating as cards_templating
+from . import analysis as cards_analysis
 from ...auth import require_auth
 from ...core.templating import create_templates
 from ...paths import STATIC_DIR
@@ -29,7 +30,7 @@ _BOARD_LABELS = {
     "side": "Sideboard",
     "maybe": "Maybeboard",
 }
-_STACK_LANE_SIZE = 8
+_STACK_LANE_SIZE = 40
 
 
 def _asset_version() -> str:
@@ -179,6 +180,7 @@ def _deck_state(game_code: str, deck_id: int) -> dict[str, Any]:
         ),
         "tags": cards.deck_tags(deck_id),
         "all_tags": cards.list_tags(),
+        "analysis": cards_analysis.deck_analysis(game_code, deck_id),
     }
 
 
@@ -722,28 +724,20 @@ def deck_value_trend(game_code: str, deck_id: int, days: int = Query(180)) -> Re
     )
 
 
+def _collection_guard(request: Request) -> None:
+    from .collection_routes import protect
+
+    protect(request)
+
+
 @router.get("/{game_code}/collection", response_class=HTMLResponse)
 def collection_page(request: Request, game_code: str, q: str = "") -> Response:
-    game = _require_game(game_code)
-    try:
-        rows = cards.list_collection(game_code, q)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    return _render(
-        "cards/collection.html",
-        _ctx(
-            request,
-            game_code,
-            page_title=f"{game['name']} Collection",
-            game=game,
-            rows=rows,
-            totals=cards.collection_totals(game_code),
-            q=q,
-        ),
-    )
+    from .collection_routes import collection_page as render_collection
+
+    return render_collection(request, game_code)
 
 
-@router.post("/{game_code}/collection")
+@router.post("/{game_code}/collection", dependencies=[Depends(_collection_guard)])
 def collection_add(
     request: Request,
     game_code: str,
@@ -755,8 +749,12 @@ def collection_add(
     acquired_price: str = Form(""),
     acquired_currency: str = Form("USD"),
     notes: str = Form(""),
+    price_source: str = Form("entered"),
+    estimate_confirmed: bool = Form(False),
 ) -> Response:
     _require_game(game_code)
+    if foil not in (0, 1):
+        raise HTTPException(422, "invalid foil variant")
     if not cards.get_card(card_id, game_code):
         raise HTTPException(404, "Card not found")
     try:
@@ -769,13 +767,15 @@ def collection_add(
             acquired_price=acquired_price,
             acquired_currency=acquired_currency,
             notes=notes,
+            price_source=price_source,
+            estimate_confirmed=estimate_confirmed,
         )
     except ValueError as exc:
         raise _value_error(exc) from exc
     return _refresh(request, f"/cards/{game_code}/collection")
 
 
-@router.post("/{game_code}/collection/acquisition")
+@router.post("/{game_code}/collection/acquisition", dependencies=[Depends(_collection_guard)])
 def collection_acquisition_update(
     request: Request,
     game_code: str,
@@ -783,15 +783,25 @@ def collection_acquisition_update(
     acquired_date: str = Form(""),
     acquired_price: str = Form(""),
     acquired_currency: str = Form("USD"),
+    lot_id: int | None = Form(None),
+    price_source: str = Form("entered"),
+    estimate_confirmed: bool = Form(False),
 ) -> Response:
+    from . import purchases
+
     _require_game(game_code)
     try:
+        if lot_id is None and len(purchases.lots(game_code, collection_id)) > 1:
+            raise ValueError("multiple purchases: select a purchase lot ID")
         updated = cards.update_collection_acquisition(
             collection_id,
             game_code,
             acquired_date=acquired_date,
             acquired_price=acquired_price,
             acquired_currency=acquired_currency,
+            lot_id=lot_id,
+            price_source=price_source,
+            estimate_confirmed=estimate_confirmed,
         )
     except ValueError as exc:
         raise _value_error(exc) from exc
@@ -800,7 +810,7 @@ def collection_acquisition_update(
     return _refresh(request, f"/cards/{game_code}/collection")
 
 
-@router.post("/{game_code}/collection/{collection_id}/delete")
+@router.post("/{game_code}/collection/{collection_id}/delete", dependencies=[Depends(_collection_guard)])
 def collection_delete(
     request: Request,
     game_code: str,
@@ -819,7 +829,7 @@ def collection_delete(
     return _refresh(request, f"/cards/{game_code}/collection")
 
 
-@router.post("/{game_code}/collection/{collection_id}/printing")
+@router.post("/{game_code}/collection/{collection_id}/printing", dependencies=[Depends(_collection_guard)])
 def collection_printing_update(
     request: Request,
     game_code: str,

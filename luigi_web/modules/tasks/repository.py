@@ -17,17 +17,21 @@ from __future__ import annotations
 
 import os
 import json
+import hashlib
 import threading
 import uuid as _uuid
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, date, timedelta
 from typing import Any, Iterable
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine, URL
+from sqlalchemy.exc import SQLAlchemyError
 
 from . import recurrence as recurrence_rules
 from . import events as task_events
+from . import occurrences
 from ... import clock
 from ...paths import TASK_METADATA_PATH
 
@@ -92,6 +96,7 @@ _TABLES_MISSING_COLUMNS: dict[str, set[str]] = {}
 _TASK_LIKE_TABLES = ("tasks", "recurring_tasks")
 _WEB_META_PATH = str(TASK_METADATA_PATH)
 _WEB_META_LOCK = threading.Lock()
+_UNLOADED_LINEAGE = object()
 
 
 def _read_web_metadata() -> dict[str, dict[str, dict[str, Any]]]:
@@ -117,7 +122,9 @@ def _set_web_metadata(table: str, row_uuid: str, **values: Any) -> None:
         data = _read_web_metadata()
         row = data.setdefault(table, {}).setdefault(row_uuid, {})
         for key, value in values.items():
-            if value in (None, "") or (key == "archived" and not value):
+            if table == "recurring_tasks" and key in occurrences.METADATA_FIELDS:
+                row[key] = value
+            elif value in (None, "") or (key == "archived" and not value):
                 row.pop(key, None)
             else:
                 row[key] = value
@@ -126,26 +133,39 @@ def _set_web_metadata(table: str, row_uuid: str, **values: Any) -> None:
         _write_web_metadata(data)
 
 
-def _apply_web_metadata(table: str, row: dict[str, Any]) -> dict[str, Any]:
-    fallback = _read_web_metadata().get(table, {}).get(str(row.get("uuid") or ""), {})
-    if not has_web_column(table, "project"):
-        row["project"] = fallback.get("project")
-    if not has_web_column(table, "archived"):
-        row["archived"] = int(bool(fallback.get("archived")))
-    for field in (
-        "recurring_days", "recurring_month_ordinal", "recurring_month_weekday"
-    ):
-        if not has_web_column(table, field):
-            row[field] = fallback.get(field)
-    return row
+def _apply_web_metadata(
+    table: str, row: dict[str, Any], *, recurrence_links: Any = _UNLOADED_LINEAGE,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    fallback = (metadata if metadata is not None else _read_web_metadata()).get(
+        table, {}
+    ).get(str(row.get("uuid") or ""), {})
+    if recurrence_links is _UNLOADED_LINEAGE:
+        recurrence_links = None
+        if table == "recurring_tasks":
+            with get_engine().connect() as conn:
+                recurrence_links = occurrences.lineage(conn, [str(row.get("uuid") or "")])
+    return occurrences.apply_metadata(
+        row, recurrence_links if table == "recurring_tasks" else None, fallback,
+        {field for field in occurrences.METADATA_FIELDS if not has_web_column(table, field)},
+    )
 
 
-def _visible_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _visible_rows(rows: list[dict[str, Any]], conn=None) -> list[dict[str, Any]]:
     """Filter union-query results using local archive fallback metadata."""
     out: list[dict[str, Any]] = []
+    recurring_uuids = [str(row["uuid"]) for row in rows if row.get("source") == "recurring"]
+    links = None
+    if recurring_uuids:
+        if conn is None:
+            with get_engine().connect() as read_conn:
+                links = occurrences.lineage(read_conn, recurring_uuids)
+        else:
+            links = occurrences.lineage(conn, recurring_uuids)
+    metadata = _read_web_metadata()
     for row in rows:
         table = "recurring_tasks" if row.get("source") == "recurring" else "tasks"
-        _apply_web_metadata(table, row)
+        _apply_web_metadata(table, row, recurrence_links=links, metadata=metadata)
         if not row.get("archived"):
             out.append(row)
     return out
@@ -414,7 +434,7 @@ def reactivation_date(row: dict[str, Any]) -> str | None:
     Timezone-naive on purpose — matches how the rest of the schema stores
     dates.
     """
-    if not row:
+    if not row or row.get("_recurrence_generated"):
         return None
     if not (row.get("completed") and row.get("recurring")):
         return None
@@ -504,7 +524,11 @@ def _list_task_like(table: str) -> list[dict[str, Any]]:
         ORDER BY completed ASC, priority DESC NULLS LAST, due_date ASC NULLS LAST, task ASC
     """)
     with get_engine().connect() as conn:
-        rows = [_apply_web_metadata(table, row) for row in _rows(conn.execute(q))]
+        rows = _rows(conn.execute(q))
+        links = occurrences.lineage(conn, [row["uuid"] for row in rows]) if table == "recurring_tasks" and rows else None
+        metadata = _read_web_metadata()
+        for row in rows:
+            _apply_web_metadata(table, row, recurrence_links=links, metadata=metadata)
     return [row for row in rows if not row.get("archived")]
 
 
@@ -512,7 +536,10 @@ def _get_task_like(table: str, row_uuid: str) -> dict[str, Any] | None:
     q = text(f"SELECT {', '.join(_cols_for(table))} FROM {table} WHERE uuid = :u")
     with get_engine().connect() as conn:
         row = conn.execute(q, {"u": row_uuid}).first()
-    return _apply_web_metadata(table, dict(row._mapping)) if row else None
+        if row is None:
+            return None
+        links = occurrences.lineage(conn, [row_uuid]) if table == "recurring_tasks" else None
+        return _apply_web_metadata(table, dict(row._mapping), recurrence_links=links)
 
 
 def _create_task_like(table: str, data: dict[str, Any], recurring_default: int) -> str:
@@ -619,7 +646,7 @@ def _update_task_like(table: str, row_uuid: str, data: dict[str, Any]) -> None:
         elif field in {"recurring_month_ordinal", "recurring_month_weekday"}:
             val = int(val) if val not in (None, "") else None
         elif field == "project":
-            val = str(val).strip() or None
+            val = str(val or "").strip() or None
         elif isinstance(val, str) and val == "":
             val = None
         updates[field] = val
@@ -662,39 +689,36 @@ def _update_task_like(table: str, row_uuid: str, data: dict[str, Any]) -> None:
     if status_update is not None:
         if status_update not in STATUS_VALUES:
             raise ValueError(f"invalid status: {status_update}")
-        current = _get_task_like(table, row_uuid)
-        if (
-            current
-            and status_update in {"In Progress", "Completed"}
-            and not int(current.get("completed") or 0)
-        ):
-            _assert_task_unblocked(table, row_uuid)
 
+    metadata_updates: dict[str, Any] = {}
     if "project" in updates and not has_web_column(table, "project"):
-        _set_web_metadata(table, row_uuid, project=updates.pop("project"))
+        metadata_updates["project"] = updates.pop("project")
 
-    schedule_fallback: dict[str, Any] = {}
     for field in (
         "recurring_days", "recurring_month_ordinal", "recurring_month_weekday"
     ):
         if field in updates and not has_web_column(table, field):
-            schedule_fallback[field] = updates.pop(field)
-    if schedule_fallback:
-        _set_web_metadata(table, row_uuid, **schedule_fallback)
+            metadata_updates[field] = updates.pop(field)
 
     # Drop any columns the physical table doesn't have. Same reason as in
     # _create_task_like: web-owned columns may not be present yet.
     allowed = set(_cols_for(table))
     updates = {k: v for k, v in updates.items() if k in allowed}
 
-    if updates:
-        set_clause = ", ".join(f"{k} = :{k}" for k in updates)
-        updates["u"] = row_uuid
-        q = text(f"UPDATE {table} SET {set_clause} WHERE uuid = :u")
-        with get_engine().begin() as conn:
+    with _task_write_transaction(table) as conn:
+        current = _select_task_for_update(conn, table, row_uuid)
+        if current is None:
+            return
+        _assert_occurrence_mutable(conn, table, row_uuid)
+        if updates:
+            set_clause = ", ".join(f"{k} = :{k}" for k in updates)
+            updates["u"] = row_uuid
+            q = text(f"UPDATE {table} SET {set_clause} WHERE uuid = :u")
             conn.execute(q, updates)
-    if status_update is not None:
-        _set_task_like_status(table, row_uuid, status_update)
+        if status_update is not None:
+            _set_task_like_status(table, row_uuid, status_update, _conn=conn)
+        if metadata_updates:
+            _set_web_metadata(table, row_uuid, **metadata_updates)
     if "task" in data and str(data.get("task") or "").strip():
         try:
             from . import operations
@@ -787,10 +811,37 @@ def _assert_task_unblocked(table: str, row_uuid: str) -> None:
     operations.assert_unblocked(row_uuid, source, resolve)
 
 
+@contextmanager
+def _task_write_transaction(table: str):
+    transaction = (
+        occurrences.transaction(get_engine()) if table == "recurring_tasks"
+        else get_engine().begin()
+    )
+    with transaction as conn:
+        yield conn
+
+
+def _occurrence_link(conn, table: str, row_uuid: str) -> dict[str, Any]:
+    if table != "recurring_tasks":
+        return {}
+    links = occurrences.lineage(conn, [row_uuid])
+    return (links or {}).get(row_uuid, {})
+
+
+def _assert_occurrence_mutable(conn, table: str, row_uuid: str) -> None:
+    link = _occurrence_link(conn, table, row_uuid)
+    if link.get("annotations", {}).get("_recurrence_generated"):
+        raise ValueError(occurrences.HISTORY_MESSAGE)
+
+
 def _select_task_for_update(conn, table: str, row_uuid: str):
     lock = "" if conn.dialect.name == "sqlite" else " FOR UPDATE"
+    columns = (
+        ", ".join(_cols_for(table)) if table == "recurring_tasks"
+        else "task, catagory, due_date, completed, completed_time"
+    )
     return conn.execute(text(f"""
-        SELECT task, catagory, due_date, completed, completed_time
+        SELECT {columns}
         FROM {table}
         WHERE uuid = :u{lock}
     """), {"u": row_uuid}).first()
@@ -864,6 +915,7 @@ def _set_task_like_status(
     actor_source: str = "web",
     operation_uuid: str | None = None,
     effective_date: str | None = None,
+    _conn=None,
 ) -> TaskTransition:
     if status not in STATUS_VALUES:
         raise ValueError(f"invalid status: {status}")
@@ -876,10 +928,13 @@ def _set_task_like_status(
         SET status = :s, completed = :c, completed_time = :ct
         WHERE uuid = :u
     """)
-    with get_engine().begin() as conn:
+    with (nullcontext(_conn) if _conn is not None else _task_write_transaction(table)) as conn:
         current = _select_task_for_update(conn, table, row_uuid)
         if current is None:
             return TaskTransition(completed=0)
+        if table == "recurring_tasks" and completed and int(current.completed or 0) == 1 and current.status == "Completed":
+            return TaskTransition(completed=1)
+        _assert_occurrence_mutable(conn, table, row_uuid)
         if status in {"In Progress", "Completed"} and not int(current.completed or 0):
             _assert_task_unblocked(table, row_uuid)
         conn.execute(q, {"s": status, "c": completed, "ct": completed_time, "u": row_uuid})
@@ -916,10 +971,11 @@ def _toggle_task_like_completed(
     effective_date: str | None = None,
 ) -> TaskTransition:
     """Flip completion and return the complete transition result."""
-    with get_engine().begin() as conn:
+    with _task_write_transaction(table) as conn:
         cur = _select_task_for_update(conn, table, row_uuid)
         if cur is None:
             raise LookupError(f"{table} row not found")
+        _assert_occurrence_mutable(conn, table, row_uuid)
         new_val = 0 if int(cur.completed or 0) == 1 else 1
         if new_val:
             _assert_task_unblocked(table, row_uuid)
@@ -983,12 +1039,12 @@ def _delete_task_like(table: str, row_uuid: str) -> dict[str, Any]:
 
 
 def _set_task_like_archived(table: str, row_uuid: str, archived: bool) -> bool:
-    if not has_web_column(table, "archived"):
-        if _get_task_like(table, row_uuid) is None:
-            return False
-        _set_web_metadata(table, row_uuid, archived=1 if archived else 0)
-        return True
-    with get_engine().begin() as conn:
+    with _task_write_transaction(table) as conn:
+        if not has_web_column(table, "archived"):
+            if _select_task_for_update(conn, table, row_uuid) is None:
+                return False
+            _set_web_metadata(table, row_uuid, archived=1 if archived else 0)
+            return True
         result = conn.execute(
             text(f"UPDATE {table} SET archived = :a WHERE uuid = :u"),
             {"a": 1 if archived else 0, "u": row_uuid},
@@ -1006,12 +1062,13 @@ def _set_task_like_metadata(
     if field not in {"project", "catagory"}:
         raise ValueError("bulk metadata field must be project or catagory")
     cleaned = str(value or "").strip() or None
-    if field == "project" and not has_web_column(table, "project"):
-        if _get_task_like(table, row_uuid) is None:
+    with _task_write_transaction(table) as conn:
+        if _select_task_for_update(conn, table, row_uuid) is None:
             return False
-        _set_web_metadata(table, row_uuid, project=cleaned)
-        return True
-    with get_engine().begin() as conn:
+        _assert_occurrence_mutable(conn, table, row_uuid)
+        if field == "project" and not has_web_column(table, "project"):
+            _set_web_metadata(table, row_uuid, project=cleaned)
+            return True
         result = conn.execute(
             text(f"UPDATE {table} SET {field} = :value WHERE uuid = :u"),
             {"value": cleaned, "u": row_uuid},
@@ -1031,9 +1088,11 @@ def list_archived() -> list[dict[str, Any]]:
                 {where}
                 ORDER BY completed_time DESC NULLS LAST, task ASC
             """)))
+            links = occurrences.lineage(conn, [row["uuid"] for row in found]) if table == "recurring_tasks" and found else None
+        metadata = _read_web_metadata()
         for row in found:
             row["source"] = source
-            _apply_web_metadata(table, row)
+            _apply_web_metadata(table, row, recurrence_links=links, metadata=metadata)
         rows.extend(row for row in found if row.get("archived"))
     rows.sort(key=lambda row: (row.get("completed_time") or "", row.get("task") or ""), reverse=True)
     return rows
@@ -1063,10 +1122,30 @@ def restore_task_row(
         raise ValueError("restore_task_row: snapshot is missing uuid")
     cols = _cols_for(table)
     payload = {c: snapshot.get(c) for c in cols}
-    with get_engine().begin() as conn:
-        exists = conn.execute(
-            text(f"SELECT 1 FROM {table} WHERE uuid = :u"), {"u": row_uuid}
-        ).first()
+    with _task_write_transaction(table) as conn:
+        exists = _select_task_for_update(conn, table, row_uuid)
+        link = _occurrence_link(conn, table, str(row_uuid))
+        if link.get("annotations", {}).get("_recurrence_generated"):
+            current = (
+                _apply_web_metadata(table, dict(exists._mapping), recurrence_links={str(row_uuid): link})
+                if exists else None
+            )
+            original = link.get("snapshot")
+            invalid_snapshot = (
+                int(snapshot.get("completed") or 0) != 1
+                or snapshot.get("status") != "Completed"
+                or snapshot.get("completed_time") != link.get("completed_at")
+                or bool(task_event_uuid)
+                or (current is None and not isinstance(original, dict))
+            )
+            changed_history = any(
+                previous.get(field) != snapshot.get(field)
+                and str(previous.get(field)) != str(snapshot.get(field))
+                for previous in (current, original) if isinstance(previous, dict)
+                for field in _TASK_COLUMNS if field != "archived"
+            )
+            if invalid_snapshot or changed_history:
+                raise ValueError(occurrences.HISTORY_MESSAGE)
         if exists:
             set_clause = ", ".join(f"{c} = :{c}" for c in cols if c != "uuid")
             payload["u"] = row_uuid
@@ -1120,6 +1199,12 @@ def restore_task_row(
                 related_event_uuid=task_event_uuid,
                 details={"reason": "undo completion reversal"},
             )
+        fallback = {
+            field: snapshot[field] for field in occurrences.METADATA_FIELDS
+            if field in snapshot and not has_web_column(table, field)
+        }
+        if fallback:
+            _set_web_metadata(table, str(row_uuid), **fallback)
 
 
 def _snooze_task_like(table: str, row_uuid: str, days: int) -> str | None:
@@ -1129,13 +1214,11 @@ def _snooze_task_like(table: str, row_uuid: str, days: int) -> str | None:
     that's already past its due date defers from today (not from the stale
     date). Returns the new ISO date, or ``None`` if the row is gone.
     """
-    with get_engine().begin() as conn:
-        cur = conn.execute(
-            text(f"SELECT due_date FROM {table} WHERE uuid = :u"),
-            {"u": row_uuid},
-        ).first()
+    with _task_write_transaction(table) as conn:
+        cur = _select_task_for_update(conn, table, row_uuid)
         if cur is None:
             return None
+        _assert_occurrence_mutable(conn, table, row_uuid)
         today = clock.local_today()
         base = today
         if cur.due_date:
@@ -1435,77 +1518,109 @@ def list_task_names() -> list[str]:
 
 
 def reactivate_due_recurring(today: date | None = None) -> int:
-    """Bring completed recurring tasks back once they're due again.
+    """Generate due successors without changing completed source rows.
 
-    ``reactivation_date`` computes *when* a completed recurring row should
-    next come due, but nothing acts on it — so completed recurring cards used
-    to stay parked in the Completed column forever. This sweep closes that
-    loop: for every completed recurring row whose ``reactivation_date`` is on
-    or before ``today``, it clears the completion so the card returns to its
-    board:
-
-      * ``completed``      -> 0
-      * ``completed_time`` -> NULL
-      * ``status``         -> ``'Not Started'``
-      * ``due_date``       -> the reactivation date (so the row surfaces in the
-                              overdue / upcoming widgets on the right day)
-
-    Returns the number of rows reactivated. Idempotent and safe to call on
-    every request: rows without a schedule, or whose next occurrence is still
-    in the future, are left untouched, and once reset a row no longer matches
-    the ``completed = 1`` filter.
+    Web ownership requires deployment to disable LuigiBot's legacy reset
+    scheduler. This function cannot inspect or disable that external process.
+    The historical public name and committed-count return value are retained.
     """
+    if occurrences.scheduler_owner() != "web":
+        return 0
     today = today or clock.local_today()
     cols = _cols_for("recurring_tasks")
-    q = text(f"""
-        SELECT {", ".join(cols)}
-        FROM recurring_tasks
+    generated = 0
+    try:
+        with occurrences.transaction(get_engine()) as conn:
+            occurrences.ensure_storage(conn)
+            candidates = conn.execute(text(f"""
+                SELECT uuid FROM recurring_tasks
                 WHERE completed = 1 AND recurring = 1
                     AND {_active_filter("recurring_tasks")}
-    """)
-    with get_engine().connect() as conn:
-        rows = _rows(conn.execute(q))
-        history_available = task_events.capability(conn).available
-        if history_available:
-            for row in rows:
-                row["_effective_completion_date"] = (
-                    task_events.latest_active_completion_effective_date(
-                        conn,
-                        source_task_uuid=str(row.get("uuid") or ""),
-                        source_table="recurring_tasks",
-                    )
+                ORDER BY uuid
+            """)).scalars().all()
+            history_available = task_events.capability(conn).available
+            lock = "" if conn.dialect.name == "sqlite" else " FOR UPDATE"
+            for parent_uuid in candidates:
+                current = conn.execute(text(f"""
+                    SELECT {", ".join(cols)} FROM recurring_tasks
+                    WHERE uuid = :uuid{lock}
+                """), {"uuid": parent_uuid}).mappings().first()
+                if current is None:
+                    continue
+                links = occurrences.lineage(conn, [parent_uuid])
+                if links is None:
+                    raise occurrences.OccurrenceStorageError(occurrences.STORAGE_MESSAGE)
+                source = occurrences.apply_metadata(
+                    dict(current), links,
+                    _read_web_metadata().get("recurring_tasks", {}).get(parent_uuid, {}),
+                    _TABLES_MISSING_COLUMNS.get("recurring_tasks", set()),
                 )
-
-    due: list[tuple[str, str]] = []
-    for row in rows:
-        _apply_web_metadata("recurring_tasks", row)
-        if row.get("archived"):
-            continue
-        next_iso = reactivation_date(row)
-        if not next_iso:
-            continue
-        try:
-            next_date = date.fromisoformat(next_iso)
-        except (ValueError, TypeError):
-            continue
-        if next_date <= today:
-            due.append((row["uuid"], next_iso))
-
-    if not due:
-        return 0
-
-    upd = text("""
-        UPDATE recurring_tasks
-        SET completed = 0,
-            completed_time = NULL,
-            status = 'Not Started',
-            due_date = :d
-        WHERE uuid = :u
-    """)
-    with get_engine().begin() as conn:
-        for row_uuid, next_iso in due:
-            conn.execute(upd, {"d": next_iso, "u": row_uuid})
-    return len(due)
+                if (
+                    source.get("_recurrence_generated") or int(source.get("archived") or 0)
+                    or int(source.get("completed") or 0) != 1
+                    or int(source.get("recurring") or 0) != 1
+                    or source.get("status") != "Completed"
+                ):
+                    continue
+                if history_available:
+                    source["_effective_completion_date"] = (
+                        task_events.latest_active_completion_effective_date(
+                            conn, source_task_uuid=parent_uuid,
+                            source_table="recurring_tasks",
+                        )
+                    )
+                next_iso = reactivation_date(source)
+                if not next_iso or date.fromisoformat(next_iso) > today:
+                    continue
+                child = occurrences.occurrence_payload(source, next_iso, now_iso())
+                if conn.execute(text("SELECT 1 FROM recurring_tasks WHERE uuid = :uuid"), {"uuid": child["uuid"]}).first():
+                    raise occurrences.OccurrenceStorageError(occurrences.STORAGE_MESSAGE)
+                ledger = {
+                    "parent_uuid": parent_uuid,
+                    "child_uuid": child["uuid"],
+                    "series_uuid": source["_recurrence_series_uuid"],
+                    "completed_at": source["completed_time"],
+                    "due_date": next_iso,
+                    "generated_at": child["task_creation"],
+                    "metadata_json": json.dumps({
+                        **{field: child.get(field) for field in occurrences.METADATA_FIELDS},
+                        "_parent_snapshot": {field: source.get(field) for field in _TASK_COLUMNS},
+                    }, sort_keys=True, default=str),
+                }
+                conn.execute(text(f"""
+                    INSERT INTO {occurrences.TABLE_NAME} (
+                        parent_uuid, child_uuid, series_uuid, completed_at,
+                        due_date, generated_at, metadata_json
+                    ) VALUES (
+                        :parent_uuid, :child_uuid, :series_uuid, :completed_at,
+                        :due_date, :generated_at, :metadata_json
+                    )
+                """), ledger)
+                payload = {field: child[field] for field in cols}
+                conn.execute(text(f"""
+                    INSERT INTO recurring_tasks ({", ".join(payload)})
+                    VALUES ({", ".join(f':{field}' for field in payload)})
+                """), payload)
+                saved_child = conn.execute(text(f"""
+                    SELECT {", ".join(cols)} FROM recurring_tasks WHERE uuid = :uuid
+                """), {"uuid": child["uuid"]}).mappings().one_or_none()
+                saved_link = conn.execute(text(f"""
+                    SELECT {", ".join(ledger)} FROM {occurrences.TABLE_NAME}
+                    WHERE parent_uuid = :parent_uuid
+                """), {"parent_uuid": parent_uuid}).mappings().first()
+                if (
+                    saved_child is None or saved_link is None
+                    or dict(saved_link) != ledger
+                    or any(
+                        saved_child[field] != value and str(saved_child[field]) != str(value)
+                        for field, value in payload.items()
+                    )
+                ):
+                    raise occurrences.OccurrenceStorageError(occurrences.STORAGE_MESSAGE)
+                generated += 1
+    except SQLAlchemyError:
+        raise occurrences.OccurrenceStorageError(occurrences.STORAGE_MESSAGE) from None
+    return generated
 
 
 # --------------------------------------------------------------------------- #
@@ -1624,6 +1739,25 @@ def update_discipline(row_uuid: str, data: dict[str, Any]) -> None:
             _refresh_discipline_streak(conn, new_task)
 
 
+def set_discipline_active(row_uuid: str, active: bool) -> bool:
+    """Commit only a verified active-state change, preserving all history."""
+    requested = int(active)
+    with get_engine().begin() as conn:
+        conn.execute(
+            text("UPDATE discipline_list SET active = :active WHERE uuid = :u"),
+            {"active": requested, "u": row_uuid},
+        )
+        row = conn.execute(
+            text("SELECT active FROM discipline_list WHERE uuid = :u"),
+            {"u": row_uuid},
+        ).first()
+        if row is None:
+            return False
+        if row.active != requested:
+            raise RuntimeError("Discipline active state could not be verified")
+    return True
+
+
 def deactivate_discipline(row_uuid: str) -> None:
     with get_engine().begin() as conn:
         conn.execute(
@@ -1740,6 +1874,127 @@ def list_completions_for_year(year: int) -> dict[str, set[str]]:
             day = (raw.isoformat() if hasattr(raw, "isoformat") else str(raw))[:10]
             result.setdefault(row.task, set()).add(day)
     return result
+
+
+def list_discipline_completions_between(start: date, end: date) -> dict[str, set[str]]:
+    """Return legacy text-keyed completion days in one inclusive bounded read."""
+    result: dict[str, set[str]] = {}
+    with get_engine().connect() as conn:
+        rows = conn.execute(
+            text("""
+                SELECT task, completed_date
+                FROM discipline_completions
+                WHERE completed_date >= :start AND completed_date < :end
+            """),
+            {"start": start.isoformat(), "end": (end + timedelta(days=1)).isoformat()},
+        )
+        for row in rows:
+            raw = row.completed_date
+            day = (raw.isoformat() if hasattr(raw, "isoformat") else str(raw))[:10]
+            result.setdefault(row.task, set()).add(day)
+    return result
+
+
+def list_discipline_history(task: str, start: date, end: date) -> list[dict[str, Any]]:
+    """Read one discipline's dated records without inventing completion times."""
+    if end < start or (end - start).days > 370:
+        raise ValueError("History requires a bounded date range")
+    with get_engine().connect() as connection:
+        rows = connection.execute(text("""
+            SELECT task, catagory, completed_date, logged_at
+            FROM discipline_completions
+            WHERE LOWER(TRIM(task)) = LOWER(TRIM(:task))
+              AND completed_date >= :start AND completed_date < :end
+            ORDER BY completed_date DESC, logged_at DESC
+        """), {
+            "task": task, "start": start.isoformat(),
+            "end": (end + timedelta(days=1)).isoformat(),
+        })
+        return [dict(row._mapping) for row in rows]
+
+
+class DisciplineHistoryConflict(ValueError):
+    """History changed or the requested correction is no longer allowed."""
+
+
+def discipline_history_version(rows: list[dict[str, Any]]) -> str:
+    encoded = sorted(json.dumps(row, sort_keys=True, default=str) for row in rows)
+    return hashlib.sha256(json.dumps(encoded).encode("utf-8")).hexdigest()
+
+
+@contextmanager
+def _discipline_history_transaction():
+    with get_engine().connect() as connection:
+        if connection.dialect.name == "sqlite":
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
+        else:
+            connection.begin()
+        try:
+            yield connection
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+
+
+def change_discipline_history(
+    row_uuid: str, day: date, expected_version: str, marked: bool,
+    *, restore: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compare and write one legacy day, retaining exact rows for short-lived Undo."""
+    today = clock.local_today()
+    if day > today or day.year < 1900:
+        raise DisciplineHistoryConflict("This date cannot be changed")
+    with _discipline_history_transaction() as connection:
+        lock = "" if connection.dialect.name == "sqlite" else " FOR UPDATE"
+        discipline = connection.execute(text(
+            "SELECT uuid, task, catagory, active FROM discipline_list WHERE uuid = :uuid" + lock
+        ), {"uuid": row_uuid}).mappings().first()
+        if discipline is None:
+            raise DisciplineHistoryConflict("Discipline is unavailable")
+        if not int(discipline["active"] or 0) and day >= today:
+            raise DisciplineHistoryConflict("Paused disciplines only allow past-date corrections")
+        task = str(discipline["task"])
+        identities = connection.execute(text(
+            "SELECT uuid FROM discipline_list WHERE LOWER(TRIM(task)) = LOWER(TRIM(:task))"
+        ), {"task": task}).all()
+        if len(identities) != 1 or (restore is not None and restore["task"] != task):
+            raise DisciplineHistoryConflict("Discipline identity changed or is ambiguous")
+        parameters = {"task": task, "start": day.isoformat(), "end": (day + timedelta(days=1)).isoformat()}
+        condition = "LOWER(TRIM(task)) = LOWER(TRIM(:task)) AND completed_date >= :start AND completed_date < :end"
+        statement = "SELECT task, catagory, completed_date, logged_at FROM discipline_completions WHERE " + condition
+        before = [dict(row) for row in connection.execute(text(statement + lock), parameters).mappings()]
+        if discipline_history_version(before) != expected_version:
+            raise DisciplineHistoryConflict("History changed; reload before saving")
+        if restore is not None:
+            desired = restore["before"]
+        elif marked:
+            desired = before or [{
+                "task": task, "catagory": discipline["catagory"],
+                "completed_date": day.isoformat(), "logged_at": now_iso(),
+            }]
+        else:
+            desired = []
+        changed = discipline_history_version(desired) != expected_version
+        if changed:
+            connection.execute(text("DELETE FROM discipline_completions WHERE " + condition), parameters)
+            if desired:
+                connection.execute(text("""
+                    INSERT INTO discipline_completions (task, catagory, completed_date, logged_at)
+                    VALUES (:task, :catagory, :completed_date, :logged_at)
+                """), desired)
+        after = [dict(row) for row in connection.execute(text(statement), parameters).mappings()]
+        if discipline_history_version(after) != discipline_history_version(desired):
+            raise RuntimeError("History save could not be verified")
+    committed = list_discipline_history(task, day, day)
+    if discipline_history_version(committed) != discipline_history_version(after):
+        raise RuntimeError("History save could not be verified")
+    if changed:
+        _try_refresh_discipline_streak(task)
+    return {
+        "task": task, "day": day.isoformat(), "before": before,
+        "after_version": discipline_history_version(after), "changed": changed,
+    }
 
 
 def list_completion_tasks_for_day(day: str) -> set[str]:
@@ -2084,7 +2339,7 @@ def list_open_tasks(limit: int | None = 20) -> list[dict[str, Any]]:
         {lim}
     """)
     with get_engine().connect() as conn:
-        return _visible_rows(_rows(conn.execute(q)))
+        return _visible_rows(_rows(conn.execute(q)), conn)
 
 
 def list_disciplines_pending_today() -> list[dict[str, Any]]:
@@ -2326,7 +2581,7 @@ def list_overdue_tasks(limit: int | None = 10) -> list[dict[str, Any]]:
         {lim}
     """)
     with get_engine().connect() as conn:
-        return _visible_rows(_rows(conn.execute(q, {"today": today})))
+        return _visible_rows(_rows(conn.execute(q, {"today": today})), conn)
 
 
 def list_upcoming_tasks(days: int = 7, limit: int | None = 10) -> list[dict[str, Any]]:
@@ -2354,7 +2609,7 @@ def list_upcoming_tasks(days: int = 7, limit: int | None = 10) -> list[dict[str,
         {lim}
     """)
     with get_engine().connect() as conn:
-        return _visible_rows(_rows(conn.execute(q, {"today": today.isoformat(), "end": end})))
+        return _visible_rows(_rows(conn.execute(q, {"today": today.isoformat(), "end": end})), conn)
 
 
 def list_recent_completions(limit: int = 8) -> list[dict[str, Any]]:
@@ -2373,7 +2628,7 @@ def list_recent_completions(limit: int = 8) -> list[dict[str, Any]]:
         LIMIT {int(limit)}
     """)
     with get_engine().connect() as conn:
-        return _visible_rows(_rows(conn.execute(q)))
+        return _visible_rows(_rows(conn.execute(q)), conn)
 
 
 def list_discipline_streaks(limit: int = 8) -> list[dict[str, Any]]:
@@ -2663,15 +2918,15 @@ def list_project_rows(
     from sqlalchemy import bindparam
     q = text(sql).bindparams(bindparam("projects", expanding=True))
     with get_engine().connect() as conn:
-        return _visible_rows(_rows(conn.execute(q, {"projects": selected})))
+        return _visible_rows(_rows(conn.execute(q, {"projects": selected})), conn)
 
 
 def list_calendar_rows(start: date, end: date) -> list[dict[str, Any]]:
         """Non-archived dated tasks for a calendar range, across both tables."""
-        project_task = "project" if has_web_column("tasks", "project") else "NULL::text AS project"
+        project_task = "project" if has_web_column("tasks", "project") else "CAST(NULL AS TEXT) AS project"
         project_rec = (
                 "project" if has_web_column("recurring_tasks", "project")
-                else "NULL::text AS project"
+                else "CAST(NULL AS TEXT) AS project"
         )
         q = text(f"""
                 SELECT uuid, task, priority, status, due_date, completed, catagory,
@@ -2693,7 +2948,7 @@ def list_calendar_rows(start: date, end: date) -> list[dict[str, Any]]:
             return _visible_rows(_rows(conn.execute(q, {
                         "start": start.isoformat(),
                         "end": end.isoformat(),
-            })))
+            })), conn)
 
 
 # --------------------------------------------------------------------------- #
@@ -2727,7 +2982,7 @@ def find_tasks_by_name(
         LIMIT {int(limit)}
     """)
     with get_engine().connect() as conn:
-        return _visible_rows(_rows(conn.execute(q, {"p": pattern})))
+        return _visible_rows(_rows(conn.execute(q, {"p": pattern})), conn)
 
 
 def find_discipline_by_name(query: str) -> dict[str, Any] | None:

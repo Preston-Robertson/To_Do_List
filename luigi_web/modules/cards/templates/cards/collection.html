@@ -1,63 +1,87 @@
 {% extends "cards/layout.html" %}
+{% from "cards/partials/icons.html" import icon %}
+{% block head_scripts %}
+{{ super() }}
+<link rel="stylesheet" href="/static/css/collection.css?v=4">
+<script src="/static/js/collection.js?v=4" defer></script>
+{% endblock %}
 {% block cards_content %}
+<div data-collection-page data-game="{{ current_game }}">
 <header class="cards-page-header">
-  <div><p class="cards-kicker">{{ game.name }}</p><h1>Collection</h1><p>{{ totals.qty }} cards</p></div>
-  <button type="button" class="btn btn-primary" data-cards-dialog-open="collection-add-dialog">Record purchase</button>
+  <div><p class="cards-kicker">{{ game.name }}</p><h1>Collection</h1><p>{{ totals.holdings }} matching holdings / {{ all_totals.holdings }} total &middot; {{ totals.qty }} / {{ all_totals.qty }} copies</p></div>
+  <div class="collection-toolbar">
+    <button class="btn" type="button" data-collection-history title="Removed purchase history">{{ icon('calendar-days') }} History</button>
+    <button class="btn" type="button" data-collection-export>{{ icon('download') }} CSV</button>
+    <button class="btn" type="button" data-collection-open="collection-import">{{ icon('upload') }} Import</button>
+    <button class="btn btn-primary" type="button" data-collection-open="collection-purchase">{{ icon('plus') }} Record purchase</button>
+  </div>
 </header>
-{% if totals.qty %}
-<div class="cards-stat-grid collection-value-summary">
-  <div><span>Market value</span><strong>{{ totals.value_usd_minor | money_minor }}</strong><small>All {{ totals.qty }} cards</small></div>
-  <div><span>Purchase cost</span><strong>{% if totals.cost_basis_qty %}{{ totals.cost_basis_usd_minor | money_minor }}{% else %}-{% endif %}</strong><small>{{ totals.cost_basis_qty }} cards with USD cost</small></div>
-  <div><span>Gain / loss</span><strong class="{% if totals.gain_loss_usd_minor > 0 %}value-positive{% elif totals.gain_loss_usd_minor < 0 %}value-negative{% endif %}">{% if totals.comparison_qty %}{{ totals.gain_loss_usd_minor | signed_money_minor }}{% else %}-{% endif %}</strong><small>{{ totals.comparison_qty }} comparable cards</small></div>
-  <div><span>Return</span><strong class="{% if totals.gain_loss_basis_points is not none and totals.gain_loss_basis_points > 0 %}value-positive{% elif totals.gain_loss_basis_points is not none and totals.gain_loss_basis_points < 0 %}value-negative{% endif %}">{{ totals.gain_loss_basis_points | percent_basis_points }}</strong><small>USD purchases with market prices</small></div>
+<div class="collection-summary">
+  <div><span>Market &middot; {{ filters.currency }}</span><strong>{{ totals.market_minor | money_minor(filters.currency) if totals.market_minor is not none else 'Unavailable' }}</strong><small>{{ totals.unpriced_qty }} copies unpriced</small></div>
+  <div><span>Actual paid &middot; {{ filters.currency }}</span><strong>{{ totals.actual_cost_minor | money_minor(filters.currency) if totals.actual_cost_minor is not none else 'Not recorded' }}</strong><small>Remaining purchased copies</small></div>
+  <div><span>Estimated cost &middot; {{ filters.currency }}</span><strong>{{ totals.estimate_cost_minor | money_minor(filters.currency) if totals.estimate_cost_minor is not none else 'Not recorded' }}</strong><small>Historical market estimates</small></div>
+  <div><span>Legacy cost &middot; {{ filters.currency }}</span><strong>{{ totals.legacy_cost_minor | money_minor(filters.currency) if totals.legacy_cost_minor is not none else 'Not recorded' }}</strong><small>{{ totals.unknown_cost_qty }} copies with unknown cost</small></div>
 </div>
-{% endif %}
-<form method="get" class="cards-filter-bar"><label class="cards-search-field"><span class="sr-only">Filter collection</span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input type="search" name="q" value="{{ q }}" placeholder="Filter by card name"></label><button class="btn" type="submit">Apply</button></form>
-<div class="cards-table-scroll cards-collection-list">
+<p class="collection-asof">Market snapshots: {{ totals.price_asof_min or 'Unavailable' }}{% if totals.price_asof_max != totals.price_asof_min %} to {{ totals.price_asof_max }}{% endif %}</p>
+<form class="collection-filters" data-collection-filters method="post" action="/cards/{{ current_game }}/collection/query">
+  <label>Card name<input type="search" name="q" value="{{ filters.q }}" maxlength="100"></label>
+  <label>Set<select name="set_code"><option value="">All sets</option>{% for value in sets %}<option value="{{ value }}" {{ 'selected' if filters.set_code == value }}>{{ value | upper }}</option>{% endfor %}</select></label>
+  <label>Rarity<select name="rarity"><option value="">All rarities</option>{% for value in rarities %}<option value="{{ value }}" {{ 'selected' if filters.rarity == value }}>{{ value | title }}</option>{% endfor %}</select></label>
+  <label>Finish<select name="foil"><option value="">All finishes</option><option value="0" {{ 'selected' if filters.foil == '0' }}>Regular</option><option value="1" {{ 'selected' if filters.foil == '1' }}>Foil</option></select></label>
+  <label>Condition<select name="condition"><option value="">All conditions</option>{% for value in ['NM','LP','MP','HP','DMG'] %}<option {{ 'selected' if filters.condition == value }}>{{ value }}</option>{% endfor %}</select></label>
+  <label>Active decks<select name="in_decks"><option value="">All holdings</option><option value="yes" {{ 'selected' if filters.in_decks == 'yes' }}>In decks</option><option value="no" {{ 'selected' if filters.in_decks == 'no' }}>Not in decks</option></select></label>
+  <label>Deck coverage<select name="ownership"><option value="">All holdings</option><option value="shortfall" {{ 'selected' if filters.ownership == 'shortfall' }}>Copies needed</option><option value="covered" {{ 'selected' if filters.ownership == 'covered' }}>Covered</option></select></label>
+  <label>Currency<select name="currency"><option {{ 'selected' if filters.currency == 'USD' }}>USD</option><option {{ 'selected' if filters.currency == 'EUR' }}>EUR</option></select></label>
+  <label>Market unit min<input name="min_price" type="number" min="0" step="0.01" value="{{ filters.min_price }}"></label>
+  <label>Market unit max<input name="max_price" type="number" min="0" step="0.01" value="{{ filters.max_price }}"></label>
+  <label>Per page<select name="page_size">{% for size in [50,100,200] %}<option value="{{ size }}" {{ 'selected' if filters.page_size == size }}>{{ size }}</option>{% endfor %}</select></label>
+  <button class="btn" type="submit">{{ icon('settings-2') }} Apply</button>
+  <a class="btn" href="/cards/{{ current_game }}/collection" aria-label="Reset filters" title="Reset filters">{{ icon('rotate-ccw') }}</a>
+</form>
+<p data-collection-error role="alert" hidden></p>
+<div class="cards-table-scroll collection-holdings">
 <table class="collection-table">
-  <thead><tr><th scope="col">Card</th><th scope="col">Set</th><th scope="col">Qty</th><th scope="col">Variant</th><th scope="col">Condition</th><th scope="col">Paid</th><th scope="col">Now</th><th scope="col">Gain / loss</th><th scope="col">Decks</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
-  <tbody>
-  {% for item in rows %}
+  <thead><tr><th>Card</th><th>Held</th><th>Acquisition cost</th><th>Market &middot; {{ filters.currency }}</th><th>Actual gain / loss</th><th>Decks</th><th><span class="sr-only">Actions</span></th></tr></thead>
+  <tbody>{% for item in rows %}
   <tr>
-    <td class="collection-card-cell"><button type="button" class="deck-card-name card-detail-trigger" data-card-detail-url="/cards/{{ current_game }}/cards/{{ item.card_id }}/detail?collection_id={{ item.id }}">{% if item.image_small %}<img src="{{ item.image_small }}" alt="" loading="lazy" data-card-preview="{{ item.image_normal or item.image_small }}">{% endif %}<span><strong>{{ item.name }}</strong>{% if item.notes %}<small>{{ item.notes }}</small>{% endif %}</span></button></td>
-    <td data-label="Set">{{ item.set_code|upper if item.set_code else '-' }}{% if item.collector_number %} · {{ item.collector_number }}{% endif %}</td>
-    <td data-label="Quantity">{{ item.qty }}</td>
-    <td data-label="Variant">{{ 'Foil' if item.foil else 'Regular' }}</td>
-    <td data-label="Condition">{{ item.condition }}</td>
-    <td data-label="Paid">{% if item.purchase_cost_minor is not none %}<strong>{{ item.purchase_cost_minor | money_minor(item.acquired_currency) }}</strong><br><small>{{ item.acquired_price_minor | money_minor(item.acquired_currency) }} each{% if item.acquired_qty != item.qty %} · {{ item.acquired_qty }} of {{ item.qty }} costed{% endif %}{% if item.acquired_date %} · {{ item.acquired_date }}{% endif %}</small>{% elif item.acquired_date %}<span>-</span><br><small>{{ item.acquired_date }}</small>{% else %}<span class="cards-value-muted">Not recorded</span>{% endif %}</td>
-    <td data-label="Now">{% if item.current_value_usd_minor is not none %}<strong>{{ item.current_value_usd_minor | money_minor }}</strong><br><small>{{ item.current_unit_usd_minor | money_minor }} each</small>{% else %}<span class="cards-value-muted">No market price</span>{% endif %}</td>
-    <td data-label="Gain / loss">{% if item.gain_loss_usd_minor is not none %}<strong class="{% if item.gain_loss_usd_minor > 0 %}value-positive{% elif item.gain_loss_usd_minor < 0 %}value-negative{% endif %}">{{ item.gain_loss_usd_minor | signed_money_minor }}</strong>{% if item.gain_loss_basis_points is not none %}<br><small>{{ item.gain_loss_basis_points | percent_basis_points }}</small>{% endif %}{% elif item.acquired_price_minor is not none and item.acquired_currency != 'USD' %}<span class="cards-value-muted">Currency differs</span>{% else %}<span class="cards-value-muted">Not available</span>{% endif %}</td>
-    <td data-label="Decks">{{ item.in_decks }}</td>
-    <td class="collection-actions-cell">
-      <button type="button" class="cards-icon-button cards-icon-button-edit" aria-label="Edit purchase for {{ item.name }}" data-collection-acquisition-edit data-collection-id="{{ item.id }}" data-card-name="{{ item.name }}" data-acquired-date="{{ item.acquired_date or '' }}" data-acquired-price-minor="{{ item.acquired_price_minor if item.acquired_price_minor is not none else '' }}" data-acquired-currency="{{ item.acquired_currency }}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l11-11-4-4L4 16v4ZM13 7l4 4"/></svg></button>
-      <form method="post" action="/cards/{{ current_game }}/collection/{{ item.id }}/delete" hx-post="/cards/{{ current_game }}/collection/{{ item.id }}/delete" hx-swap="none" hx-confirm="Remove this collection entry?"><button type="submit" class="cards-icon-button" aria-label="Remove {{ item.name }}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg></button></form>
-    </td>
+    <td class="collection-identity"><button type="button" class="deck-card-name" data-collection-detail="{{ item.id }}">{% if item.image_small %}<img src="{{ item.image_small }}" alt="" width="34" height="48" loading="lazy">{% endif %}<span><strong>{{ item.name }}</strong><small>{{ item.set_code | upper if item.set_code else '-' }} {{ item.collector_number or '' }} &middot; {{ item.rarity or '' }}</small></span></button></td>
+    <td data-label="Held">{{ item.qty }} &middot; {{ 'Foil' if item.foil else 'Regular' }} &middot; {{ item.condition }}</td>
+    <td data-label="Acquisition cost">{% if item.actual_cost_minor is not none %}<strong>Actual {{ item.actual_cost_minor | money_minor(item.acquired_currency) }}</strong>{% endif %}{% if item.estimate_cost_minor is not none %}<small>Estimated {{ item.estimate_cost_minor | money_minor(item.acquired_currency) }}</small>{% endif %}{% if item.legacy_cost_minor is not none %}<small>Legacy {{ item.legacy_cost_minor | money_minor(item.acquired_currency) }}</small>{% endif %}<small>{{ item.qty - item.acquired_qty }} unknown-cost copies</small></td>
+    <td data-label="Market">{% if item.market_unit_minor is not none %}<strong>{{ (item.qty * item.market_unit_minor) | money_minor(filters.currency) }}</strong><small>{{ item.market_unit_minor | money_minor(filters.currency) }} each &middot; {{ item.price_updated_at or 'Date unavailable' }}</small>{% else %}Unavailable{% endif %}</td>
+    <td data-label="Actual gain / loss">{% if item.actual_qty and item.market_unit_minor is not none and item.acquired_currency == filters.currency %}{{ (item.actual_qty * item.market_unit_minor - item.actual_cost_minor) | money_minor(filters.currency) }}<small>{{ item.actual_qty }} actual-cost copies</small>{% else %}Unavailable{% endif %}</td>
+    <td data-label="Decks">{{ item.in_decks }}<small>{{ item.owned_qty }} owned / {{ item.deck_qty }} in decks</small></td>
+    <td class="collection-row-actions"><button class="cards-icon-button" type="button" title="Purchase history" aria-label="Purchase history for {{ item.name }}" data-collection-detail="{{ item.id }}">{{ icon('calendar-days') }}</button><form method="post" action="/cards/{{ current_game }}/collection/{{ item.id }}/delete" data-collection-submit data-collection-remove><button class="cards-icon-button" type="submit" title="Remove holding" aria-label="Remove {{ item.name }}">{{ icon('trash-2') }}</button></form></td>
   </tr>
-  {% else %}<tr><td colspan="10"><div class="cards-empty"><h2>Your collection is empty</h2><p>Add cards from the catalog or search below.</p></div></td></tr>{% endfor %}
-  </tbody>
+  {% else %}<tr><td colspan="7" class="cards-empty"><h2>No matching holdings</h2></td></tr>{% endfor %}</tbody>
 </table>
 </div>
-
-<dialog class="cards-dialog cards-dialog-wide" id="collection-add-dialog">
-  <div class="cards-dialog-body">
-    <header><h2>Choose a card</h2><button type="button" data-cards-dialog-close aria-label="Close">&times;</button></header>
-    <form class="cards-live-search" hx-get="/cards/{{ current_game }}/search" hx-target="#collection-search-results" hx-trigger="submit, input changed delay:250ms from:input[name=q]" hx-sync="this:replace"><input type="hidden" name="for_collection" value="true"><label><span class="sr-only">Search cards</span><input type="search" name="q" placeholder="Search card names" autocomplete="off" autofocus></label></form>
-    <div id="collection-search-results" class="cards-search-results"></div>
-    <footer><button type="button" class="btn" data-cards-dialog-close>Close</button></footer>
-  </div>
-</dialog>
-
-<dialog class="cards-dialog" id="collection-acquisition-dialog">
-  <form method="post" action="/cards/{{ current_game }}/collection/acquisition" hx-post="/cards/{{ current_game }}/collection/acquisition" hx-swap="none">
-    <header><h2>Edit purchase</h2><button type="button" data-cards-dialog-close aria-label="Close">&times;</button></header>
-    <p class="cards-selected-name" data-acquisition-card-name></p>
-    <input type="hidden" name="collection_id" data-acquisition-collection-id>
-    <div class="cards-form-grid">
-      <label>Purchase date<input type="date" name="acquired_date" data-acquisition-date></label>
-      <label>Price paid per card<input type="number" name="acquired_price" min="0" step="0.01" inputmode="decimal" data-acquisition-price></label>
-      <label>Currency<select name="acquired_currency" data-acquisition-currency><option>USD</option><option>EUR</option></select></label>
-    </div>
-    <footer><button type="button" class="btn" data-cards-dialog-close>Cancel</button><button class="btn btn-primary" type="submit">Save purchase</button></footer>
+<nav class="collection-pagination" aria-label="Collection pages">
+  <button type="button" class="btn" data-collection-page-number="{{ filters.page - 1 }}" {{ 'disabled' if filters.page <= 1 }} aria-label="Previous page" title="Previous page">{{ icon('arrow-left') }}</button>
+  <span>Page {{ filters.page }} of {{ pages }}</span>
+  <button type="button" class="btn" data-collection-page-number="{{ filters.page + 1 }}" {{ 'disabled' if filters.page >= pages }} aria-label="Next page" title="Next page">{{ icon('chevron-right') }}</button>
+</nav>
+<dialog id="collection-detail" class="cards-dialog collection-drawer"><header><h2>Purchase history</h2><button type="button" class="cards-icon-button" data-collection-close title="Close" aria-label="Close">{{ icon('x') }}</button></header><div data-collection-detail-body></div></dialog>
+<dialog id="collection-purchase" class="cards-dialog cards-dialog-wide">
+  <header><h2>Record purchase</h2><button type="button" class="cards-icon-button" data-collection-close title="Close" aria-label="Close">{{ icon('x') }}</button></header>
+  <form class="cards-live-search" hx-post="/cards/{{ current_game }}/collection/search" hx-target="#collection-search-results" hx-trigger="submit, input changed delay:250ms from:input[name=q]" hx-sync="this:replace">
+    <label>Catalog search<input type="search" name="q" maxlength="100" autocomplete="off"></label><button class="btn" type="submit" aria-label="Search catalog" title="Search catalog">{{ icon('search') }}</button>
+  </form>
+  <div id="collection-search-results" class="collection-search-results" data-collection-search-results aria-live="polite"></div>
+  <form method="post" action="/cards/{{ current_game }}/collection" data-collection-submit data-collection-purchase>
+    <p data-collection-selected>No card selected</p><input type="hidden" name="card_id" value="">
+    {% set lot = none %}{% include 'cards/partials/collection_purchase_fields.html' %}
+    <label>Notes<textarea name="notes" maxlength="5000" rows="2"></textarea></label>
+    <p data-collection-form-error role="alert" hidden></p>
+    <footer><button class="btn" type="button" data-collection-close>Cancel</button><button class="btn btn-primary" type="submit">{{ icon('plus') }} Record purchase</button></footer>
   </form>
 </dialog>
+<dialog id="collection-import" class="cards-dialog cards-dialog-wide">
+  <header><h2>Import collection CSV</h2><button class="cards-icon-button" type="button" data-collection-close aria-label="Close" title="Close">{{ icon('x') }}</button></header>
+  <form action="/cards/{{ current_game }}/collection/import/preview" method="post" enctype="multipart/form-data" data-collection-preview>
+    <label>CSV file &middot; 500 KB / 2000 rows<input type="file" name="upload" accept=".csv,text/csv" required></label>
+    <label>Duplicate holdings<select name="duplicate_mode" required><option value="">Choose a mode</option><option value="add">Add purchases</option><option value="skip">Skip duplicates</option><option value="reject">Reject duplicates</option></select></label>
+    <button type="submit" class="btn">{{ icon('search') }} Preview</button><p data-collection-form-error role="alert" hidden></p>
+  </form><div data-collection-preview-body></div>
+</dialog>
+</div>
 {% endblock %}

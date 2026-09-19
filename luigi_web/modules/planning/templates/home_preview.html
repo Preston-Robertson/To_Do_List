@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% macro module_enabled(name) %}{% endmacro %}
+{% block head_scripts %}
+<link rel="stylesheet" href="/module-assets/planning/home-preview.css?v={{ asset_version }}">
+<script src="/module-assets/planning/home-preview.js?v={{ asset_version }}" defer></script>
+{% endblock %}
+{% block content %}
+<div class="home-preview" id="home-preview">
+  <div class="hp-banner">
+    <span>{{ shell_icon('layers') }} Synthetic preview</span>
+    <a href="/home">{{ shell_icon('arrow-left') }} Back to Home</a>
+  </div>
+  <header class="hp-header">
+    <div><div class="hp-title"><h1>Today</h1><span class="hp-badge">Preview</span></div><p>{{ preview_date }}</p></div>
+    <div class="hp-actions">
+      <button type="button" class="hp-tool" data-preview-action="reset" aria-label="Reset demo" title="Reset demo" data-shell-tooltip="Reset demo">{{ shell_icon('rotate-ccw') }}</button>
+      <button type="button" class="hp-button hp-primary" data-preview-action="add">{{ shell_icon('plus') }} Add task</button>
+    </div>
+  </header>
+  <noscript><p>Synthetic preview interactions require JavaScript.</p></noscript>
+  <div class="hp-layout">
+    <div class="hp-main-column">
+      <section class="hp-tasks" aria-labelledby="hp-tasks-heading">
+        <div class="hp-section-heading"><h2 id="hp-tasks-heading">Tasks</h2><span id="hp-attention" class="hp-attention" hidden>{{ shell_icon('triangle-alert') }} <span></span></span></div>
+        <fieldset class="hp-filters" aria-label="Task view">
+          <legend class="sr-only">Task view</legend>
+          {% for value, label in [('today', 'Today'), ('upcoming', 'Upcoming'), ('all', 'All')] %}
+          <label><input type="radio" name="preview-filter" value="{{ value }}" {% if value == 'today' %}checked{% endif %}><span>{{ label }} <span data-preview-count="{{ value }}">0</span></span></label>
+          {% endfor %}
+        </fieldset>
+        <ul id="hp-task-list" class="hp-task-list" aria-label="Tasks"></ul>
+        <div id="hp-empty" class="hp-empty" hidden><span>No tasks in this view.</span><button type="button" class="hp-button" data-preview-action="add">{{ shell_icon('plus') }} Add task</button></div>
+      </section>
+      <section class="hp-habits" aria-labelledby="hp-habits-heading">
+        <div class="hp-section-heading"><h2 id="hp-habits-heading">Habits</h2><span id="hp-habit-count" class="hp-muted"></span></div>
+        <div id="hp-habit-list" class="hp-habit-list"></div>
+      </section>
+      <div class="hp-status-bar">
+        <p id="hp-status" role="status" aria-live="polite" aria-atomic="true">Ready.</p>
+        <button type="button" class="hp-button" data-preview-action="undo" disabled>{{ shell_icon('rotate-ccw') }} Undo</button>
+      </div>
+    </div>
+    <aside class="hp-support" aria-label="Day overview">
+      <section aria-labelledby="hp-progress-heading">
+        <div class="hp-section-heading"><h2 id="hp-progress-heading">Today's progress</h2>{{ shell_icon('chart-no-axes-combined') }}</div>
+        <p id="hp-progress-label" class="hp-progress-label"></p>
+        <progress id="hp-progress" value="0" max="3" aria-labelledby="hp-progress-heading hp-progress-label"></progress>
+      </section>
+      <section aria-labelledby="hp-agenda-heading">
+        <div class="hp-section-heading"><h2 id="hp-agenda-heading">Coming up</h2>{{ shell_icon('calendar-days') }}</div>
+        <ul id="hp-agenda" class="hp-agenda"></ul>
+      </section>
+      {% if preview_shortcuts %}
+      <section aria-labelledby="hp-continue-heading">
+        <div class="hp-section-heading"><h2 id="hp-continue-heading">Continue</h2></div>
+        {% for link in preview_shortcuts %}
+        <a class="hp-shortcut" href="{{ link.href }}">{{ shell_icon(link.icon) }}<span>{{ link.label }}</span>{{ shell_icon('chevron-right') }}</a>
+        {% endfor %}
+      </section>
+      {% endif %}
+    </aside>
+  </div>
+
+  <dialog class="hp-dialog" id="hp-details" aria-labelledby="hp-details-heading">
+    <div class="hp-dialog-heading"><h2 id="hp-details-heading">Task details</h2><button type="button" class="hp-tool" data-preview-action="close" aria-label="Close task details" title="Close">{{ shell_icon('x') }}</button></div>
+    <form method="dialog" id="hp-details-form">
+      <label class="hp-field">Task<input id="hp-detail-title" type="text" maxlength="160" required autocomplete="off" autofocus></label>
+      <label class="hp-field">Notes<textarea id="hp-detail-notes" rows="3" maxlength="1000"></textarea></label>
+      <label class="hp-field">Priority<select id="hp-detail-priority"><option>Normal</option><option>High</option></select></label>
+      <div class="hp-detail-line"><span id="hp-detail-due"></span><button type="button" class="hp-tool" data-preview-action="reschedule" aria-label="Reschedule due date" title="Reschedule due date">{{ shell_icon('calendar-days') }}</button></div>
+      <div class="hp-detail-line"><span id="hp-detail-today"></span><button type="button" class="hp-button" data-preview-action="today"></button></div>
+      <label class="hp-check"><input type="checkbox" id="hp-detail-done" data-preview-complete> Completed</label>
+      <div class="hp-dialog-actions"><button type="button" class="hp-button" data-preview-action="close">Cancel</button><button type="submit" class="hp-button hp-primary">{{ shell_icon('check') }} Save changes</button></div>
+    </form>
+  </dialog>
+  <dialog class="hp-dialog" id="hp-reschedule" aria-labelledby="hp-reschedule-heading">
+    <div class="hp-dialog-heading"><h2 id="hp-reschedule-heading">Reschedule</h2><button type="button" class="hp-tool" data-preview-action="close" aria-label="Close reschedule" title="Close">{{ shell_icon('x') }}</button></div>
+    <p id="hp-reschedule-title" class="hp-muted"></p>
+    <form method="dialog" id="hp-reschedule-form">
+      <label class="hp-field">Due date<input type="date" id="hp-due-input" min="1900-01-01" max="9999-12-31" autofocus></label>
+      <div class="hp-dialog-actions"><button type="button" class="hp-button" data-preview-action="clear-date">Clear date</button><button type="submit" class="hp-button hp-primary">{{ shell_icon('check') }} Save date</button></div>
+    </form>
+  </dialog>
+  <dialog class="hp-dialog" id="hp-add" aria-labelledby="hp-add-heading">
+    <div class="hp-dialog-heading"><h2 id="hp-add-heading">Add task</h2><button type="button" class="hp-tool" data-preview-action="close" aria-label="Close add task" title="Close">{{ shell_icon('x') }}</button></div>
+    <form method="dialog" id="hp-add-form">
+      <label class="hp-field">Task<input type="text" id="hp-add-title" maxlength="160" required autocomplete="off" autofocus></label>
+      <label class="hp-field">Due date<input type="date" id="hp-add-due" min="1900-01-01" max="9999-12-31"></label>
+      <label class="hp-check"><input type="checkbox" id="hp-add-today" checked> Add to Today</label>
+      <div class="hp-dialog-actions"><button type="button" class="hp-button" data-preview-action="close">Cancel</button><button type="submit" class="hp-button hp-primary">{{ shell_icon('plus') }} Add task</button></div>
+    </form>
+  </dialog>
+
+  <template id="hp-task-template">
+    <li class="hp-task">
+      <label class="hp-check-target"><input type="checkbox" data-preview-complete><span class="sr-only"></span></label>
+      <button type="button" class="hp-task-open" data-preview-action="details"><span class="hp-task-title"></span><span class="hp-task-meta"></span></button>
+      <div class="hp-row-tools">
+        <button type="button" class="hp-tool hp-dismiss" data-preview-action="dismiss" title="Dismiss attention" aria-label="Dismiss attention" hidden>{{ shell_icon('x') }}</button>
+        <button type="button" class="hp-tool" data-preview-action="reschedule" title="Reschedule due date" aria-label="Reschedule due date">{{ shell_icon('calendar-days') }}</button>
+      </div>
+    </li>
+  </template>
+  <template id="hp-habit-template"><label class="hp-habit"><input type="checkbox" data-preview-habit><span></span>{{ shell_icon('check') }}</label></template>
+  <script type="application/json" id="hp-seed">{{ preview_seed | tojson }}</script>
+</div>
+{% endblock %}

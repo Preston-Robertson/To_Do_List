@@ -1,0 +1,66 @@
+{% extends "cards/layout.html" %}
+{% from "cards/partials/icons.html" import icon %}
+{% block head_scripts %}
+  {{ super() }}
+  <link rel="stylesheet" href="/module-assets/cards/versions.css?v={{ asset_version }}">
+{% endblock %}
+{% block cards_content %}
+{% set versions_url = '/cards/' ~ current_game ~ '/decks/' ~ deck.id ~ '/versions' %}
+<div class="deck-versions">
+  <header class="cards-page-header">
+    <div>
+      <a class="cards-back-link" href="/cards/{{ current_game }}/decks/{{ deck.id }}">{{ icon('arrow-left') }} {{ deck.name }}</a>
+      <h1>{% if preview %}Restore preview{% else %}Versions{% endif %}</h1>
+    </div>
+    {% if not preview %}<span class="versions-count">{{ versions | length }} / {{ max_versions }} saved</span>{% endif %}
+  </header>
+
+  {% if preview %}
+  <section class="versions-section" aria-labelledby="restore-heading">
+    <h2 id="restore-heading">{{ version.label }}</h2>
+    <time>{{ version.created_at }} UTC</time>
+    {% include "cards/partials/versions_comparison.html" %}
+    <form method="post" action="{{ versions_url }}/{{ version.id }}/restore"
+          hx-post="{{ versions_url }}/{{ version.id }}/restore" hx-swap="none" class="versions-restore">
+      <input type="hidden" name="expected_current_hash" value="{{ expected_current_hash }}">
+      <input type="hidden" name="expected_version_hash" value="{{ expected_version_hash }}">
+      <label class="cards-check"><input type="checkbox" name="confirm" value="1" required> Confirm restore to {{ version.label }}</label>
+      <div class="versions-actions">
+        <a class="btn" href="{{ versions_url }}">Cancel</a>
+        <button type="submit" class="btn btn-primary">{{ icon('arrow-left') }} Restore version</button>
+      </div>
+    </form>
+  </section>
+  {% else %}
+  <form method="post" action="{{ versions_url }}" hx-post="{{ versions_url }}" hx-swap="none" class="versions-controls">
+    <label>Version name<input name="label" required minlength="1" maxlength="80" autocomplete="off" {% if versions | length >= max_versions %}disabled{% endif %}></label>
+    <button type="submit" class="btn btn-primary" {% if versions | length >= max_versions %}disabled{% endif %}>{{ icon('plus') }} Save version</button>
+  </form>
+
+  {% if versions %}
+  <section class="versions-section" aria-labelledby="compare-heading">
+    <h2 id="compare-heading">Compare</h2>
+    <form method="get" action="{{ versions_url }}" class="versions-controls">
+      <label>Before<select name="before">{% for saved in versions %}<option value="{{ saved.id }}" {% if saved.id == before_id %}selected{% endif %}>{{ saved.label }} ({{ saved.created_at }} UTC, #{{ saved.id }})</option>{% endfor %}</select></label>
+      <label>After<select name="after"><option value="" {% if after_id is none %}selected{% endif %}>Current deck</option>{% for saved in versions %}<option value="{{ saved.id }}" {% if saved.id == after_id %}selected{% endif %}>{{ saved.label }} ({{ saved.created_at }} UTC, #{{ saved.id }})</option>{% endfor %}</select></label>
+      <button class="btn" type="submit">Compare</button>
+    </form>
+    {% include "cards/partials/versions_comparison.html" %}
+  </section>
+  <section class="versions-section" aria-labelledby="saved-heading">
+    <h2 id="saved-heading">Saved versions</h2>
+    <div class="versions-table-scroll" role="region" aria-label="Saved versions" tabindex="0">
+      <table class="versions-table">
+        <thead><tr><th scope="col">Version</th><th scope="col">Created (UTC)</th><th scope="col">Actions</th></tr></thead>
+        <tbody>{% for saved in versions %}<tr>
+          <th scope="row">{{ saved.label }} <small>#{{ saved.id }}</small></th>
+          <td><time>{{ saved.created_at }}</time></td>
+          <td class="versions-row-actions"><a href="{{ versions_url }}?before={{ saved.id }}">Compare</a><a href="{{ versions_url }}/{{ saved.id }}/preview">Preview restore</a></td>
+        </tr>{% endfor %}</tbody>
+      </table>
+    </div>
+  </section>
+  {% else %}<p class="versions-empty">No saved versions.</p>{% endif %}
+  {% endif %}
+</div>
+{% endblock %}

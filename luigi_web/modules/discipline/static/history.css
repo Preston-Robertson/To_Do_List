@@ -1,0 +1,28 @@
+.dh-live { min-width: 0; }
+.dh-live .dh-asof { overflow-wrap: anywhere; }
+.dh-live .dh-current-target { margin-top: 8px; color: var(--text-muted); font-size: 12px; }
+.dh-live #dh-week-range { display: block; margin-top: 4px; }
+.dh-live .dh-view-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 20px; margin-block: 18px; }
+.dh-live .dh-tabs { flex: 1 1 280px; margin: 0; }
+.dh-live .dh-year-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 13px; }
+.dh-live .dh-year-picker label { margin-right: 4px; }
+.dh-live .dh-year-picker input { width: 88px; min-height: 44px; padding: 8px; border: 1px solid var(--border-strong); border-radius: 4px; color: var(--text); background: var(--bg); font-variant-numeric: tabular-nums; }
+.dh-live .dh-load-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-block: 12px; border-block: 1px solid var(--border); }
+.dh-live .dh-load-error p { overflow-wrap: anywhere; }
+.dh-live .dh-load-error button { flex-shrink: 0; }
+.dh-live [role="tabpanel"], .dh-live .dh-calendar, .dh-live .dh-year-scroll { min-width: 0; max-width: 100%; }
+.dh-live .dh-year-months, .dh-live .dh-year-days { grid-template-columns: repeat(var(--dh-year-columns, 53), 14px); }
+.dh-live .dh-year-day.is-current { outline: 2px solid var(--text-muted); outline-offset: 1px; }
+.dh-live .dh-day.is-readonly:not(.is-complete), .dh-live .dh-year-day.is-readonly:not(.is-complete) { background: transparent; }
+.dh-live .dh-weekdays, .dh-live .dh-month-days { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.dh-live .dh-day { min-width: 0; }
+.dh-live .dh-log-entry { grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); }
+.dh-live .dh-log-entry > span:first-child { grid-column: auto; }
+.dh-live .dh-section-heading > :first-child { min-width: 0; overflow-wrap: anywhere; }
+.dh-live .dh-summary > div:last-child { flex-wrap: wrap; }
+@media (max-width: 480px) {
+  .dh-live .dh-view-tools { align-items: stretch; }
+  .dh-live .dh-tabs { flex-basis: 100%; max-width: none; }
+  .dh-live .dh-log-entry { grid-template-columns: minmax(0, 1fr); }
+  .dh-live .dh-status-bar { flex-wrap: wrap; padding-block: 12px; }
+}

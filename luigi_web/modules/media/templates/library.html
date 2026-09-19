@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block head_scripts %}
+<link rel="stylesheet" href="/module-assets/media/library.css?v={{ shell_asset_version }}">
+<script src="/module-assets/media/library.js?v={{ shell_asset_version }}" defer></script>
+{% endblock %}
+{% block content %}
+<div id="media-library" class="media-library" data-section="{{ section }}" {% if disabled_reason %}data-disabled="true"{% endif %}>
+  <header class="library-header">
+    <div><h1>{{ page_title }}</h1><p id="library-freshness" class="library-muted"></p></div>
+    {% if not disabled_reason %}
+    <div class="library-actions">
+      <button type="button" class="btn" id="library-refresh" title="Refresh library">{{ shell_icon('rotate-ccw') }}<span>Refresh</span></button>
+      <a class="btn" href="/media/insights?section={{ section }}" id="library-insights">{{ shell_icon('chart-no-axes-combined') }}<span>Insights</span></a>
+      <button type="button" class="btn btn-primary" id="library-add" hx-get="/gnw/{{ section }}/new" hx-target="#modal-body" onclick="openModal()">{{ shell_icon('plus') }}<span>Add {{ 'game' if section == 'games' else 'show' }}</span></button>
+    </div>
+    {% endif %}
+  </header>
+  {% if disabled_reason %}
+  <p role="status">Media is currently unavailable.</p>
+  {% else %}
+  <form id="library-filters" class="library-filters" aria-label="Library filters">
+    <label class="library-query">Search<input type="search" name="query" placeholder="Search titles, notes, tags" maxlength="200" autocomplete="off"></label>
+    <label>Profile<select name="profile"><option value="">All profiles</option></select></label>
+    <label>Sort<select name="sort"><option value="recent">Recently active</option><option value="title">Title</option><option value="priority">Priority</option><option value="rating">Rating</option><option value="added">Recently added</option><option value="oldest">Oldest added</option></select></label>
+    <button type="reset" class="btn library-icon-button" title="Reset filters" aria-label="Reset filters">{{ shell_icon('rotate-ccw') }}</button>
+    <details class="library-filter-more" id="library-filter-more">
+      <summary>{{ shell_icon('settings-2') }}<span id="library-filter-label">Filters</span></summary>
+      <div class="library-filter-fields">
+        <label>Status<select name="status"><option value="">All statuses</option></select></label>
+        <label>Platform<select name="platform"><option value="">All platforms</option></select></label>
+        <label>Genre<select name="genre"><option value="">All genres</option></select></label>
+        <label>Tag<select name="tag"><option value="">All tags</option></select></label>
+        <label>Priority<select name="priority"><option value="">Any priority</option>{% for number in range(1, 6) %}<option value="{{ number }}">{{ number }}</option>{% endfor %}</select></label>
+        <label>Rating<select name="rating"><option value="">Any rating</option><option value="unrated">Unrated</option>{% for number in range(0, 11) %}<option value="{{ number }}">{{ number }}+</option>{% endfor %}</select></label>
+      </div>
+    </details>
+  </form>
+  <div class="library-view-tools">
+    <div role="tablist" aria-label="Library view" id="library-tabs">
+      {% for view, label, icon in [('continue', 'Continue', 'chevron-right'), ('board', 'Board', 'layers'), ('list', 'List', 'list')] %}
+      <button type="button" role="tab" id="library-tab-{{ view }}" aria-controls="library-{{ view }}" aria-selected="{{ 'true' if view == 'continue' else 'false' }}" tabindex="{{ '0' if view == 'continue' else '-1' }}" data-view="{{ view }}">{{ shell_icon(icon) }}<span>{{ label }}</span></button>
+      {% endfor %}
+    </div>
+    <div class="library-saved-tools">
+      <label>Saved view<select id="library-saved"><option value="">Current filters</option></select></label>
+      <button type="button" class="btn library-icon-button" id="library-save-view" title="Save view" aria-label="Save view">{{ shell_icon('save') }}</button>
+      <button type="button" class="btn library-icon-button" id="library-delete-view" title="Delete saved view" aria-label="Delete saved view" disabled>{{ shell_icon('trash-2') }}</button>
+    </div>
+  </div>
+  <div class="library-results-tools">
+    <p id="library-count" role="status"></p>
+    <div class="library-actions"><label class="library-check"><input type="checkbox" id="library-exclude-recent" checked>Exclude recent picks</label><button type="button" class="btn" id="library-pick">{{ shell_icon('sparkles') }}<span>Surprise me</span></button></div>
+  </div>
+  <div class="library-message" role="status" aria-live="polite" id="library-message"></div>
+  <div class="library-undo" id="library-undo" hidden><span>Change saved.</span><button class="btn" type="button" id="library-undo-button">{{ shell_icon('rotate-ccw') }}<span>Undo</span></button></div>
+  <section role="tabpanel" id="library-continue" aria-labelledby="library-tab-continue" tabindex="0"></section>
+  <section role="tabpanel" id="library-board" aria-labelledby="library-tab-board" tabindex="0" hidden></section>
+  <section role="tabpanel" id="library-list" aria-labelledby="library-tab-list" tabindex="0" hidden></section>
+  <noscript><p>JavaScript is required to load the library.</p></noscript>
+  <dialog id="library-detail" class="library-dialog" aria-labelledby="library-detail-title">
+    <header class="library-dialog-header"><h2 id="library-detail-title">Title details</h2><button type="button" class="btn library-icon-button" data-dialog-close title="Close details" aria-label="Close details">{{ shell_icon('x') }}</button></header>
+    <div class="library-message" role="status" aria-live="polite" data-dialog-message></div>
+    <div id="library-detail-body"></div>
+  </dialog>
+  <dialog id="library-choice" class="library-dialog library-choice" aria-labelledby="library-choice-title">
+    <header class="library-dialog-header"><h2 id="library-choice-title">Surprise me</h2><button type="button" class="btn library-icon-button" data-dialog-close title="Close" aria-label="Close">{{ shell_icon('x') }}</button></header>
+    <div class="library-message" role="status" aria-live="polite" data-dialog-message></div>
+    <div id="library-choice-body"></div>
+  </dialog>
+  <dialog id="library-confirm" class="library-dialog library-choice" aria-labelledby="library-confirm-title">
+    <header class="library-dialog-header"><h2 id="library-confirm-title">Confirm</h2><button type="button" class="btn library-icon-button" data-dialog-close title="Close" aria-label="Close">{{ shell_icon('x') }}</button></header>
+    <div class="library-message" role="status" aria-live="polite" data-dialog-message></div>
+    <div id="library-confirm-body"></div>
+  </dialog>
+  {% endif %}
+  <script type="application/json" id="library-seed">{{ media_seed|tojson }}</script>
+  <div hidden id="library-icons">
+    {% for icon in ['chevron-right', 'plus', 'pencil', 'x', 'save', 'rotate-ccw', 'gamepad-2', 'tv-minimal', 'check'] %}
+    <template data-icon="{{ icon }}">{{ shell_icon(icon) }}</template>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

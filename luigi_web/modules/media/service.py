@@ -22,12 +22,14 @@ Config (env):
 from __future__ import annotations
 
 import json
+import hashlib
+import math
 import os
 import random
 import re
 import threading
 import time
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import httpx
@@ -103,6 +105,8 @@ SHOW_EDITABLE = {
 # Client + cache
 # --------------------------------------------------------------------------- #
 _lock = threading.Lock()
+_write_lock = threading.RLock()
+_read_locks = {"games": threading.RLock(), "shows": threading.RLock()}
 _client = None
 _sheet = None
 _cache: dict[str, tuple[float, list[list[str]]]] = {}
@@ -378,16 +382,16 @@ def _ws(section: str):
 
 
 def _all_values(section: str, force: bool = False) -> list[list[str]]:
-    now = time.monotonic()
-    if not force:
+    with _read_locks[section]:
+        now = time.monotonic()
         with _lock:
             cached = _cache.get(section)
-        if cached and now - cached[0] < _CACHE_TTL:
+        if not force and cached and now - cached[0] < _CACHE_TTL:
             return cached[1]
-    values = _ws(section).get_all_values()
-    with _lock:
-        _cache[section] = (now, values)
-    return values
+        values = _ws(section).get_all_values()
+        with _lock:
+            _cache[section] = (time.monotonic(), values)
+        return values
 
 
 def _invalidate(section: str | None = None) -> None:
@@ -704,6 +708,41 @@ def get_item(section: str, profile: str, title: str) -> dict[str, Any] | None:
     return None
 
 
+def library_state(section: str, profile: str = "", *, force: bool = False) -> dict[str, Any]:
+    from .history import identity_key
+
+    if section not in {"games", "shows"} or not is_enabled():
+        raise ValueError("Media storage is unavailable")
+    with _lock:
+        previous = _cache.get(section)
+    cached = not force and previous is not None and time.monotonic() - previous[0] < _CACHE_TTL
+    values = _all_values(section, force=force)
+    if not values:
+        raise ValueError("Media header is unavailable")
+    headers = values[0]
+    profile_col, title_col = _identity_columns(headers)
+    items, profiles, keys = [], set(), set()
+    for row in values[1:]:
+        row_profile, title = _row_value(row, profile_col), _row_value(row, title_col)
+        if not row_profile or not title:
+            continue
+        profiles.add(row_profile)
+        if profile and row_profile.casefold() != profile.casefold():
+            continue
+        item = _row_to_item(section, headers, row)
+        item["key"] = identity_key(section, row_profile, title)
+        item["version"] = row_version(headers, row)
+        if item["key"] in keys:
+            raise MediaConflict("Duplicate media identity")
+        keys.add(item["key"])
+        items.append(item)
+    with _lock:
+        cached_at = _cache.get(section, (time.monotonic(), []))[0]
+    return {"section": section, "profile": profile, "profiles": sorted(profiles, key=str.casefold),
+            "statuses": statuses_for(section), "status_labels": STATUS_LABELS, "items": items,
+            "cached": cached, "updated_at": (clock.local_now() - timedelta(seconds=max(0, time.monotonic() - cached_at))).isoformat()}
+
+
 def statuses_for(section: str) -> list[str]:
     return GAME_STATUSES if section == "games" else SHOW_STATUSES
 
@@ -947,38 +986,67 @@ def add_catalog_item(
     priority: int = 3,
 ) -> tuple[bool, str]:
     """Insert a metadata-backed item into the live Games/Shows worksheet."""
+    with _write_lock:
+        try:
+            return _add_catalog_item(section, profile, metadata, status=status, priority=priority)
+        except Exception:
+            _invalidate(section)
+            raise
+
+
+def _add_catalog_item(
+    section: str,
+    profile: str,
+    metadata: dict[str, Any],
+    *,
+    status: str,
+    priority: int,
+) -> tuple[bool, str]:
+    if section not in {"games", "shows"}:
+        return False, "invalid section"
     if status not in statuses_for(section):
         return False, f"invalid status: {status}"
     title = str(metadata.get("title") or "").strip()
-    profile = (profile or "").strip()
+    profile = profile.strip() if isinstance(profile, str) else ""
     if not profile or not title:
         return False, "profile and title are required"
+    if len(profile) > 256 or len(title) > 512:
+        return False, "profile or title is too long"
+    try:
+        priority_value = _validated_fields(section, {"priority": priority})["Priority"]
+    except ValueError:
+        return False, "priority must be an integer between 1 and 5"
     values = _all_values(section, force=True)
     if not values:
         return False, f"{_tab(section)} sheet has no header row"
     headers = values[0]
-    profile_col, title_col = _identity_columns(headers)
+    idx = _header_index(headers)
+    if any(header not in idx for header in ("Profile", "Title", "Status", "Priority")):
+        return False, "A required media column is unavailable"
+    profile_col, title_col = idx["Profile"], idx["Title"]
     target_row: int | None = None
     for row_number, row in enumerate(values[1:], start=2):
         row_profile = _row_value(row, profile_col)
         row_title = _row_value(row, title_col)
-        if row_profile.lower() == profile.lower() and row_title.lower() == title.lower():
+        if row_profile.casefold() == profile.casefold() and row_title.casefold() == title.casefold():
             return False, f"{title} already exists for {profile}"
-        if row_profile.lower() == profile.lower() and not row_title and target_row is None:
+        if row_profile.casefold() == profile.casefold() and not row_title and target_row is None:
             target_row = row_number
     target_row = target_row or (len(values) + 1)
-    row = ["" for _ in headers]
-    idx = _header_index(headers)
+    row = list(values[target_row - 1]) if target_row <= len(values) else []
+    row.extend([""] * max(0, len(headers) - len(row)))
+    intended: dict[str, str] = {}
 
     def put(header: str, value: Any) -> None:
         column = idx.get(header)
         if column is not None and value not in (None, ""):
             row[column] = str(value)
+            intended[header] = str(value)
 
     put("Profile", profile)
     put("Title", title)
     put("Status", status)
-    put("Priority", max(1, min(int(priority), 5)))
+    put("Priority", priority_value)
     put("Date Added", clock.local_today().isoformat())
     put("Cover URL", metadata.get("cover_url"))
     put("External ID", metadata.get("external_id"))
@@ -997,8 +1065,22 @@ def add_catalog_item(
         put("Current Season", 1)
         put("Current Episode", 0)
     start = _a1(target_row, 1)
-    end = _a1(target_row, len(headers))
-    _ws(section).update([row], f"{start}:{end}")
+    end = _a1(target_row, len(row))
+    _ws(section).update([row], f"{start}:{end}", value_input_option="RAW")
+    confirmed_values = _all_values(section, force=True)
+    confirmed_index = _header_index(confirmed_values[0]) if confirmed_values else {}
+    if any(header not in confirmed_index for header in intended):
+        raise RuntimeError("Media create could not be verified")
+    matches = [
+        candidate for candidate in confirmed_values[1:]
+        if _row_value(candidate, confirmed_index["Profile"]).casefold() == profile.casefold()
+        and _row_value(candidate, confirmed_index["Title"]).casefold() == title.casefold()
+    ]
+    if len(matches) != 1 or any(
+        _row_value(matches[0], confirmed_index[header]) != value
+        for header, value in intended.items()
+    ):
+        raise RuntimeError("Media create could not be verified")
     _invalidate(section)
     return True, title
 
@@ -1017,51 +1099,9 @@ def add_manual_item(
 
 def steam_stats(app_id: str) -> dict[str, Any]:
     """Live playtime + achievement progress for the configured Steam user."""
-    api_key = os.environ.get("LUIGI_WEB_STEAM_API_KEY", "").strip()
-    steam_id = os.environ.get("LUIGI_WEB_STEAM_ID", "").strip()
-    if not api_key or not steam_id:
-        raise RuntimeError("Set LUIGI_WEB_STEAM_API_KEY and LUIGI_WEB_STEAM_ID in Admin")
-    with httpx.Client(timeout=20, headers={"User-Agent": "LuigiWeb/1.0"}) as client:
-        owned = client.get(
-            "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/",
-            params={
-                "key": api_key,
-                "steamid": steam_id,
-                "include_appinfo": 1,
-                "appids_filter[0]": int(app_id),
-            },
-        )
-        owned.raise_for_status()
-        games = (owned.json().get("response") or {}).get("games") or []
-        game = games[0] if games else {}
-        achievements_response = client.get(
-            "https://api.steampowered.com/ISteamUserStats/GetPlayerAchievements/v1/",
-            params={"key": api_key, "steamid": steam_id, "appid": int(app_id), "l": "english"},
-        )
-        achievements_response.raise_for_status()
-        stats = achievements_response.json().get("playerstats") or {}
-    achievements = stats.get("achievements") or []
-    unlocked = sum(1 for achievement in achievements if achievement.get("achieved"))
-    total = len(achievements)
-    locked = [
-        {
-            "name": achievement.get("name") or achievement.get("apiname") or "Achievement",
-            "description": achievement.get("description") or "",
-        }
-        for achievement in achievements
-        if not achievement.get("achieved")
-    ]
-    return {
-        "app_id": str(app_id),
-        "name": game.get("name") or stats.get("gameName") or f"Steam app {app_id}",
-        "hours_played": round(float(game.get("playtime_forever") or 0) / 60, 1),
-        "hours_recent": round(float(game.get("playtime_2weeks") or 0) / 60, 1),
-        "achievements_unlocked": unlocked,
-        "achievements_total": total,
-        "achievement_percent": round((unlocked / total) * 100) if total else None,
-        "complete": bool(total and unlocked == total),
-        "next_achievements": locked[:5],
-    }
+    from . import steam
+
+    return steam._fetch(app_id)
 
 
 # --------------------------------------------------------------------------- #
@@ -1080,56 +1120,110 @@ def _find_row_idx(section: str, profile: str, title: str) -> tuple[int | None, l
     return None, headers
 
 
+class MediaConflict(ValueError):
+    """The shared row no longer matches the user's confirmed copy."""
+
+
+def row_version(headers: list[str], row: list[str]) -> str:
+    values = {header: _row_value(row, index) for header, index in _header_index(headers).items()}
+    return hashlib.sha256(json.dumps(values, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _matching_row(section: str, values: list[list[str]], profile: str, title: str):
+    headers = values[0] if values else []
+    profile_col, title_col = _identity_columns(headers)
+    matches = [(index, row) for index, row in enumerate(values[1:], start=2)
+               if _row_value(row, profile_col).casefold() == profile.casefold()
+               and _row_value(row, title_col).casefold() == title.casefold()]
+    if len(matches) != 1:
+        raise MediaConflict("Media item is missing or ambiguous")
+    index, row = matches[0]
+    item = _row_to_item(section, headers, row)
+    item["version"] = row_version(headers, row)
+    from .history import identity_key
+    item["key"] = identity_key(section, profile, title)
+    return headers, index, row, item
+
+
+def _validated_fields(section: str, fields: dict[str, Any]) -> dict[str, str]:
+    editable = GAME_EDITABLE if section == "games" else SHOW_EDITABLE
+    if not fields or any(key not in editable for key in fields):
+        raise ValueError("Invalid media fields")
+    result = {}
+    for key, value in fields.items():
+        raw = "" if value is None else str(value).strip()
+        if len(raw) > (4096 if key == "notes" else 2000):
+            raise ValueError("Media field is too long")
+        if key == "status" and raw not in statuses_for(section):
+            raise ValueError("Invalid media status")
+        if key in {"priority", "rating", "current_episode", "current_season", "total_episodes"}:
+            if not raw and key in {"rating", "total_episodes"}:
+                result[editable[key]] = ""
+                continue
+            if not re.fullmatch(r"\d+", raw):
+                raise ValueError("Invalid numeric media field")
+            number = int(raw)
+            minimum, maximum = (1, 5) if key == "priority" else (0, 10) if key == "rating" else (0, 100000)
+            if not minimum <= number <= maximum:
+                raise ValueError("Numeric media field is out of range")
+            raw = str(number)
+        if key == "hours_played":
+            try:
+                hours = float(raw)
+            except ValueError:
+                raise ValueError("Invalid playtime") from None
+            if not math.isfinite(hours) or not 0 <= hours <= 1000000:
+                raise ValueError("Invalid playtime")
+        result[editable[key]] = raw
+    return result
+
+
+def write_item(section: str, profile: str, title: str, fields: dict[str, Any],
+               *, expected_version: str | None = None,
+               restore_cells: dict[str, str] | None = None) -> dict[str, Any]:
+    """Batch changed cells and verify a fresh read; never retry an uncertain write."""
+    if section not in {"games", "shows"} or not is_enabled():
+        raise ValueError("Media storage is unavailable")
+    cells = _validated_fields(section, fields) if restore_cells is None else dict(restore_cells)
+    with _write_lock:
+        headers, row_index, row, before = _matching_row(section, _all_values(section, force=True), profile, title)
+        if expected_version is not None and before["version"] != expected_version:
+            raise MediaConflict("Media changed; reload before saving")
+        header_index = _header_index(headers)
+        if any(header not in header_index for header in cells):
+            raise ValueError("A required media column is unavailable")
+        if restore_cells is None:
+            status = fields.get("status")
+            stamp = "Date Started" if status == ACTIVE_STATUS[section] else "Date Completed" if status in {"completed", "achievements"} else None
+            if stamp and status != before["status"] and stamp in header_index and not _row_value(row, header_index[stamp]):
+                cells[stamp] = clock.local_today().isoformat()
+        changed = {header: value for header, value in cells.items() if _row_value(row, header_index[header]) != value}
+        before_cells = {header: _row_value(row, header_index[header]) for header in changed}
+        if not changed:
+            return {"before": before, "item": before, "changed": False, "before_cells": {}, "after_cells": {}}
+        batch = [{"range": _a1(row_index, header_index[header] + 1), "values": [[value]]} for header, value in changed.items()]
+        try:
+            _ws(section).batch_update(batch, value_input_option="RAW")
+            confirmed_headers, _, confirmed_row, item = _matching_row(section, _all_values(section, force=True), profile, title)
+            confirmed_index = _header_index(confirmed_headers)
+            if any(header not in confirmed_index or _row_value(confirmed_row, confirmed_index[header]) != value for header, value in changed.items()):
+                raise RuntimeError("Media save could not be verified")
+        except Exception:
+            _invalidate(section)
+            raise
+        return {"before": before, "item": item, "changed": True,
+                "before_cells": before_cells, "after_cells": changed}
+
+
 def update_item(section: str, profile: str, title: str,
                 fields: dict[str, Any]) -> bool:
-    """Write editable fields back to the sheet. ``fields`` keys are the GUI
-    dict keys (see GAME_EDITABLE / SHOW_EDITABLE); unknown keys are ignored.
-    Mirrors the bot's status-transition date stamping."""
     if not is_enabled():
         return False
-    editable = GAME_EDITABLE if section == "games" else SHOW_EDITABLE
-    row_idx, headers = _find_row_idx(section, profile, title)
-    if not row_idx:
+    try:
+        write_item(section, profile, title, fields)
+    except MediaConflict:
         return False
-    hidx = {h: i + 1 for h, i in _header_index(headers).items()}
-    ws = _ws(section)
-
-    old_status = (get_item(section, profile, title) or {}).get("status")
-
-    for key, val in fields.items():
-        header = editable.get(key)
-        if not header or header not in hidx:
-            continue
-        cell = "" if val is None else str(val)
-        ws.update_cell(row_idx, hidx[header], cell)
-
-    # Date stamping on status change (only if the target cell is empty, to
-    # preserve the earliest timestamp — same rule as the bot).
-    new_status = fields.get("status", old_status)
-    if new_status and new_status != old_status:
-        if new_status == ACTIVE_STATUS[section]:
-            _stamp_if_empty(ws, row_idx, hidx, "Date Started")
-        elif new_status == "completed":
-            _stamp_if_empty(ws, row_idx, hidx, "Date Completed")
-
-    _invalidate(section)
     return True
-
-
-def _stamp_if_empty(ws, row_idx: int, hidx: dict[str, int], header: str) -> None:
-    col = hidx.get(header)
-    if not col:
-        return
-    try:
-        existing = ws.cell(row_idx, col).value
-    except Exception:  # noqa: BLE001
-        existing = None
-    if existing and str(existing).strip():
-        return
-    try:
-        ws.update_cell(row_idx, col, clock.local_today().isoformat())
-    except Exception:  # noqa: BLE001
-        pass
 
 
 def set_status(section: str, profile: str, title: str, status: str) -> bool:

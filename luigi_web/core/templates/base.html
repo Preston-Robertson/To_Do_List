@@ -19,6 +19,14 @@
   {% block head_scripts %}{% endblock %}
   <link rel="stylesheet" href="/static/css/shell.css?v={{ shell_asset_version }}">
   <script src="/static/js/shell.js?v={{ shell_asset_version }}" defer></script>
+  {% if module_enabled('tasks') %}
+  <link rel="stylesheet" href="/module-assets/tasks/task-editor.css?v={{ shell_asset_version }}">
+  <script src="/module-assets/tasks/task-editor.js?v={{ shell_asset_version }}" defer></script>
+  {% endif %}
+  {% if module_enabled('assistant') %}
+  <link rel="stylesheet" href="/module-assets/assistant/panel.css?v={{ shell_asset_version }}">
+  <script src="/module-assets/assistant/panel.js?v={{ shell_asset_version }}" defer></script>
+  {% endif %}
 </head>
 <body class="app-body">
   <a class="skip-link" href="#app-main">Skip to content</a>
@@ -124,6 +132,10 @@
           <a class="workspace-modules" href="/modules" aria-label="{{ module_count }} enabled modules">
             {{ shell_icon('blocks') }}<span>{{ module_count }} enabled</span>
           </a>
+          {% if module_enabled('assistant') %}
+          <button type="button" class="shell-icon-button" data-assistant-open aria-label="Open Assistant"
+                  aria-haspopup="dialog" aria-controls="assistant-drawer" title="Assistant" data-shell-tooltip="Assistant">{{ shell_icon('sparkles') }}</button>
+          {% endif %}
           <button type="button" class="shell-icon-button" data-command-open aria-label="Search and commands"
                   title="Search and commands" data-shell-tooltip="Search and commands">{{ shell_icon('search') }}</button>
         </div>
@@ -134,6 +146,10 @@
         </button>
         <span class="mobile-page-title">{{ page_title }}</span>
         <div class="mobile-topbar-actions">
+          {% if module_enabled('assistant') %}
+          <button type="button" class="mobile-menu" data-assistant-open aria-label="Open Assistant"
+                  aria-haspopup="dialog" aria-controls="assistant-drawer" title="Assistant">{{ shell_icon('sparkles') }}</button>
+          {% endif %}
           {% if module_enabled('tasks') %}
           <a href="/reminders"
              class="mobile-menu mobile-reminder-alert {% if active_nav == 'reminders' %}active{% endif %}"
@@ -154,6 +170,16 @@
       </main>
     </div>
   </div>
+
+  {% if module_enabled('assistant') %}
+  <dialog id="assistant-drawer" class="assistant-drawer" aria-labelledby="assistant-drawer-title">
+    <header class="assistant-drawer-header">
+      <h2 id="assistant-drawer-title">{{ shell_icon('sparkles') }} Assistant</h2>
+      <button type="button" class="shell-icon-button" data-assistant-close aria-label="Close Assistant" title="Close Assistant">{{ shell_icon('x') }}</button>
+    </header>
+    <div id="assistant-panel-content" class="assistant-panel-content" data-assistant-content data-panel-url="/chat/panel"></div>
+  </dialog>
+  {% endif %}
 
   <div id="command-palette" class="command-palette hidden" role="dialog"
        aria-modal="true" aria-labelledby="command-palette-title">

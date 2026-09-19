@@ -1,12 +1,16 @@
 """Media HTTP controllers."""
 from __future__ import annotations
+import json
 from fastapi import APIRouter
 from typing import Any
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
+from starlette.concurrency import run_in_threadpool
 from ...auth import require_auth
+from . import workspace
 
 router = APIRouter()
+router.include_router(workspace.router)
 
 
 def _gnw_section(section: str) -> str:
@@ -16,7 +20,8 @@ def _gnw_section(section: str) -> str:
 
 
 def _gnw_columns(section: str, profile: str | None):
-    """Bucket items by status into the section's fixed status order."""    from ... import application as host
+    """Bucket items by status into the section's fixed status order."""
+    from ... import application as host
 
     items = host.gnw.list_items(section, profile or None)
     columns: dict[str, list[dict[str, Any]]] = {s: [] for s in host.gnw.statuses_for(section)}
@@ -62,16 +67,29 @@ def _gnw_board(request: Request, section: str, page_title: str):
 
 @router.get("/games", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 def games_page(request: Request):
-    from ... import application as host
-
-    return host._gnw_board(request, "games", "Games")
+    return _library_page(request, "games", "Games")
 
 
 @router.get("/shows", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 def shows_page(request: Request):
+    return _library_page(request, "shows", "Shows")
+
+
+def _library_page(request: Request, section: str, page_title: str):
     from ... import application as host
 
-    return host._gnw_board(request, "shows", "Shows")
+    state, reason = None, None
+    try:
+        if host.gnw.disabled_reason():
+            reason = "Media integration is unavailable. Check integration settings in Admin."
+        else:
+            state = workspace.library_state(section, (request.query_params.get("profile") or "").strip())
+    except Exception:
+        reason = "The media library could not be loaded. Try again or check integration settings."
+    return host.templates.TemplateResponse("library.html", {
+        "request": request, "section": section, "active_nav": section,
+        "page_title": page_title, "media_seed": state, "disabled_reason": reason,
+    }, headers={"Cache-Control": "no-store"})
 
 
 @router.get(
@@ -90,13 +108,18 @@ def media_insights_page(
     reason = host.gnw.disabled_reason()
     profiles: list[str] = []
     insights: dict[str, Any] | None = None
+    recorded_insights, history_error = None, None
     if not reason:
         try:
             profiles = host.gnw.list_profiles()
             items = host.gnw.list_items(section, profile or None)
             insights = host.gnw.media_insights(section, items)
-        except Exception as exc:  # noqa: BLE001
-            reason = str(exc) or type(exc).__name__
+        except Exception:
+            reason = "Media insights are unavailable"
+        try:
+            recorded_insights = workspace.history.insights(section, profile)
+        except Exception:
+            history_error = "Recorded web activity is unavailable"
     return host.templates.TemplateResponse(
         "media_insights.html",
         {
@@ -107,9 +130,11 @@ def media_insights_page(
             "profile": profile,
             "profiles": profiles,
             "insights": insights,
+            "recorded_insights": recorded_insights,
+            "history_error": history_error,
             "disabled_reason": reason,
             "status_labels": host.gnw.STATUS_LABELS,
-        },
+        }, headers={"Cache-Control": "no-store"},
     )
 
 
@@ -120,8 +145,8 @@ def gnw_new_form(section: str, request: Request):
     host._gnw_section(section)
     try:
         profiles = host.gnw.list_profiles()
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(503, str(exc)) from exc
+    except Exception:
+        raise HTTPException(503, "Media profiles are unavailable") from None
     return host.templates.TemplateResponse(
         "partials/media_new.html",
         {
@@ -144,11 +169,11 @@ async def gnw_search(section: str, request: Request):
     if not query:
         raise HTTPException(422, "Search text is required")
     try:
-        results = host.gnw.search_catalog(section, query)
+        results = await run_in_threadpool(host.gnw.search_catalog, section, query)
         error = None
-    except Exception as exc:  # noqa: BLE001
+    except Exception:
         results = []
-        error = f"{type(exc).__name__}: {exc}"
+        error = "Catalog search is unavailable"
     return host.templates.TemplateResponse(
         "partials/media_search_results.html",
         {
@@ -180,19 +205,21 @@ async def gnw_add_item(section: str, request: Request):
     external_id = str(form.get("external_id") or "")
     try:
         if source == "manual":
-            ok, message = host.gnw.add_manual_item(
+            ok, message = await run_in_threadpool(host.gnw.add_manual_item,
                 section, profile, str(form.get("title") or ""),
                 status=status, priority=priority,
             )
         else:
-            metadata = host.gnw.catalog_lookup(section, source, external_id)
+            metadata = await run_in_threadpool(host.gnw.catalog_lookup, section, source, external_id)
             if not metadata:
-                raise RuntimeError("The selected catalog result is no longer available")
-            ok, message = host.gnw.add_catalog_item(
+                raise ValueError("The selected catalog result is no longer available")
+            ok, message = await run_in_threadpool(host.gnw.add_catalog_item,
                 section, profile, metadata, status=status, priority=priority,
             )
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(422, f"Could not add item: {type(exc).__name__}: {exc}") from exc
+    except ValueError:
+        raise HTTPException(422, "Invalid media item") from None
+    except Exception:
+        raise HTTPException(503, "Media creation could not be confirmed. Refresh before retrying.") from None
     if not ok:
         raise HTTPException(409, message)
     kind = "Game" if section == "games" else "Show"
@@ -207,13 +234,13 @@ def gnw_steam_stats(request: Request, profile: str, title: str, app_id: str):
     from ... import application as host
 
     try:
-        stats = host.gnw.steam_stats(app_id)
-        # Keep the existing sheet's Hours Played field useful to the bot too.
-        host.gnw.update_item("games", profile, title, {"hours_played": stats["hours_played"]})
-        error = None
-    except Exception as exc:  # noqa: BLE001
+        item = workspace._steam_item(profile, title)
+        cached = workspace.steam.get_snapshot(profile, title, item["external_id"])
+        stats = cached["snapshot"]
+        error = None if stats else "Refresh Steam from this game's library details to load a snapshot."
+    except Exception:
         stats = None
-        error = f"{type(exc).__name__}: {exc}"
+        error = "Steam statistics are unavailable"
     return host.templates.TemplateResponse(
         "partials/steam_stats.html",
         {"request": request, "stats": stats, "error": error, "profile": profile, "title": title},
@@ -231,12 +258,12 @@ async def gnw_set_status(section: str, request: Request):
     status = (form.get("status") or "").strip()
     if not profile or not title:
         raise HTTPException(400, "profile and title required")
-    try:
-        ok = host.gnw.set_status(section, profile, title, status)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
-    if not ok:
-        raise HTTPException(404, "item not found")
+    result = await run_in_threadpool(workspace._response, lambda: workspace.change(
+        section, profile, title, {"status": status}, str(form.get("expected_version") or "") or None,
+    ))
+    confirmed = json.loads(bytes(result.body))
+    if confirmed.get("history_warning"):
+        raise HTTPException(503, "Library saved; local history is unconfirmed. Refresh before another change.")
     # Full refresh so the card lands in its new column and counts update.
     return Response(status_code=204, headers={
         "HX-Trigger": host._hx_trigger(flashSuccess={"message": "Status updated"}),
@@ -253,9 +280,10 @@ def gnw_edit_form(section: str, request: Request, profile: str, title: str):
     from ... import application as host
 
     host._gnw_section(section)
-    item = host.gnw.get_item(section, profile, title)
-    if not item:
-        raise HTTPException(404, "item not found")
+    try:
+        item = workspace._current(section, profile, title)
+    except Exception:
+        raise HTTPException(503, "Media details are unavailable") from None
     return host.templates.TemplateResponse(
         "partials/media_form.html",
         {"request": request, "section": section, "item": item,
@@ -277,21 +305,17 @@ async def gnw_update(section: str, request: Request):
     if not profile or not title:
         raise HTTPException(400, "profile and title required")
     editable = host.gnw.GAME_EDITABLE if section == "games" else host.gnw.SHOW_EDITABLE
-    int_fields = {"priority", "rating", "current_episode", "current_season", "total_episodes"}
     fields: dict[str, Any] = {}
     for key in editable:
         if key not in form:
             continue
-        val = form[key]
-        if key in int_fields:
-            raw = str(val).strip()
-            val = int(raw) if raw.lstrip("-").isdigit() else None
-        if key == "rating" and val is not None and not 0 <= val <= 10:
-            raise HTTPException(422, "rating must be between 0 and 10")
-        fields[key] = val
-    ok = host.gnw.update_item(section, profile, title, fields)
-    if not ok:
-        raise HTTPException(404, "item not found")
+        fields[key] = form[key]
+    result = await run_in_threadpool(workspace._response, lambda: workspace.change(
+        section, profile, title, fields, str(form.get("expected_version") or "") or None,
+    ))
+    confirmed = json.loads(bytes(result.body))
+    if confirmed.get("history_warning"):
+        raise HTTPException(503, "Library saved; local history is unconfirmed. Refresh before another change.")
     return Response(status_code=204, headers={
         "HX-Trigger": host._hx_trigger(flashSuccess={"message": "Media details saved"}),
         "HX-Refresh": "true",

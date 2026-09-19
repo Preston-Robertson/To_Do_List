@@ -1,0 +1,59 @@
+[data-collection-page] { --collection-rule: var(--border-color, #d3d9d6); min-width: 0; }
+.collection-toolbar, .collection-row-actions, .collection-pagination { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.collection-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-block: 1px solid var(--collection-rule); margin-block: 16px; }
+.collection-summary > div { padding: 16px 12px; min-width: 0; }
+.collection-summary span, .collection-summary strong, .collection-summary small { display: block; overflow-wrap: anywhere; }
+.collection-summary strong { font-size: 1.3rem; margin-block: 6px; }
+.collection-asof { font-size: .8rem; overflow-wrap: anywhere; }
+.collection-filters { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); align-items: end; gap: 10px; margin-block: 20px; }
+.collection-filters label, .collection-purchase-fields label, #collection-import label, #collection-purchase > label { display: grid; gap: 4px; min-width: 0; font-size: .85rem; }
+.collection-filters input, .collection-filters select, .collection-purchase-fields input, .collection-purchase-fields select { width: 100%; min-width: 0; }
+.collection-filters .btn { min-height: 38px; }
+.collection-holdings table { width: 100%; }
+.collection-holdings th, .collection-holdings td { padding: 12px 8px; vertical-align: top; }
+.collection-holdings small { display: block; margin-top: 4px; font-size: .75rem; }
+.collection-identity .deck-card-name { display: flex; align-items: center; gap: 10px; text-align: left; white-space: normal; background: transparent; border: 0; color: inherit; padding: 0; font: inherit; }
+.collection-identity img { width: 34px; height: 48px; object-fit: contain; flex: 0 0 34px; }
+.collection-identity span { min-width: 0; overflow-wrap: anywhere; }
+.collection-pagination { justify-content: center; padding-block: 20px; }
+.collection-pagination .btn { width: 40px; height: 40px; padding: 8px; }
+.collection-drawer { width: min(640px, calc(100vw - 24px)); max-width: 640px; max-height: calc(100dvh - 24px); margin: 12px 12px 12px auto; padding: 20px; border-radius: 6px; }
+.collection-drawer > header, #collection-purchase > header, #collection-import > header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; }
+.collection-drawer h2, #collection-purchase h2, #collection-import h2 { font-size: 1.25rem; margin: 0; }
+.collection-lot { border-top: 1px solid var(--collection-rule); padding-block: 18px; overflow-wrap: anywhere; }
+.collection-lot > header { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.collection-source { font-size: .8rem; color: var(--text-muted, #596960); }
+.collection-lot dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.collection-lot dt { font-size: .75rem; opacity: .8; }
+.collection-lot dd { margin: 4px 0 0; font-size: .9rem; }
+.collection-lot details > summary { cursor: pointer; padding-block: 10px; }
+.collection-notes { white-space: pre-wrap; }
+.collection-provenance { font-size: .8rem; }
+.collection-estimate-controls { display: grid; gap: 10px; }
+.collection-estimate-controls output { font-size: .85rem; overflow-wrap: anywhere; }
+.collection-search-results { max-height: 230px; overflow-y: auto; margin-block: 12px; }
+.collection-search-results button { width: 100%; text-align: left; display: flex; align-items: center; gap: 10px; padding: 10px; border: 0; border-bottom: 1px solid var(--collection-rule); background: transparent; color: inherit; white-space: normal; }
+.collection-search-results button:hover { background: var(--hover-bg, #eaf1ed); }
+.collection-search-results img { width: 34px; height: 48px; object-fit: contain; }
+#collection-purchase, #collection-import { padding: 20px; max-width: calc(100vw - 24px); }
+#collection-import form { display: grid; gap: 14px; }
+[data-collection-error], [data-collection-form-error] { color: var(--danger, #ad2435); overflow-wrap: anywhere; }
+@media (max-width: 1000px) { .collection-filters { grid-template-columns: repeat(3, minmax(0, 1fr)); } .collection-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 600px) {
+  .collection-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .collection-toolbar { width: 100%; }
+  .collection-toolbar .btn { flex: 1 1 auto; font-size: .8rem; }
+  .collection-summary > div { padding: 12px 6px; }
+  .collection-summary strong { font-size: 1.1rem; }
+  .collection-holdings table, .collection-holdings tbody, .collection-holdings tr, .collection-holdings td { display: block; width: 100%; min-width: 0; }
+  .collection-holdings thead { display: none; }
+  .collection-holdings tr { border-bottom: 1px solid var(--collection-rule); padding-block: 12px; }
+  .collection-holdings td { border: 0; padding: 6px 0; overflow-wrap: anywhere; white-space: normal; }
+  .collection-holdings td[data-label]::before { content: attr(data-label); display: inline-block; width: 43%; vertical-align: top; font-size: .8rem; opacity: .75; }
+  .collection-holdings td small { padding-left: 43%; }
+  .collection-holdings .collection-identity small { padding-left: 0; }
+  .collection-row-actions { display: flex !important; justify-content: flex-end; }
+  .collection-drawer { padding: 14px; }
+  .collection-drawer .cards-form-grid { grid-template-columns: 1fr; }
+  .collection-lot dl { grid-template-columns: 1fr; }
+}

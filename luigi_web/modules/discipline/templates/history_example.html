@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% macro module_enabled(name) %}{% endmacro %}
+{% block head_scripts %}
+<link rel="stylesheet" href="/module-assets/discipline/history-example.css?v={{ asset_version }}">
+<script src="/module-assets/discipline/history-example.js?v={{ asset_version }}" defer></script>
+{% endblock %}
+{% block content %}
+<div class="dh-example" id="dh-example">
+  <header class="dh-header">
+    <a href="/discipline" class="dh-back">{{ shell_icon('arrow-left') }} Back to Discipline</a>
+    <button type="button" class="dh-icon" id="dh-reset" aria-label="Reset example" title="Reset example">{{ shell_icon('rotate-ccw') }}</button>
+    <div class="dh-heading"><h1>{{ example_seed.name }}</h1><span class="dh-badge">Synthetic example</span></div>
+    <p class="dh-asof">As of <time datetime="2030-04-24">24 April 2030</time></p>
+  </header>
+  <dl class="dh-summary">
+    <div><dt>This week</dt><dd id="dh-week-count">2 / 3</dd><progress id="dh-week-progress" max="3" value="2" aria-label="Current week completions"></progress></div>
+    <div><dt>Completions in 2030</dt><dd id="dh-total">15</dd></div>
+    <div><dt>Last completed</dt><dd class="dh-last" id="dh-last">23 April 2030</dd></div>
+  </dl>
+  <div class="dh-tabs" role="tablist" aria-label="History views">
+    <button type="button" role="tab" id="dh-month-tab" aria-selected="true" aria-controls="dh-month-panel" tabindex="0">{{ shell_icon('calendar-days') }} Month</button>
+    <button type="button" role="tab" id="dh-year-tab" aria-selected="false" aria-controls="dh-year-panel" tabindex="-1">{{ shell_icon('layers') }} Year</button>
+    <button type="button" role="tab" id="dh-log-tab" aria-selected="false" aria-controls="dh-log-panel" tabindex="-1">{{ shell_icon('list') }} Log</button>
+  </div>
+  <section id="dh-month-panel" role="tabpanel" aria-labelledby="dh-month-tab" tabindex="0">
+    <div class="dh-month-layout">
+      <section class="dh-calendar" aria-labelledby="dh-month-heading">
+        <div class="dh-section-heading"><h2 id="dh-month-heading" aria-live="polite">April 2030</h2><div class="dh-tools">
+          <button type="button" class="dh-icon" id="dh-prev" aria-label="Previous month" title="Previous month">{{ shell_icon('arrow-left') }}</button>
+          <button type="button" class="dh-icon" id="dh-next" aria-label="Next month" title="Next month">{{ shell_icon('chevron-right') }}</button>
+        </div></div>
+        <div class="dh-weekdays" aria-hidden="true"><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span></div>
+        <div id="dh-month-days" class="dh-month-days" role="group" aria-labelledby="dh-month-heading"></div>
+        <p class="dh-month-total" id="dh-month-total"></p>
+      </section>
+      <section class="dh-weeks" aria-labelledby="dh-weeks-heading">
+        <div class="dh-section-heading"><h2 id="dh-weeks-heading">Weekly totals</h2><span>Target {{ example_seed.weeklyTarget }}</span></div>
+        <ol id="dh-week-list" class="dh-week-list" aria-label="Six weeks of completion totals"></ol>
+      </section>
+    </div>
+  </section>
+  <section id="dh-year-panel" role="tabpanel" aria-labelledby="dh-year-tab" tabindex="0" hidden>
+    <div class="dh-section-heading"><h2>2030</h2><span id="dh-year-count">15 completions</span></div>
+    <div class="dh-year-scroll" role="region" aria-label="2030 completion calendar" tabindex="0">
+      <div class="dh-year-layout">
+        <div id="dh-year-months" class="dh-year-months"></div>
+        <div class="dh-year-weekdays" aria-hidden="true"><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span><span>S</span></div>
+        <div id="dh-year-days" class="dh-year-days" role="group" aria-label="Daily completions in 2030"></div>
+      </div>
+    </div>
+    <div class="dh-legend"><span><i class="dh-swatch"></i>No completion</span><span><i class="dh-swatch is-complete"></i>Completed</span></div>
+  </section>
+  <section id="dh-log-panel" role="tabpanel" aria-labelledby="dh-log-tab" tabindex="0" hidden>
+    <div class="dh-section-heading"><h2>Completion log</h2><span id="dh-log-count">15 entries</span></div>
+    <ol id="dh-log" class="dh-log" aria-label="Completions, newest first"></ol>
+    <p id="dh-log-empty" class="dh-empty" hidden>No completions.</p>
+  </section>
+  <div class="dh-status-bar">
+    <p id="dh-status" role="status" aria-live="polite" aria-atomic="true"></p>
+    <button type="button" class="dh-button" id="dh-undo" disabled>{{ shell_icon('rotate-ccw') }} Undo</button>
+  </div>
+  <dialog class="dh-dialog" id="dh-day-dialog" aria-labelledby="dh-day-heading">
+    <div class="dh-section-heading"><h2 id="dh-day-heading"></h2><button type="button" class="dh-icon" id="dh-close" aria-label="Close day" title="Close">{{ shell_icon('x') }}</button></div>
+    <p class="dh-day-status" id="dh-day-status"></p>
+    <dl class="dh-timestamps" id="dh-timestamps"><div><dt>Completed at (UTC)</dt><dd><time id="dh-completed-at"></time></dd></div><div><dt>Logged at (UTC)</dt><dd><time id="dh-logged-at"></time></dd></div></dl>
+    <form method="dialog" id="dh-day-form">
+      <label class="dh-field" id="dh-time-field" for="dh-time">Completion time (UTC)<input type="time" id="dh-time" required step="60" value="18:30"></label>
+      <p id="dh-day-error" class="dh-error" role="alert"></p>
+      <div class="dh-dialog-actions">
+        <button type="button" class="dh-button" id="dh-cancel">Cancel</button>
+        <button type="submit" class="dh-button dh-primary" id="dh-mark">{{ shell_icon('check') }} Mark complete</button>
+        <button type="button" class="dh-button dh-danger" id="dh-remove" hidden>{{ shell_icon('trash-2') }} Remove completion</button>
+      </div>
+    </form>
+  </dialog>
+  <template id="dh-check-icon">{{ shell_icon('check') }}</template>
+  <script type="application/json" id="dh-seed">{{ example_seed | tojson }}</script>
+</div>
+{% endblock %}

@@ -74,6 +74,35 @@
   </article>
 </section>
 
+<section class="insights-detail-band" aria-labelledby="recorded-activity-title">
+  <header><h2 id="recorded-activity-title">Recorded web activity</h2><span class="muted-hint">Last 30 days | Web-tracked only</span></header>
+  {% if history_error %}
+  <p class="empty" role="status">Recorded activity is temporarily unavailable.</p>
+  {% elif recorded_insights is defined and recorded_insights is not none %}
+  <div class="insights-summary insights-grid" aria-label="Recorded web activity in the last 30 days">
+    <div><span>Completed runs</span><strong>{{ recorded_insights.last_30_days.completed_runs }}</strong></div>
+    <div><span>Confirmed changes</span><strong>{{ recorded_insights.last_30_days.confirmed_changes }}</strong></div>
+    {% if section == 'games' %}
+    <div><span>Hours added</span><strong>{{ recorded_insights.last_30_days.hours_added }}</strong></div>
+    {% else %}
+    <div><span>Episodes added</span><strong>{{ recorded_insights.last_30_days.episodes_added }}</strong></div>
+    {% endif %}
+  </div>
+  <div class="table-wrap"><table class="insights-data-table" aria-label="Recorded activity totals">
+    <thead><tr><th>Recorded history</th><th>Count</th></tr></thead>
+    <tbody>
+      <tr><td>Web-recorded completed runs</td><td>{{ recorded_insights.recorded_completed_runs }}</td></tr>
+      <tr><td>Legacy completed baseline (not timed activity)</td><td>{{ recorded_insights.legacy_completed_runs }}</td></tr>
+      <tr><td>Total completed runs, including baseline</td><td>{{ recorded_insights.completed_runs }}</td></tr>
+      <tr><td>Confirmed web changes</td><td>{{ recorded_insights.confirmed_changes }}</td></tr>
+      <tr><td>Unconfirmed operations</td><td>{{ recorded_insights.pending_count }}</td></tr>
+    </tbody>
+  </table></div>
+  {% else %}
+  <p class="empty" role="status">Recorded activity is unavailable.</p>
+  {% endif %}
+</section>
+
 <section class="insights-detail-band">
   <header><h2>Highly rated unfinished</h2><span class="muted-hint">Rating 8 or higher</span></header>
   {% if insights.highly_rated_unfinished %}

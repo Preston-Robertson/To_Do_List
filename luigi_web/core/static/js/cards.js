@@ -237,8 +237,12 @@
   const DECK_VIEW_KEY = "luigi.cards.deckView";
   const DECK_GROUP_KEY = "luigi.cards.collapsedGroups";
   const deckViewMedia = window.matchMedia("(max-width: 700px)");
-  const deckViewKey = () => `${DECK_VIEW_KEY}.${deckViewMedia.matches ? "mobile" : "desktop"}`;
+  const deckViewDevice = () => deckViewMedia.matches ? "mobile" : "desktop";
+  const deckViewKey = (panel) => `${DECK_VIEW_KEY}.${panel.dataset.deckId}.${deckViewDevice()}`;
   const deckViewSelections = new Map();
+  const deckGroupSelections = new Map();
+  const deckSwapStates = new Map();
+  const deckRequestFocus = new WeakMap();
 
   function revealLoadedStackImage(image) {
     if (image.closest(".deck-stack-card") && image.complete && image.naturalWidth > 0) {
@@ -248,6 +252,8 @@
 
   function loadDeckViewImages(view) {
     view.querySelectorAll("img[data-deck-image-src]").forEach((image) => {
+      const group = image.closest("[data-deck-group-key]");
+      if (group && !group.open) return;
       const source = image.dataset.deckImageSrc;
       if (!source) return;
       if (image.closest(".deck-stack-card")) {
@@ -263,11 +269,12 @@
     const panel = root.querySelector?.("#deck-card-panel") || document.getElementById("deck-card-panel");
     if (!panel) return;
     let selected = deckViewMedia.matches ? "stacks" : "table";
-    if (deckViewSelections.has(deckViewKey())) {
-      selected = deckViewSelections.get(deckViewKey());
+    if (deckViewSelections.has(deckViewKey(panel))) {
+      selected = deckViewSelections.get(deckViewKey(panel));
     } else {
       try {
-        selected = localStorage.getItem(deckViewKey())
+        selected = localStorage.getItem(deckViewKey(panel))
+          || localStorage.getItem(`${DECK_VIEW_KEY}.${deckViewDevice()}`)
           || (deckViewMedia.matches ? "stacks" : localStorage.getItem(DECK_VIEW_KEY))
           || selected;
       } catch {}
@@ -292,8 +299,10 @@
   }
 
   function collapsedDeckGroups(panel) {
+    const key = deckGroupKey(panel);
+    if (deckGroupSelections.has(key)) return new Set(deckGroupSelections.get(key));
     try {
-      const parsed = JSON.parse(localStorage.getItem(deckGroupKey(panel)) || "[]");
+      const parsed = JSON.parse(localStorage.getItem(key) || "[]");
       return new Set(Array.isArray(parsed) ? parsed : []);
     } catch {
       return new Set();
@@ -308,6 +317,129 @@
       group.open = !collapsed.has(group.dataset.deckGroupKey);
     });
   }
+
+  function prepareDeckStacks(panel) {
+    panel?.querySelectorAll(".deck-stack-board").forEach((board) => {
+      const lanes = new Map();
+      board.querySelectorAll(".deck-stack-column").forEach((column) => {
+        const label = column.querySelector("h3")?.textContent || "Cards";
+        const lane = lanes.get(label) || 0;
+        lanes.set(label, lane + 1);
+        const list = column.querySelector(".deck-stack-list");
+        list.dataset.deckStackKey = JSON.stringify([board.dataset.board, label, lane]);
+        list.tabIndex = 0;
+        list.setAttribute("role", "region");
+        list.setAttribute("aria-label", `${label}, ${list.querySelectorAll('.deck-stack-card').length} cards`);
+      });
+    });
+  }
+
+  function deckFocusIdentity(element, panel) {
+    if (!element || !panel.contains(element)) return null;
+    const attributes = ["id", "data-card-detail-url", "data-deck-view", "data-deck-stack-key", "data-deck-group-key", "action"];
+    const anchor = element.closest(attributes.map((name) => `[${name}]`).join(","));
+    if (!anchor || anchor === panel) return null;
+    const attribute = attributes.find((name) => anchor.hasAttribute(name));
+    return {
+      attribute, value: anchor.getAttribute(attribute),
+      view: element.closest("[data-deck-view-panel]")?.dataset.deckViewPanel,
+      child: anchor === element ? null : {
+        tag: element.tagName, name: element.getAttribute("name"), type: element.getAttribute("type"),
+      },
+    };
+  }
+
+  function findDeckFocus(identity, panel) {
+    if (!identity) return null;
+    const root = identity.view
+      ? panel.querySelector(`[data-deck-view-panel="${identity.view}"]`) : panel;
+    const anchor = Array.from(root?.querySelectorAll(`[${identity.attribute}]`) || [])
+      .find((element) => element.getAttribute(identity.attribute) === identity.value);
+    if (!anchor || !identity.child) return anchor;
+    return Array.from(anchor.querySelectorAll(identity.child.tag)).find((element) =>
+      element.getAttribute("name") === identity.child.name && element.getAttribute("type") === identity.child.type);
+  }
+
+  function deckScrollAreas(panel) {
+    return [...panel.querySelectorAll(".deck-stack-board-columns, [data-deck-stack-key], .cards-table-scroll")];
+  }
+
+  function deckScrollKey(element) {
+    if (element.dataset.deckStackKey) return element.dataset.deckStackKey;
+    return element.closest("[data-deck-group-key]")?.dataset.deckGroupKey
+      || element.closest("[data-board]")?.dataset.board;
+  }
+
+  document.body.addEventListener("htmx:beforeRequest", (event) => {
+    const panel = event.detail.elt?.closest("#deck-card-panel");
+    if (!panel || !event.detail.xhr) return;
+    deckRequestFocus.set(event.detail.xhr, {
+      deckId: panel.dataset.deckId,
+      identity: deckFocusIdentity(document.activeElement, panel),
+    });
+  });
+
+  document.body.addEventListener("htmx:afterRequest", (event) => {
+    if (event.detail.successful) return;
+    const requestFocus = deckRequestFocus.get(event.detail.xhr);
+    if (!requestFocus) return;
+    queueMicrotask(() => {
+      const panel = document.getElementById("deck-card-panel");
+      if (panel?.dataset.deckId === requestFocus.deckId && document.activeElement === document.body) {
+        findDeckFocus(requestFocus.identity, panel)?.focus({ preventScroll: true });
+      }
+    });
+  });
+
+  document.body.addEventListener("htmx:beforeSwap", (event) => {
+    const panel = event.detail?.target;
+    if (panel?.id !== "deck-card-panel" || event.detail.shouldSwap === false) return;
+    const collapsed = new Set([...panel.querySelectorAll("[data-deck-group-key]")]
+      .filter((group) => !group.open).map((group) => group.dataset.deckGroupKey));
+    deckGroupSelections.set(deckGroupKey(panel), collapsed);
+    const requestFocus = deckRequestFocus.get(event.detail.xhr);
+    deckSwapStates.set(panel.dataset.deckId, {
+      focus: deckFocusIdentity(document.activeElement, panel)
+        || (document.activeElement === document.body && requestFocus?.deckId === panel.dataset.deckId
+          ? requestFocus.identity : null),
+      openers: [cardDetailDialog, quickCollect].filter(Boolean).map((dialog) =>
+        [dialog, deckFocusIdentity(dialogOpeners.get(dialog), panel)]),
+      scroll: new Map(deckScrollAreas(panel).map((element) =>
+        [deckScrollKey(element), [element.scrollLeft, element.scrollTop]])),
+      page: [window.scrollX, window.scrollY],
+    });
+  });
+
+  function restoreDeckPanel(panel) {
+    const state = deckSwapStates.get(panel?.dataset.deckId);
+    if (!state) return;
+    deckSwapStates.delete(panel.dataset.deckId);
+    state.openers.forEach(([dialog, identity]) => {
+      const opener = findDeckFocus(identity, panel);
+      if (opener) dialogOpeners.set(dialog, opener);
+    });
+    const focus = findDeckFocus(state.focus, panel)
+      || (state.focus ? panel.querySelector('[data-deck-view][aria-pressed="true"]') : null);
+    focus?.focus({ preventScroll: true });
+    deckScrollAreas(panel).forEach((element) => {
+      const position = state.scroll.get(deckScrollKey(element));
+      if (position) element.scrollTo(...position);
+    });
+    window.scrollTo(...state.page);
+  }
+
+  document.addEventListener("keydown", (event) => {
+    const list = event.target.closest?.(".deck-stack-list");
+    if (!list || !["Home", "End", "ArrowDown", "ArrowUp"].includes(event.key)) return;
+    const cards = [...list.querySelectorAll(".deck-stack-card")];
+    if (!cards.length) return;
+    event.preventDefault();
+    const index = cards.indexOf(event.target);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? cards.length - 1
+      : Math.max(0, Math.min(cards.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)));
+    cards[next].focus({ preventScroll: true });
+    cards[next].scrollIntoView({ block: "nearest", inline: "nearest" });
+  });
 
   function hideFailedStackImages(root = document) {
     root.querySelectorAll?.(".deck-stack-card img").forEach((image) => {
@@ -329,30 +461,38 @@
   document.addEventListener("click", (event) => {
     const button = event.target.closest("[data-deck-view]");
     if (!button) return;
-    deckViewSelections.set(deckViewKey(), button.dataset.deckView);
-    try { localStorage.setItem(deckViewKey(), button.dataset.deckView); } catch {}
-    applyDeckView(button.closest("#deck-card-panel"));
+    const panel = button.closest("#deck-card-panel");
+    deckViewSelections.set(deckViewKey(panel), button.dataset.deckView);
+    try { localStorage.setItem(deckViewKey(panel), button.dataset.deckView); } catch {}
+    applyDeckView(panel);
   });
 
   document.addEventListener("toggle", (event) => {
     const group = event.target.closest?.("[data-deck-group-key]");
-    if (!group) return;
+    if (!group?.isConnected) return;
     const panel = group.closest("#deck-card-panel");
     const collapsed = collapsedDeckGroups(panel);
     if (group.open) collapsed.delete(group.dataset.deckGroupKey);
     else collapsed.add(group.dataset.deckGroupKey);
+    deckGroupSelections.set(deckGroupKey(panel), collapsed);
+    if (group.open && !group.closest("[data-deck-view-panel]")?.hidden) loadDeckViewImages(group);
     try {
       localStorage.setItem(deckGroupKey(panel), JSON.stringify([...collapsed]));
     } catch {}
   }, true);
 
-  applyDeckView();
   applyDeckGroupState();
+  prepareDeckStacks(document.getElementById("deck-card-panel"));
+  applyDeckView();
   hideFailedStackImages();
   deckViewMedia.addEventListener?.("change", () => applyDeckView());
   document.body.addEventListener("htmx:afterSwap", (event) => {
-    applyDeckView(event.target);
+    const panel = document.getElementById("deck-card-panel");
+    if (!panel || (event.target !== panel && !event.target.contains(panel))) return;
     applyDeckGroupState(event.target);
+    prepareDeckStacks(panel);
+    applyDeckView(event.target);
+    restoreDeckPanel(panel);
     hideFailedStackImages(event.target);
   });
 

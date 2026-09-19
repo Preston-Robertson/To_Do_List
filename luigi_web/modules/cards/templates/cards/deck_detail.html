@@ -11,10 +11,16 @@
     </div>
     <div class="deck-header-actions">
       <button type="button" class="btn btn-primary" data-cards-dialog-open="add-card-dialog">{{ icon('plus') }} Add card</button>
+      <a class="btn" href="/cards/{{ current_game }}/decks/{{ deck.id }}/build">{{ icon('list') }} Build checklist</a>
+      <a class="btn" href="/cards/{{ current_game }}/decks/{{ deck.id }}/versions">{{ icon('layers') }} Versions</a>
       <details class="deck-action-menu">
         <summary class="btn" aria-label="Deck actions">Actions {{ icon('chevron-down') }}</summary>
         <div class="deck-action-options">
           <button type="button" data-cards-dialog-open="edit-deck-dialog">{{ icon('pencil') }} Edit deck</button>
+          <form method="post" action="/cards/{{ current_game }}/decks/{{ deck.id }}/duplicate"
+                hx-post="/cards/{{ current_game }}/decks/{{ deck.id }}/duplicate" hx-swap="none" hx-disabled-elt="find button">
+            <button type="submit">{{ icon('copy') }} Duplicate deck</button>
+          </form>
           <button type="button" data-cards-dialog-open="tags-dialog">{{ icon('tags') }} Edit tags</button>
           <button type="button" data-cards-dialog-open="import-cards-dialog">{{ icon('upload') }} Import cards</button>
           <a href="/cards/{{ current_game }}/decks/{{ deck.id }}/export.txt">{{ icon('download') }} Export deck</a>

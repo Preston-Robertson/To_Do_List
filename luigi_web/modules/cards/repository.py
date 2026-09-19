@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 
 from ...paths import CARDS_DB_PATH
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 BOARDS = ("commander", "main", "side", "maybe")
 CONDITIONS = ("NM", "LP", "MP", "HP", "DMG")
 SUPPORTED_CURRENCIES = ("USD", "EUR")
@@ -320,6 +320,9 @@ def init_db() -> None:
                        WHEN acquired_price_minor IS NOT NULL THEN qty ELSE 0 END
                 """
             )
+        from . import purchases
+
+        purchases.init_schema(conn, migrate_legacy=version < 4)
         conn.executemany(
             """
             INSERT OR IGNORE INTO games(code, name, active, sort_order)
@@ -464,15 +467,21 @@ def browse_catalog(
         "cards": "COALESCE(json_extract(c.raw_json, '$.oracle_id'), LOWER(c.name))",
         "art": "COALESCE(json_extract(c.raw_json, '$.illustration_id'), json_extract(c.raw_json, '$.oracle_id'), LOWER(c.name))",
     }.get(normalized["unique"])
-    rank_sql = (
-        f"ROW_NUMBER() OVER (PARTITION BY {partition} ORDER BY {_catalog_prefer_sql(normalized['prefer'])}, c.id)"
-        if partition else "1"
-    )
-    source_sql = f"(SELECT c.*, {rank_sql} AS catalog_rank FROM cards c WHERE {where}) c"
+    if partition:
+        rank_sql = f"ROW_NUMBER() OVER (PARTITION BY {partition} ORDER BY {_catalog_prefer_sql(normalized['prefer'])}, c.id)"
+        source_sql = (
+            f"(SELECT c.id, {rank_sql} AS catalog_rank FROM cards c WHERE {where}) ranked"
+            " JOIN cards c ON c.id = ranked.id"
+        )
+        page_where = "ranked.catalog_rank = 1"
+    else:
+        source_sql = "cards c"
+        page_where = where
     order_sql = _catalog_order_sql(normalized["order"], normalized["direction"])
+    count_sql = f"COUNT(DISTINCT {partition})" if partition else "COUNT(*)"
     with _connect() as conn:
         total = int(conn.execute(
-            f"SELECT COUNT(*) FROM {source_sql} WHERE c.catalog_rank = 1", values
+            f"SELECT {count_sql} FROM cards c WHERE {where}", values
         ).fetchone()[0])
         max_page = max(1, (total + safe_size - 1) // safe_size)
         safe_page = min(safe_page, max_page)
@@ -482,7 +491,7 @@ def browse_catalog(
                    c.rarity, c.type_line, c.mana_cost, c.image_small,
                    c.image_normal, c.price_usd_minor,
                    c.price_usd_foil_minor, c.source
-                FROM {source_sql} WHERE c.catalog_rank = 1
+                     FROM {source_sql} WHERE {page_where}
              ORDER BY {order_sql}, c.id
              LIMIT ? OFFSET ?
             """,
@@ -1206,11 +1215,20 @@ def card_detail(card_id: int, game_code: str) -> dict[str, Any] | None:
 
 
 def _shape_collection_valuation(item: dict[str, Any]) -> dict[str, Any]:
+    if "exact_cost_minor" not in item:
+        with _connect() as conn:
+            costs = conn.execute("""
+                SELECT SUM(NULLIF(remaining_priced_qty, 0) * unit_price_minor) AS exact_cost_minor,
+                       SUM(CASE WHEN price_source = 'entered' THEN remaining_priced_qty * unit_price_minor END) AS actual_cost_minor,
+                       COALESCE(SUM(CASE WHEN price_source = 'entered' THEN remaining_priced_qty ELSE 0 END), 0) AS actual_qty
+                  FROM collection_lots WHERE collection_id = ? AND remaining_qty > 0
+            """, (item["id"],)).fetchone()
+        item.update(dict(costs))
     qty = int(item["qty"])
     acquired_qty = min(int(item.get("acquired_qty") or 0), qty)
     market_unit = (
         item["price_usd_foil_minor"]
-        if item["foil"] and item["price_usd_foil_minor"] is not None
+        if item["foil"]
         else item["price_usd_minor"]
     )
     purchase_unit = item["acquired_price_minor"]
@@ -1221,27 +1239,29 @@ def _shape_collection_valuation(item: dict[str, Any]) -> dict[str, Any]:
         qty * int(market_unit) if market_unit is not None else None
     )
     item["acquired_qty"] = acquired_qty
-    item["purchase_cost_minor"] = (
+    item["purchase_cost_minor"] = item.get("exact_cost_minor", (
         acquired_qty * int(purchase_unit)
         if purchase_unit is not None and acquired_qty else None
-    )
+    ))
+    actual_qty = int(item.get("actual_qty", acquired_qty))
+    actual_cost = item.get("actual_cost_minor", item["purchase_cost_minor"])
     comparable = (
         market_unit is not None
-        and purchase_unit is not None
-        and acquired_qty > 0
+        and actual_cost is not None
+        and actual_qty > 0
         and item["acquired_currency"] == "USD"
     )
     if comparable:
-        gain = acquired_qty * (int(market_unit) - int(purchase_unit))
+        gain = actual_qty * int(market_unit) - int(actual_cost)
         item["gain_loss_usd_minor"] = gain
         item["gain_loss_basis_points"] = (
             int(
                 (
                     Decimal(gain) * Decimal(10000)
-                    / Decimal(acquired_qty * int(purchase_unit))
+                    / Decimal(actual_cost)
                 ).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
             )
-            if purchase_unit
+            if actual_cost
             else None
         )
     else:
@@ -1270,10 +1290,19 @@ def list_collection(game_code: str, query: str = "", *, limit: int = 500) -> lis
                    c.collector_number, c.rarity, c.type_line,
                    c.image_small, c.image_normal,
                    c.price_usd_minor, c.price_usd_foil_minor,
+                   costs.exact_cost_minor, costs.actual_cost_minor,
+                   COALESCE(costs.actual_qty, 0) AS actual_qty,
                    (SELECT COUNT(DISTINCT dc.deck_id) FROM deck_cards dc
                      WHERE dc.card_id = c.id) AS in_decks
               FROM collection col
               JOIN cards c ON c.id = col.card_id
+              LEFT JOIN (
+                  SELECT collection_id,
+                         SUM(NULLIF(remaining_priced_qty, 0) * unit_price_minor) AS exact_cost_minor,
+                         SUM(CASE WHEN price_source = 'entered' THEN remaining_priced_qty * unit_price_minor END) AS actual_cost_minor,
+                         SUM(CASE WHEN price_source = 'entered' THEN remaining_priced_qty ELSE 0 END) AS actual_qty
+                    FROM collection_lots WHERE remaining_qty > 0 GROUP BY collection_id
+              ) costs ON costs.collection_id = col.id
              WHERE c.game_code = ?{where}
              ORDER BY c.name COLLATE NOCASE, col.foil DESC LIMIT ?
             """,
@@ -1288,35 +1317,43 @@ def collection_totals(game_code: str) -> dict[str, int | None]:
         row = conn.execute(
             """
             WITH valued AS (
-                SELECT col.qty, col.acquired_price_minor, col.acquired_qty,
+                SELECT col.qty, costs.actual_cost_minor AS purchase_cost_minor,
+                       COALESCE(costs.actual_qty, 0) AS acquired_qty,
                        col.acquired_currency,
                        CASE WHEN col.foil = 1
-                           THEN COALESCE(c.price_usd_foil_minor, c.price_usd_minor)
+                           THEN c.price_usd_foil_minor
                            ELSE c.price_usd_minor END AS current_unit_usd_minor
                   FROM collection col JOIN cards c ON c.id = col.card_id
+                  LEFT JOIN (
+                      SELECT collection_id,
+                             SUM(remaining_priced_qty * unit_price_minor) AS actual_cost_minor,
+                             SUM(remaining_priced_qty) AS actual_qty
+                        FROM collection_lots
+                       WHERE remaining_qty > 0 AND price_source = 'entered' GROUP BY collection_id
+                  ) costs ON costs.collection_id = col.id
                  WHERE c.game_code = ?
             )
             SELECT COALESCE(SUM(qty), 0) AS qty,
                    COALESCE(SUM(qty * COALESCE(current_unit_usd_minor, 0)), 0)
                        AS value_usd_minor,
-                   COALESCE(SUM(CASE WHEN acquired_price_minor IS NOT NULL
+                   COALESCE(SUM(CASE WHEN purchase_cost_minor IS NOT NULL
                                           AND acquired_currency = 'USD'
-                       THEN acquired_qty * acquired_price_minor ELSE 0 END), 0)
+                       THEN purchase_cost_minor ELSE 0 END), 0)
                        AS cost_basis_usd_minor,
-                   COALESCE(SUM(CASE WHEN acquired_price_minor IS NOT NULL
+                   COALESCE(SUM(CASE WHEN purchase_cost_minor IS NOT NULL
                                           AND acquired_currency = 'USD'
                        THEN acquired_qty ELSE 0 END), 0) AS cost_basis_qty,
-                   COALESCE(SUM(CASE WHEN acquired_price_minor IS NOT NULL
+                   COALESCE(SUM(CASE WHEN purchase_cost_minor IS NOT NULL
                                           AND acquired_currency = 'USD'
                                           AND current_unit_usd_minor IS NOT NULL
-                       THEN acquired_qty * acquired_price_minor ELSE 0 END), 0)
+                       THEN purchase_cost_minor ELSE 0 END), 0)
                        AS comparison_cost_usd_minor,
-                   COALESCE(SUM(CASE WHEN acquired_price_minor IS NOT NULL
+                   COALESCE(SUM(CASE WHEN purchase_cost_minor IS NOT NULL
                                           AND acquired_currency = 'USD'
                                           AND current_unit_usd_minor IS NOT NULL
                        THEN acquired_qty * current_unit_usd_minor ELSE 0 END), 0)
                        AS comparison_value_usd_minor,
-                   COALESCE(SUM(CASE WHEN acquired_price_minor IS NOT NULL
+                   COALESCE(SUM(CASE WHEN purchase_cost_minor IS NOT NULL
                                           AND acquired_currency = 'USD'
                                           AND current_unit_usd_minor IS NOT NULL
                        THEN acquired_qty ELSE 0 END), 0) AS comparison_qty
@@ -1915,103 +1952,19 @@ def add_to_collection(
     acquired_price: Any = None,
     acquired_currency: str = "USD",
     notes: str = "",
+    price_source: str = "entered",
+    estimate_confirmed: bool = False,
 ) -> None:
-    clean_qty = _positive_int(qty, "quantity")
-    clean_condition = str(condition or "NM").strip().upper()
-    if clean_condition not in CONDITIONS:
-        raise ValueError("invalid card condition")
-    currency = str(acquired_currency or "USD").strip().upper()
-    if currency not in SUPPORTED_CURRENCIES:
-        raise ValueError("unsupported acquisition currency")
-    clean_date = str(acquired_date or "").strip()
-    if clean_date:
-        try:
-            clean_date = date.fromisoformat(clean_date).isoformat()
-        except ValueError as exc:
-            raise ValueError("acquired date must be YYYY-MM-DD") from exc
-    clean_notes = _text(notes, "notes", maximum=5000) or None
-    price_minor = to_minor(acquired_price)
+    from . import purchases
+
     init_db()
     with transaction() as conn:
-        if not conn.execute("SELECT 1 FROM cards WHERE id = ?", (card_id,)).fetchone():
-            raise ValueError("card not found")
-        existing = conn.execute(
-            """
-            SELECT * FROM collection
-             WHERE card_id = ? AND foil = ? AND condition = ?
-            """,
-            (card_id, int(bool(foil)), clean_condition),
-        ).fetchone()
-        if (
-            existing
-            and price_minor is not None
-            and existing["acquired_price_minor"] is not None
-            and existing["acquired_currency"] != currency
-        ):
-            raise ValueError("acquisition currency must match the existing entry")
-        if existing:
-            existing_qty = int(existing["qty"])
-            existing_acquired_qty = int(existing["acquired_qty"])
-            total_qty = existing_qty + clean_qty
-            if total_qty > 9999:
-                raise ValueError("combined collection quantity must be at most 9999")
-            existing_price = existing["acquired_price_minor"]
-            added_acquired_qty = clean_qty if price_minor is not None else 0
-            total_acquired_qty = existing_acquired_qty + added_acquired_qty
-            if existing_price is not None and price_minor is not None:
-                weighted_total = (
-                    int(existing_price) * existing_acquired_qty
-                    + int(price_minor) * clean_qty
-                )
-                merged_price = int(
-                    (Decimal(weighted_total) / Decimal(total_acquired_qty)).quantize(
-                        Decimal("1"), rounding=ROUND_HALF_UP
-                    )
-                )
-            elif price_minor is not None:
-                merged_price = price_minor
-            else:
-                merged_price = existing_price
-            merged_currency = (
-                currency if price_minor is not None
-                else str(existing["acquired_currency"])
-            )
-            dates = [
-                str(value) for value in (existing["acquired_date"], clean_date)
-                if value
-            ]
-            conn.execute(
-                """
-                UPDATE collection SET qty = ?, acquired_date = ?,
-                    acquired_price_minor = ?, acquired_qty = ?,
-                    acquired_currency = ?, notes = ?
-                 WHERE id = ?
-                """,
-                (
-                    total_qty,
-                    min(dates) if dates else None,
-                    merged_price,
-                    total_acquired_qty,
-                    merged_currency,
-                    _merged_notes(existing["notes"], clean_notes),
-                    existing["id"],
-                ),
-            )
-        else:
-            conn.execute(
-                """
-                INSERT INTO collection(
-                    card_id, qty, foil, condition, acquired_date,
-                    acquired_price_minor, acquired_qty, acquired_currency, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    card_id, clean_qty, int(bool(foil)), clean_condition,
-                    clean_date or None, price_minor,
-                    clean_qty if price_minor is not None else 0,
-                    currency, clean_notes,
-                ),
-            )
+        purchases.record(
+            conn, card_id, qty=qty, foil=foil, condition=condition,
+            acquired_date=acquired_date, acquired_price=acquired_price,
+            acquired_currency=acquired_currency, notes=notes,
+            price_source=price_source, estimate_confirmed=estimate_confirmed,
+        )
 
 
 def remove_from_collection(
@@ -2020,41 +1973,9 @@ def remove_from_collection(
     *,
     game_code: str | None = None,
 ) -> bool:
-    init_db()
-    with _connect() as conn:
-        game_join = " JOIN cards c ON c.id = col.card_id" if game_code else ""
-        game_where = " AND c.game_code = ?" if game_code else ""
-        values: tuple[Any, ...] = (
-            (collection_id, game_code) if game_code else (collection_id,)
-        )
-        row = conn.execute(
-            f"SELECT col.qty, col.acquired_qty FROM collection col{game_join} "
-            f"WHERE col.id = ?{game_where}",
-            values,
-        ).fetchone()
-        if not row:
-            return False
-        if qty is None or _positive_int(qty, "quantity") >= int(row["qty"]):
-            conn.execute("DELETE FROM collection WHERE id = ?", (collection_id,))
-        else:
-            old_qty = int(row["qty"])
-            new_qty = old_qty - int(qty)
-            acquired_qty = int(row["acquired_qty"])
-            remaining_acquired_qty = int(
-                (Decimal(acquired_qty) * Decimal(new_qty) / Decimal(old_qty)).quantize(
-                    Decimal("1"), rounding=ROUND_HALF_UP
-                )
-            )
-            conn.execute(
-                """
-                UPDATE collection SET qty = ?, acquired_qty = ?,
-                    acquired_price_minor = CASE WHEN ? = 0
-                        THEN NULL ELSE acquired_price_minor END
-                 WHERE id = ?
-                """,
-                (new_qty, remaining_acquired_qty, remaining_acquired_qty, collection_id),
-            )
-        return True
+    from . import purchases
+
+    return purchases.remove(collection_id, qty, game_code=game_code)
 
 
 def get_collection_entry(
@@ -2085,36 +2006,18 @@ def update_collection_acquisition(
     acquired_date: str = "",
     acquired_price: Any = None,
     acquired_currency: str = "USD",
+    lot_id: int | None = None,
+    price_source: str = "entered",
+    estimate_confirmed: bool = False,
 ) -> bool:
-    currency = str(acquired_currency or "USD").strip().upper()
-    if currency not in SUPPORTED_CURRENCIES:
-        raise ValueError("unsupported acquisition currency")
-    clean_date = str(acquired_date or "").strip()
-    if clean_date:
-        try:
-            clean_date = date.fromisoformat(clean_date).isoformat()
-        except ValueError as exc:
-            raise ValueError("acquired date must be YYYY-MM-DD") from exc
-    price_minor = to_minor(acquired_price)
-    init_db()
-    with _connect() as conn:
-        result = conn.execute(
-            """
-            UPDATE collection
-               SET acquired_date = ?, acquired_price_minor = ?,
-                   acquired_qty = CASE WHEN ? IS NULL THEN 0 ELSE qty END,
-                   acquired_currency = ?
-             WHERE id = ? AND EXISTS (
-                 SELECT 1 FROM cards c
-                  WHERE c.id = collection.card_id AND c.game_code = ?
-             )
-            """,
-            (
-                clean_date or None, price_minor, price_minor, currency,
-                collection_id, game_code,
-            ),
-        )
-        return bool(result.rowcount)
+    """Correct a selected lot; ambiguous legacy aggregate edits are rejected."""
+    from . import purchases
+
+    return purchases.correct(
+        collection_id, game_code, lot_id=lot_id, acquired_date=acquired_date,
+        acquired_price=acquired_price, acquired_currency=acquired_currency,
+        price_source=price_source, estimate_confirmed=estimate_confirmed,
+    )
 
 
 def _merged_notes(first: Any, second: Any) -> str | None:
@@ -2160,6 +2063,8 @@ def swap_collection_printing(
     game_code: str,
 ) -> dict[str, Any]:
     """Replace a collection row's printing, merging an existing variant row."""
+    from . import purchases
+
     init_db()
     with transaction() as conn:
         source = conn.execute(
@@ -2214,6 +2119,10 @@ def swap_collection_printing(
                     destination["id"],
                 ),
             )
+            conn.execute(
+                "UPDATE collection_lots SET collection_id = ?, holding_card_id = ? WHERE collection_id = ?",
+                (destination["id"], target_card_id, collection_id),
+            )
             conn.execute("DELETE FROM collection WHERE id = ?", (collection_id,))
             result_id = int(destination["id"])
             merged = True
@@ -2224,6 +2133,11 @@ def swap_collection_printing(
             )
             result_id = collection_id
             merged = False
+        conn.execute(
+            "UPDATE collection_lots SET holding_card_id = ? WHERE collection_id = ?",
+            (target_card_id, result_id),
+        )
+        purchases.recalculate(conn, result_id)
         return {"collection_id": result_id, "merged": merged}
 
 

@@ -1,6 +1,37 @@
 {# Create/edit form for tasks + recurring_tasks. `t` may be {} for new. #}
+{% if not is_new and endpoint_root == '/recurring' and t._recurrence_generated %}
+<section class="entity-form" aria-label="Completed recurring instance">
+  <h2>{{ t.task }}</h2>
+  <p>This occurrence has a successor and its history cannot be changed.</p>
+  <span class="chip chip-recurring">Next instance created</span>
+  <dl class="task-editor-metadata">
+    {% for label, value in (
+      ('Status', t.status), ('Completed', t.completed_time), ('Due date', t.due_date),
+      ('Priority', t.priority), ('Project', t.project), ('Category', t.catagory),
+      ('Group', t.task_group), ('Subgroup', t.sub_group),
+      ('Estimated hours', t.estimated_time), ('Schedule', recurrence_schedule_label(t))
+    ) %}
+      {% if value is defined and value is not none and value != '' %}
+        <div><dt>{{ label }}</dt><dd>{{ value }}</dd></div>
+      {% endif %}
+    {% endfor %}
+  </dl>
+  {% if t.relevant_link %}
+    <a class="card-link" href="{{ t.relevant_link }}" target="_blank" rel="noopener">Link</a>
+  {% endif %}
+  <div class="form-actions">
+    {% if t._recurrence_next_uuid %}
+      <a class="btn btn-ghost" href="/recurring/{{ t._recurrence_next_uuid }}/edit"
+        hx-get="/recurring/{{ t._recurrence_next_uuid }}/edit" hx-target="#modal-body">View next instance</a>
+    {% endif %}
+    <button type="button" class="btn btn-ghost" data-close-modal>Close</button>
+  </div>
+</section>
+{% else %}
 <form
-  class="entity-form"
+  class="entity-form task-editor"
+  data-task-editor
+  data-task-editor-new="{{ 'true' if is_new else 'false' }}"
   {% if is_new %}
     hx-post="{{ endpoint_root }}"
     hx-target="#kanban-board"
@@ -19,17 +50,12 @@
     {% endif %}
   </h2>
 
-  <label>
-    Task
-    <input type="text" name="task" required value="{{ t.task or '' }}">
-  </label>
-
-  <div class="form-row">
-    <label>
-      Priority
-      <input type="number" name="priority" min="0" max="10" value="{{ t.priority if t.priority is not none else 0 }}">
+  <div class="task-editor-basics">
+    <label class="task-editor-title">
+      Task
+      <input type="text" name="task" required value="{{ t.task or '' }}">
     </label>
-    <label>
+    <label class="task-editor-status">
       Status
       <select name="status">
         {% for s in statuses %}
@@ -37,18 +63,12 @@
         {% endfor %}
       </select>
     </label>
-    <label class="date-field">
-      Due date
+    <div class="task-editor-due">
       <div class="date-picker" data-datepicker>
-        <input
-          type="date"
-          name="due_date"
-          value="{{ t.due_date or '' }}"
-          data-datepicker-input
-          autocomplete="off"
-          onkeydown="return (event.key === 'Tab' || event.key === 'Escape' || event.key === 'Enter')"
-          onpaste="return false"
-        >
+        <label>
+          Due date
+          <input type="date" name="due_date" value="{{ t.due_date or '' }}" data-datepicker-input autocomplete="off">
+        </label>
         <div class="date-presets" role="group" aria-label="Quick date presets">
           <button type="button" class="date-chip" data-date-preset="0">Today</button>
           <button type="button" class="date-chip" data-date-preset="1">Tomorrow</button>
@@ -57,73 +77,49 @@
           <button type="button" class="date-chip date-chip-ghost" data-date-preset="clear">Clear</button>
         </div>
       </div>
-    </label>
-  </div>
-
-  <div class="form-row">
-    <label>
+    </div>
+    <label class="task-editor-project">
       Project
-      <input type="text" name="project" value="{{ t.project or '' }}" placeholder="e.g. Renovate Kitchen">
+      <input type="text" name="project" value="{{ t.project or '' }}">
     </label>
     <label>
-      Category
-      <input type="text" name="catagory" value="{{ t.catagory or '' }}">
-    </label>
-    <label>
-      Group
-      <input type="text" name="task_group" value="{{ t.task_group or '' }}">
-    </label>
-    <label>
-      Sub-group
-      <input type="text" name="sub_group" value="{{ t.sub_group or '' }}">
+      Priority
+      <input type="number" name="priority" min="0" max="10" step="1" value="{{ t.get('priority') if t.get('priority') is not none else 0 }}">
     </label>
   </div>
 
-  <div class="form-row">
-    <label class="grow">
-      Relevant link
-      <input type="url" name="relevant_link" value="{{ t.relevant_link or '' }}" placeholder="https://…">
-    </label>
-    <label>
-      Est. hours
-      <input type="number" step="0.25" min="0" name="estimated_time" value="{{ t.estimated_time or '' }}">
-    </label>
-  </div>
-
-  {# Recurring block is /recurring-only. On /tasks we deliberately don't
-     render it: the checkbox used to be there but LuigiBot's reactivation
-     loop only scans the `recurring_tasks` table, so a "recurring" one-off
-     task never actually re-opened — it was a UI ghost. #}
-  {% if endpoint_root == '/recurring' %}
-  {% set _recurring_checked = (t.recurring in (1, '1', True)) or is_new %}
+    {% if is_new or endpoint_root == '/recurring' %}
+    {% set _recurring_checked = endpoint_root == '/recurring' and ((t.recurring in (1, '1', True)) or is_new) %}
   {% set _selected_days = recurring_days_list(t.recurring_days) %}
   {% set _schedule_type = recurrence_schedule_type(t) %}
   {% set _month_ordinal = t.get('recurring_month_ordinal') or 1 %}
   {% set _month_weekday = t.get('recurring_month_weekday') if t.get('recurring_month_weekday') is not none else 0 %}
-  <div class="form-row" data-recurring-row>
+  <section class="task-editor-repeat" aria-label="Repeat">
     <label class="checkbox">
-      <input type="hidden" name="recurring" value="0">
+      <input type="hidden" name="recurring" value="{{ '1' if is_new and endpoint_root == '/recurring' else '0' }}">
       <input
         type="checkbox"
         name="recurring"
         value="1"
-        data-recurring-toggle
+        data-task-repeat
+        aria-expanded="{{ 'true' if _recurring_checked else 'false' }}"
         {% if _recurring_checked %}checked{% endif %}
+        {% if is_new and endpoint_root == '/recurring' %}disabled{% endif %}
       >
-      Recurring
+      <span class="shell-icon" style="--shell-icon: url('/static/icons/lucide/rotate-ccw.svg')" aria-hidden="true"></span>
+      {{ 'Repeat active' if not is_new else 'Repeat' }}
     </label>
-    <label class="grow">
+    <div data-task-repeat-settings {% if not _recurring_checked %}hidden{% endif %}>
+    <label>
       Schedule
-      <select name="recurring_schedule_type" data-recurring-schedule-type>
+      <select name="recurring_schedule_type" data-task-schedule {% if not _recurring_checked %}disabled{% endif %}>
         <option value="interval" {% if _schedule_type == 'interval' %}selected{% endif %}>After completion</option>
         <option value="weekdays" {% if _schedule_type == 'weekdays' %}selected{% endif %}>Selected weekdays</option>
         <option value="monthly" {% if _schedule_type == 'monthly' %}selected{% endif %}>Monthly position</option>
       </select>
     </label>
-  </div>
-
-  <div class="form-row" data-recurring-panel="interval" {% if not _recurring_checked or _schedule_type != 'interval' %}hidden{% endif %}>
-    <label class="grow">
+    <div data-task-repeat-panel="interval" {% if not _recurring_checked or _schedule_type != 'interval' %}hidden{% endif %}>
+    <label>
       Repeat after completion (days)
       <input
         type="number"
@@ -131,72 +127,97 @@
         min="1"
         step="1"
         value="{{ t.recurring_interval or '' }}"
-        placeholder="e.g. 7"
-        data-recurring-interval
+        required
+        {% if not _recurring_checked or _schedule_type != 'interval' %}disabled{% endif %}
       >
-      <div class="date-presets" role="group" aria-label="Recurrence presets">
-        <button type="button" class="date-chip" data-recurring-preset="1">Daily</button>
-        <button type="button" class="date-chip" data-recurring-preset="7">Weekly</button>
-        <button type="button" class="date-chip" data-recurring-preset="14">Bi-weekly</button>
-        <button type="button" class="date-chip" data-recurring-preset="30">30 days</button>
-      </div>
     </label>
+    <div class="date-presets" role="group" aria-label="Recurrence presets">
+      {% for days, label in ((1, 'Daily'), (7, 'Weekly'), (14, 'Bi-weekly'), (30, '30 days')) %}
+        <button type="button" class="date-chip" data-task-repeat-preset="{{ days }}" aria-pressed="{{ 'true' if t.recurring_interval|string == days|string else 'false' }}" {% if not _recurring_checked or _schedule_type != 'interval' %}disabled{% endif %}>{{ label }}</button>
+      {% endfor %}
+    </div>
   </div>
 
   <div
-    class="form-row"
-    data-recurring-panel="weekdays"
+    data-task-repeat-panel="weekdays"
     {% if not _recurring_checked or _schedule_type != 'weekdays' %}hidden{% endif %}
   >
-    <fieldset class="weekday-picker" data-weekday-picker>
+    <fieldset class="task-editor-weekdays">
       <legend>Days of the week</legend>
       <div class="weekday-chips" role="group" aria-label="Days of the week">
         {% for label in WEEKDAY_LABELS %}
           {% set _i = loop.index0 %}
-          <label class="weekday-chip">
+          <label class="task-editor-day">
             <input
               type="checkbox"
               name="recurring_days"
               value="{{ _i }}"
               {% if _i in _selected_days %}checked{% endif %}
+              {% if not _recurring_checked or _schedule_type != 'weekdays' %}disabled{% endif %}
             >
             <span>{{ label }}</span>
           </label>
         {% endfor %}
       </div>
-      <p class="weekday-hint">
-        The next selected weekday must be after the task's completion date.
-      </p>
     </fieldset>
   </div>
 
   <div
-    class="form-row"
-    data-recurring-panel="monthly"
+    class="task-editor-monthly"
+    data-task-repeat-panel="monthly"
     {% if not _recurring_checked or _schedule_type != 'monthly' %}hidden{% endif %}
   >
     <label>
       Position in month
-      <select name="recurring_month_ordinal">
+      <select name="recurring_month_ordinal" required {% if not _recurring_checked or _schedule_type != 'monthly' %}disabled{% endif %}>
         {% for value, label in MONTH_ORDINAL_OPTIONS %}
-          <option value="{{ value }}" {% if value == _month_ordinal %}selected{% endif %}>{{ label }}</option>
+          <option value="{{ value }}" {% if value == _month_ordinal|int %}selected{% endif %}>{{ label }}</option>
         {% endfor %}
       </select>
     </label>
     <label>
       Weekday
-      <select name="recurring_month_weekday">
+      <select name="recurring_month_weekday" required {% if not _recurring_checked or _schedule_type != 'monthly' %}disabled{% endif %}>
         {% for label in WEEKDAY_LABELS %}
-          <option value="{{ loop.index0 }}" {% if loop.index0 == _month_weekday %}selected{% endif %}>{{ label }}</option>
+          <option value="{{ loop.index0 }}" {% if loop.index0 == _month_weekday|int %}selected{% endif %}>{{ label }}</option>
         {% endfor %}
       </select>
     </label>
-    <p class="weekday-hint grow">The task returns on this calendar position, such as the first Monday or last Friday.</p>
   </div>
+    </div>
+  </section>
   {% endif %}
 
+  <details class="task-editor-details">
+    <summary>Details</summary>
+    <div class="task-editor-metadata">
+      <label>
+        Category
+        <input type="text" name="catagory" value="{{ t.catagory or '' }}">
+      </label>
+      <label>
+        Group
+        <input type="text" name="task_group" value="{{ t.task_group or '' }}">
+      </label>
+      <label>
+        Subgroup
+        <input type="text" name="sub_group" value="{{ t.sub_group or '' }}">
+      </label>
+      <label>
+        Estimated hours
+        <input type="number" step="0.25" min="0" name="estimated_time" value="{{ t.get('estimated_time') if t.get('estimated_time') is not none else '' }}">
+      </label>
+      <label class="task-editor-link">
+        Link
+        <input type="url" name="relevant_link" value="{{ t.relevant_link or '' }}" placeholder="https://example.com">
+      </label>
+    </div>
+  </details>
+
+  <p class="task-editor-error" data-task-editor-error role="alert" hidden></p>
   <div class="form-actions">
     <button type="button" class="btn btn-ghost" data-close-modal>Cancel</button>
     <button type="submit" class="btn btn-primary">{{ 'Create' if is_new else 'Save' }}</button>
   </div>
 </form>
+{% endif %}

@@ -32,6 +32,10 @@
         <dt>Git HEAD</dt>      <dd><code>{{ git_head or '—' }}</code></dd>
         <dt>Last commit</dt>   <dd><code>{{ git_last or '—' }}</code></dd>
         <dt>Schema version</dt><dd><code>{{ schema_version if schema_version is not none else 'Unavailable' }}</code></dd>
+        {% if recurrence_status %}
+        <dt>Recurrence owner</dt><dd>{{ recurrence_status.owner }} (deployment-managed)</dd>
+        <dt>Recurring generation</dt><dd>{{ recurrence_status.message }}</dd>
+        {% endif %}
       </dl>
     </div>
   </article>
@@ -101,7 +105,7 @@
     <header class="widget-header"><h2>Shared task backup</h2></header>
     <div class="widget-body">
       <p class="muted-hint">
-        Full JSON snapshot of shared task data and app-managed task metadata.
+        JSON snapshot of shared task data and app-managed task metadata.
         The export is read-only and never changes the database.
       </p>
       <details class="admin-notes">
@@ -111,6 +115,8 @@
           <code>discipline_list</code>, <code>discipline_completions</code>, and
           <code>follow_up_tasks</code>. Finance, Feedback, Review notes, rules,
           credentials, and deployment settings are excluded.
+          The recurring-occurrence ledger is also excluded: back it up with
+          the shared database before restoring generated recurrence series.
         </p>
       </details>
       <div class="form-actions admin-form-actions">

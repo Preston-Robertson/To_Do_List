@@ -326,9 +326,7 @@ class DisciplineWorkflowTests(unittest.TestCase):
         source, _, _ = app.templates.env.loader.get_source(
             app.templates.env, "home.html"
         )
-        self.assertIn(
-            'data-endpoint="/discipline/{{ d.uuid }}/today"', source
-        )
+        self.assertIn('type="checkbox" data-home-habit data-home-write', source)
 
     def test_discipline_frequency_is_one_to_seven(self) -> None:
         self.assertEqual(db._discipline_frequency("7"), 7)
@@ -449,7 +447,10 @@ class GameAndWatchTests(unittest.TestCase):
         headers = ["Title", "Profile", "Status", "Priority", "Cover URL", "External ID", "Source"]
         worksheet = Mock()
         with (
-            patch.object(gnw, "_all_values", return_value=[headers]),
+            patch.object(gnw, "_all_values", side_effect=[
+                [headers],
+                [headers, ["Portal", "Example Profile", "backlog", "4", "cover", "400", "steam"]],
+            ]),
             patch.object(gnw, "_ws", return_value=worksheet),
             patch.object(gnw, "_invalidate"),
         ):

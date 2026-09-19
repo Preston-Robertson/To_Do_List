@@ -1,0 +1,73 @@
+.task-examples { max-width: 1180px; margin-inline: auto; color: var(--text); letter-spacing: 0; }
+.task-examples *, .task-examples *::before, .task-examples *::after { box-sizing: border-box; letter-spacing: 0; }
+.task-examples [hidden] { display: none !important; }
+.task-examples :is(h1, h2, p) { margin: 0; }
+.task-examples h1 { font-size: 24px; line-height: 1.3; }
+.task-examples h2 { font-size: 15px; font-weight: 600; line-height: 1.4; }
+.task-examples :is(button, input, select) { font: inherit; }
+.te-header, .te-heading, .te-back, .te-section-heading, .te-tools, .te-dialog-heading, .te-dialog-actions, .te-status-bar { display: flex; align-items: center; gap: 10px; }
+.te-header { justify-content: space-between; flex-wrap: wrap; padding-block: 8px 20px; }
+.te-heading { flex-wrap: wrap; }
+.te-back { font-size: 13px; color: var(--text-dim); min-height: 40px; }
+.te-badge { display: inline-flex; padding: 2px 6px; border: 1px solid var(--border-strong); border-radius: 4px; color: var(--text-muted); font-size: 11px; line-height: 1.4; }
+.te-blocked { color: var(--danger); }
+.te-button, .te-icon { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 40px; padding: 8px 12px; border: 1px solid var(--border-strong); border-radius: 5px; background: transparent; color: var(--text); cursor: pointer; line-height: 1.3; font-size: 13px !important; }
+.te-icon { width: 40px; height: 40px; flex: 0 0 40px; padding: 8px; border-color: transparent; }
+.task-examples :is(.te-button, .te-icon):hover { background: var(--bg-hover); }
+.task-examples .te-primary { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
+.task-examples .te-primary:hover { background: var(--accent-hover); }
+.task-examples .te-danger { color: var(--danger); }
+.task-examples button:disabled { opacity: .45; cursor: default; }
+.task-examples :is(button, input, select, a):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.te-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: 430px; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+.te-tabs button { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 46px; min-width: 0; padding: 9px 10px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 14px; overflow-wrap: anywhere; }
+.te-tabs button[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--text); font-weight: 600; }
+.te-subtabs { grid-template-columns: repeat(3, minmax(0, 1fr)); max-width: 540px; }
+.te-toolbar { position: sticky; top: 0; z-index: 3; padding-block: 10px 12px; background: var(--bg); border-bottom: 1px solid var(--border); }
+.te-capture { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin: 0 0 10px; }
+.te-filters { display: grid; grid-template-columns: minmax(130px, 2fr) repeat(3, minmax(100px, 1fr)); gap: 10px; }
+.te-filters label, .te-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; font-size: 12px; color: var(--text-muted); }
+.task-examples :is(input:not([type="checkbox"]), select) { width: 100%; min-width: 0; min-height: 40px; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 5px; color: var(--text); background: var(--bg-elev); font-size: 13px; }
+.te-section-heading { justify-content: space-between; flex-wrap: wrap; padding-block: 14px; }
+.te-section-heading > span { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.te-list { list-style: none; padding: 0; margin: 0; border-top: 1px solid var(--border); }
+.te-task { display: grid; grid-template-columns: 40px minmax(0, 1fr) 80px; align-items: center; min-height: 76px; border-bottom: 1px solid var(--border); }
+.te-task:hover, .te-rule:hover { background: var(--surface-soft); }
+.te-task-copy, .te-rule-copy { min-width: 0; padding: 12px 10px; }
+.te-task-title { display: block; font-size: 14px; font-weight: 500; line-height: 1.4; overflow-wrap: anywhere; }
+.te-task.is-done .te-task-title { color: var(--text-muted); text-decoration: line-through; }
+.te-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; margin-top: 5px; color: var(--text-muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.te-check-target { display: grid; place-items: center; width: 40px; min-height: 44px; cursor: pointer; }
+.task-examples input[type="checkbox"] { width: 18px; height: 18px; flex: 0 0 18px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.te-tools { gap: 0; flex-shrink: 0; }
+.te-rule { display: grid; grid-template-columns: minmax(0, 1fr) 102px 80px; align-items: center; min-height: 88px; border-bottom: 1px solid var(--border); }
+.te-rule-type { display: block; font-size: 11px; color: var(--text-muted); margin-bottom: 5px; }
+.te-rule-summary { font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.te-enabled { display: flex; align-items: center; gap: 8px; min-height: 44px; font-size: 13px; cursor: pointer; }
+.te-empty { padding-block: 20px; color: var(--text-muted); font-size: 14px; border-bottom: 1px solid var(--border); }
+.te-status-bar { justify-content: space-between; gap: 16px; min-height: 66px; padding-block: 12px; }
+.te-status-bar p { font-size: 13px; color: var(--text-muted); overflow-wrap: anywhere; }
+.te-dialog { width: min(480px, calc(100% - 32px)); max-height: calc(100% - 32px); overflow-y: auto; margin: auto; padding: 22px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--bg-elev); color: var(--text); box-shadow: var(--shadow); }
+.te-dialog::backdrop { background: #0008; }
+.te-dialog-heading { justify-content: space-between; margin-bottom: 10px; }
+.te-dialog h2 { font-size: 18px; }
+.te-dialog p { font-size: 14px; line-height: 1.5; margin-top: 14px; overflow-wrap: anywhere; }
+.te-field { margin-block: 14px; }
+.te-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.te-dialog-actions { justify-content: flex-end; flex-wrap: wrap; margin-top: 20px; }
+@media (max-width: 800px) {
+  .te-toolbar { top: 56px; }
+  .te-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .te-rule { grid-template-columns: minmax(0, 1fr) 80px; padding-block: 8px; }
+  .te-rule-copy { grid-column: 1 / -1; padding: 4px 0; }
+  .te-rule .te-enabled { padding-left: 2px; }
+}
+@media (max-width: 480px) {
+  .te-task { grid-template-columns: 36px minmax(0, 1fr) 40px; min-height: 96px; }
+  .te-task .te-tools { flex-direction: column; }
+  .te-task-copy { padding-inline: 6px; }
+  .te-check-target { width: 36px; }
+  .te-subtabs button { font-size: 12px; padding-inline: 4px; }
+  .te-dialog { padding: 18px; }
+  .te-form-grid { grid-template-columns: minmax(0, 1fr); gap: 0; }
+}

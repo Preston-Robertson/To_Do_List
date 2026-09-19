@@ -29,6 +29,8 @@ data/cards.db-*
 data/cards-bulk/
 data/rpg.db
 data/rpg.db-*
+media.sqlite3
+media.sqlite3-*
 LOCAL_DEPLOYMENT.md
 LOCAL_FEATURE_REQUESTS.md
 
@@ -44,6 +46,8 @@ venv/
 
 # Generated module selection and wheel output
 /data/modules.json
+/data/home-layout.json
+/data/.home-layout-*.tmp
 /build/
 /dist/
 /examples/example-module/build/

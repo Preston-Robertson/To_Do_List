@@ -1,9 +1,19 @@
 {% extends "base.html" %}
+{% block head_scripts %}
+{{ super() }}
+<link rel="stylesheet" href="/module-assets/discipline/discipline.css?v={{ asset_version }}">
+<script src="/module-assets/discipline/discipline.js?v={{ asset_version }}" defer></script>
+{% endblock %}
 {% block content %}
-<section class="board-header">
+<div class="discipline-workspace" data-discipline-workspace data-year="{{ year }}" data-today="{{ today_iso }}">
+<section class="board-header discipline-board-header">
   <div class="page-heading">
     <h1>{{ page_title }}</h1>
-    <span class="muted-hint">Use Done today for today, or select any past heatmap day.</span>
+    <p class="discipline-week-range">Current week:
+      <time data-discipline-week-start datetime="{{ week_start }}">{{ week_start }}</time>
+      <span>to</span>
+      <time data-discipline-week-end datetime="{{ week_end }}">{{ week_end }}</time>
+    </p>
   </div>
 
   <form method="get" action="/discipline" class="year-picker">
@@ -14,30 +24,107 @@
         {% endfor %}
       </select>
     </label>
+    <a class="btn btn-ghost" href="/discipline?year={{ today_iso[:4] }}" data-discipline-focus-today>Today</a>
   </form>
 
+  <a class="btn btn-ghost" href="/discipline/history-preview">History example</a>
   <button
-    class="btn btn-primary"
+    type="button" class="btn btn-primary"
     hx-get="/discipline/new"
     hx-target="#modal-body"
     onclick="openModal()"
-  >+ New Discipline</button>
+  >{{ shell_icon('plus') }} New Discipline</button>
 </section>
 
-<section class="discipline-list">
+<section class="discipline-toolbar" aria-label="Discipline filters and organization">
+  <label class="discipline-search">
+    {{ shell_icon('search') }}
+    <span class="discipline-sr-only">Search habits</span>
+    <input type="search" placeholder="Search habits" data-discipline-search autocomplete="off">
+  </label>
+  <label class="discipline-filter">Category
+    <select data-discipline-category-filter>
+      <option value="">All categories</option>
+      {% for category in disciplines|map(attribute='catagory')|select|unique|sort %}
+        <option value="{{ category }}">{{ category }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <div class="discipline-status-filter" role="group" aria-label="Discipline status">
+    <button type="button" data-discipline-status="active" aria-pressed="true">Active</button>
+    <button type="button" data-discipline-status="paused" aria-pressed="false">Paused</button>
+    <button type="button" data-discipline-status="all" aria-pressed="false">All</button>
+  </div>
+  <label class="discipline-filter">Weekly target
+    <select data-discipline-target-filter>
+      <option value="all">All targets</option>
+      <option value="remaining">Remaining</option>
+      <option value="met">Target met</option>
+    </select>
+  </label>
+  <button type="button" class="btn btn-ghost" data-discipline-clear-filters>Clear filters</button>
+  <details class="action-menu discipline-organize-menu" data-action-menu>
+    <summary class="btn btn-ghost discipline-icon-button" title="Organize habits" aria-label="Organize habits">
+      {{ shell_icon('settings-2') }}
+    </summary>
+    <div class="action-menu-popover">
+      <label class="action-menu-item discipline-organize-toggle">
+        <input type="checkbox" data-discipline-organize> Reorder habits
+      </label>
+      <button type="button" class="action-menu-item" data-discipline-reset-layout>Reset order and pins</button>
+    </div>
+  </details>
+</section>
+
+<p class="discipline-notice" role="status" data-discipline-layout-status hidden></p>
+<div class="discipline-notice" role="status" data-discipline-progress-error{% if not progress_error %} hidden{% endif %}>
+  <span data-discipline-progress-message>Current week progress unavailable.</span>
+  <button type="button" class="btn btn-ghost" data-discipline-refresh-progress>{{ shell_icon('rotate-ccw') }} Retry</button>
+</div>
+<p class="discipline-result-count" role="status" data-discipline-result-count hidden></p>
+<p class="empty" data-discipline-filter-empty hidden>No habits match these filters.</p>
+
+<section class="discipline-list" data-discipline-list aria-label="Annual discipline heatmaps">
   {% for d in disciplines %}
-    <article class="discipline{% if not d.active %} discipline-inactive{% endif %}"
-         data-discipline-card data-discipline-uuid="{{ d.uuid }}">
+    {% set is_active = d.active|int == 1 %}
+    {% set weekly = d._weekly|default(none) %}
+    <article class="discipline{% if not is_active %} discipline-inactive{% endif %}"
+         data-discipline-card data-discipline-uuid="{{ d.uuid }}"
+         data-discipline-active="{{ 'true' if is_active else 'false' }}"
+         data-discipline-category="{{ d.catagory or '' }}" data-discipline-frequency="{{ d.frequency_per_week }}"
+         data-weekly-available="{{ 'true' if weekly else 'false' }}"
+         data-weekly-met="{{ 'true' if weekly and weekly.target_met else 'false' }}"{% if not is_active %} hidden{% endif %}>
       <header class="discipline-header">
-        <div class="discipline-title">
-          <h2>{{ d.task }}</h2>
-          {% if d.catagory %}<span class="chip">{{ d.catagory }}</span>{% endif %}
-          <span class="chip chip-muted">{{ d.frequency_per_week }}/wk</span>
-          <span class="chip chip-streak" data-discipline-streak>🔥 {{ d._streak }}</span>
-          {% if not d.active %}<span class="chip chip-muted">inactive</span>{% endif %}
+        <div class="discipline-heading">
+          <div class="discipline-title">
+            <h2 data-discipline-name>{{ d.task }}</h2>
+            {% if d.catagory %}<span class="chip">{{ d.catagory }}</span>{% endif %}
+            <span class="chip chip-muted" data-discipline-paused{% if is_active %} hidden{% endif %}>Paused</span>
+          </div>
+          <div class="discipline-weekly" data-discipline-weekly-details{% if not weekly %} hidden{% endif %}>
+            <strong data-discipline-weekly-count>{% if weekly %}{{ weekly.count }} / {{ weekly.target }} this week{% endif %}</strong>
+            <span data-discipline-weekly-remaining>{% if weekly %}{{ 'Target met' if weekly.target_met else (weekly.remaining|string ~ ' remaining') }}{% endif %}</span>
+            <progress data-discipline-weekly-bar max="{{ weekly.target if weekly else 1 }}"
+                      value="{{ [weekly.count, weekly.target]|min if weekly else 0 }}"
+                      aria-label="Current weekly target for {{ d.task }}"></progress>
+          </div>
+          <p class="discipline-weekly-unavailable" data-discipline-weekly-unavailable{% if weekly %} hidden{% endif %}>Current week progress unavailable.</p>
+          {% if d.frequency_per_week|int == 7 %}
+            <p class="discipline-daily-streak" data-discipline-streak data-discipline-daily-streak>{% if d._streak is not none %}Daily streak: {{ d._streak }} {{ 'day' if d._streak == 1 else 'days' }} (current){% else %}Daily streak unavailable.{% endif %}</p>
+          {% endif %}
         </div>
         <div class="discipline-actions">
-          {% if d.active %}
+          <div class="discipline-reorder" data-discipline-reorder hidden>
+            <button type="button" class="btn btn-ghost discipline-icon-button discipline-move-up" data-discipline-move="up"
+                    title="Move habit up" aria-label="Move {{ d.task }} up">{{ shell_icon('arrow-left') }}</button>
+            <button type="button" class="btn btn-ghost discipline-icon-button discipline-move-down" data-discipline-move="down"
+                    title="Move habit down" aria-label="Move {{ d.task }} down">{{ shell_icon('arrow-left') }}</button>
+          </div>
+          <button type="button" class="btn btn-ghost discipline-icon-button" data-discipline-pin aria-pressed="false"
+                  title="Pin habit" aria-label="Pin {{ d.task }}">{{ shell_icon('pin') }}</button>
+          <a class="btn btn-ghost" href="/discipline/{{ d.uuid|urlencode }}/history?year={{ year|int }}"
+             aria-label="History for {{ d.task }}">{{ shell_icon('calendar-days') }} History</a>
+          {% if is_active %}
             <button
               type="button"
               class="btn discipline-today-btn{% if not d._today_done %} btn-primary{% endif %}"
@@ -45,28 +132,24 @@
               data-endpoint="/discipline/{{ d.uuid }}/today"
               data-action="{{ 'unmark' if d._today_done else 'mark' }}"
               aria-pressed="{{ 'true' if d._today_done else 'false' }}"
-              title="{{ 'Remove today’s completion' if d._today_done else 'Mark this discipline complete today' }}"
-            >{{ '✓ Done today' if d._today_done else 'Done today' }}</button>
+              title="{{ 'Remove today\'s completion' if d._today_done else 'Mark this discipline complete today' }}"
+            >Done today</button>
           {% endif %}
-          <button
-            class="btn btn-tiny"
-            hx-get="/discipline/{{ d.uuid }}/edit"
-            hx-target="#modal-body"
-            onclick="openModal()"
-          >Edit</button>
-          {% if d.active %}
-            <button
-              class="btn btn-tiny btn-danger"
-              hx-post="/discipline/{{ d.uuid }}/deactivate"
-              hx-confirm="Deactivate this discipline?"
-            >Deactivate</button>
-          {% endif %}
-          <button
-            class="btn btn-tiny btn-danger"
-            hx-post="/discipline/{{ d.uuid }}/delete"
-            hx-swap="none"
-            hx-confirm="Delete this discipline and all its completions? You'll have 12 seconds to undo."
-          >Delete</button>
+          <details class="action-menu" data-action-menu>
+            <summary class="btn btn-ghost discipline-icon-button" title="Habit actions" aria-label="Actions for {{ d.task }}">{{ shell_icon('chevron-down') }}</summary>
+            <div class="action-menu-popover">
+              <button type="button" class="action-menu-item" hx-get="/discipline/{{ d.uuid }}/edit"
+                      hx-target="#modal-body" onclick="openModal()">Edit</button>
+              {% if is_active %}
+                <button type="button" class="action-menu-item" hx-post="/discipline/{{ d.uuid }}/deactivate"
+                        hx-swap="none" hx-confirm="Pause this discipline? All completion history will be kept.">Pause</button>
+              {% else %}
+                <button type="button" class="action-menu-item" hx-post="/discipline/{{ d.uuid }}/resume" hx-swap="none">Resume</button>
+              {% endif %}
+              <button type="button" class="action-menu-item is-danger" hx-post="/discipline/{{ d.uuid }}/delete" hx-swap="none"
+                      hx-confirm="Delete this discipline and all its completion history? {% if module_enabled('tasks') %}Undo is available for 12 seconds.{% else %}This is permanent; Undo is not available.{% endif %}">Delete</button>
+            </div>
+          </details>
         </div>
       </header>
 
@@ -80,6 +163,7 @@
                 {% with discipline_uuid=d.uuid, task=d.task, catagory=d.catagory, day=cell.isoformat(),
                         marked=(cell.isoformat() in d._year_days),
                         future=(cell.isoformat() > today_iso),
+                  readonly=(not is_active and cell.isoformat() >= today_iso),
                         today_iso=today_iso %}
                   {% include "partials/discipline_cell.html" %}
                 {% endwith %}
@@ -90,7 +174,8 @@
       </div>
     </article>
   {% else %}
-    <p class="empty">No discipline items yet. Click <strong>+ New Discipline</strong> to add one.</p>
+    <p class="empty">No disciplines yet.</p>
   {% endfor %}
 </section>
+</div>
 {% endblock %}

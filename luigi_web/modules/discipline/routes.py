@@ -5,8 +5,13 @@ from datetime import date, timedelta
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from ...auth import require_auth
+from . import service
+from .examples import router as history_example_router
+from .history import router as history_router
 
 router = APIRouter()
+router.include_router(history_example_router)
+router.include_router(history_router)
 
 
 def _year_grid(year: int) -> list[list[date | None]]:
@@ -64,12 +69,24 @@ def discipline_page(request: Request, year: int | None = None):
     from ... import application as host
 
     host._require_v2()
+    today = host.clock.local_today()
     if year is None:
-        year = host.clock.local_today().year
-    disciplines = host.db.list_disciplines(include_inactive=True)
-    completions = host.db.list_completions_for_year(year)
-    today_iso = host.clock.local_today().isoformat()
-    today_tasks = host.db.list_completion_tasks_for_day(today_iso)
+        year = today.year
+    today_iso = today.isoformat()
+    try:
+        disciplines = host.db.list_disciplines(include_inactive=True)
+        completions = host.db.list_completions_for_year(year)
+        today_tasks = host.db.list_completion_tasks_for_day(today_iso)
+        years = host._available_years()
+    except Exception:
+        raise HTTPException(503, "Discipline history is unavailable") from None
+    progress_error = None
+    try:
+        progress = service.discipline_progress(disciplines, today, today_tasks=today_tasks)
+        progress_by_uuid = {row["uuid"]: row for row in progress["disciplines"]}
+    except Exception:
+        progress_by_uuid = {}
+        progress_error = "Weekly progress is unavailable"
     # Index completions by a normalized task key too, so a completion logged
     # under a slightly different string (trailing space, different case) still
     # lights up its discipline's heatmap instead of silently going missing.
@@ -79,20 +96,24 @@ def discipline_page(request: Request, year: int | None = None):
     completions_by_norm: dict[str, set[str]] = {}
     for _task_name, _days in completions.items():
         completions_by_norm.setdefault(_norm(_task_name), set()).update(_days)
-    today_by_norm = {_norm(task) for task in today_tasks}
-    # Attach year-specific completion sets + computed streak (from all-time in-year data).
+    today_by_norm = {service.normalize_title(task) for task in today_tasks}
     for d in disciplines:
         days = completions.get(d["task"])
         if not days:
             days = completions_by_norm.get(_norm(d["task"]), set())
         d["_year_days"] = days
-        d["_today_done"] = _norm(d["task"]) in today_by_norm
-        # Streak is computed against the CURRENT date, so use full history when
-        # viewing the current year and just the year's data otherwise.
-        if year == host.clock.local_today().year:
-            d["_streak"] = host.db.compute_streak(days)
-        else:
-            d["_streak"] = d.get("current_streak") or 0
+        d["_today_done"] = service.normalize_title(d["task"]) in today_by_norm
+        row_progress = progress_by_uuid.get(d["uuid"])
+        d["_weekly"] = row_progress["weekly"] if row_progress is not None else None
+        d["_streak"] = 0
+        if int(d["frequency_per_week"]) == 7:
+            if row_progress is not None:
+                d["_streak"] = row_progress["daily_streak"]
+            else:
+                try:
+                    d["_streak"] = host.db.computed_discipline_streak(d["task"])
+                except Exception:
+                    raise HTTPException(503, "Discipline history is unavailable") from None
     return host.templates.TemplateResponse(
         "discipline.html",
         {
@@ -101,11 +122,33 @@ def discipline_page(request: Request, year: int | None = None):
             "page_title": "Discipline",
             "disciplines": disciplines,
             "year": year,
-            "years": host._available_years(),
+            "years": years,
             "grid": host._year_grid(year),
             "today_iso": today_iso,
+            "week_start": (today - timedelta(days=today.weekday())).isoformat(),
+            "week_end": (today + timedelta(days=6 - today.weekday())).isoformat(),
+            "progress_error": progress_error,
         },
+        headers={"Cache-Control": "no-store"},
     )
+
+
+@router.get("/discipline/progress", dependencies=[Depends(require_auth)])
+def discipline_progress():
+    from ... import application as host
+
+    host._require_v2()
+    try:
+        progress = service.discipline_progress(
+            host.db.list_disciplines(include_inactive=True), host.clock.local_today(),
+        )
+    except Exception:
+        return JSONResponse(
+            {"detail": "Discipline progress is unavailable"},
+            status_code=503,
+            headers={"Cache-Control": "no-store"},
+        )
+    return JSONResponse(progress, headers={"Cache-Control": "no-store"})
 
 
 @router.get("/discipline/new", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
@@ -159,22 +202,27 @@ def discipline_edit_form(request: Request, row_uuid: str):
     )
 
 
-@router.post("/discipline/{row_uuid}", dependencies=[Depends(require_auth)])
-async def discipline_update(request: Request, row_uuid: str):
+def _set_discipline_active(row_uuid: str, active: bool):
     from ... import application as host
 
     host._require_v2()
-    form = dict(await request.form())
     try:
-        host.db.update_discipline(row_uuid, form)
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
+        discipline = host.db.get_discipline(row_uuid)
+    except Exception:
+        raise HTTPException(503, "Discipline state could not be saved") from None
+    if not discipline:
+        raise HTTPException(404, "discipline not found")
+    try:
+        verified = host.db.set_discipline_active(row_uuid, active)
+    except Exception:
+        raise HTTPException(503, "Discipline state could not be saved") from None
+    if not verified:
+        raise HTTPException(503, "Discipline state could not be saved")
     return Response(
         status_code=204,
         headers={
             "HX-Trigger": host._hx_trigger(
-                flashSuccess={"message": "Discipline saved"},
-                closeModal=None,
+                flashSuccess={"message": "Discipline resumed" if active else "Discipline paused"},
             ),
             "HX-Refresh": "true",
         },
@@ -183,14 +231,12 @@ async def discipline_update(request: Request, row_uuid: str):
 
 @router.post("/discipline/{row_uuid}/deactivate", dependencies=[Depends(require_auth)])
 def discipline_deactivate(row_uuid: str):
-    from ... import application as host
+    return _set_discipline_active(row_uuid, False)
 
-    host._require_v2()
-    host.db.deactivate_discipline(row_uuid)
-    return Response(status_code=204, headers={
-        "HX-Trigger": host._hx_trigger(flashSuccess={"message": "Discipline deactivated"}),
-        "HX-Refresh": "true",
-    })
+
+@router.post("/discipline/{row_uuid}/resume", dependencies=[Depends(require_auth)])
+def discipline_resume(row_uuid: str):
+    return _set_discipline_active(row_uuid, True)
 
 
 @router.post("/discipline/{row_uuid}/delete", dependencies=[Depends(require_auth)])
@@ -213,6 +259,7 @@ def discipline_delete(row_uuid: str):
                 flashSuccess={"message": "Discipline deleted"},
                 reloadBoard=None,
             ),
+            "HX-Refresh": "true",
         })
     task_name = (snapshot.get("discipline") or {}).get("task") or "discipline"
     op_id = host._stash_undo("discipline_list", snapshot, f"Deleted ‘{task_name}’")
@@ -224,6 +271,7 @@ def discipline_delete(row_uuid: str):
                           "ttl_ms": host._UNDO_TTL_SECONDS * 1000},
                 reloadBoard=None,
             ),
+            "HX-Refresh": "true",
         },
     )
 
@@ -301,6 +349,7 @@ async def discipline_toggle(request: Request):
     day = form.get("day", "")
     action = form.get("action", "toggle")
     discipline_uuid = form.get("discipline_uuid", "")
+    discipline = None
     if discipline_uuid:
         discipline = host.db.get_discipline(discipline_uuid)
         if not discipline:
@@ -312,6 +361,27 @@ async def discipline_toggle(request: Request):
         catagory = discipline.get("catagory")
     if not task or not day:
         raise HTTPException(400, "task and day required")
+    try:
+        completion_day = date.fromisoformat(str(day))
+    except ValueError:
+        raise HTTPException(400, "day must be an ISO date") from None
+    if completion_day.isoformat() != day or action not in {"toggle", "mark", "unmark"}:
+        raise HTTPException(400, "Invalid completion request")
+    if completion_day >= host.clock.local_today():
+        if discipline is None:
+            try:
+                matches = [
+                    row for row in host.db.list_disciplines(include_inactive=True)
+                    if service.normalize_title(row["task"]) == service.normalize_title(str(task))
+                ]
+            except Exception:
+                raise HTTPException(503, "Discipline state is unavailable") from None
+        else:
+            matches = [discipline]
+        if any(not int(row.get("active") or 0) for row in matches):
+            raise HTTPException(409, "Paused disciplines only allow past-date corrections")
+    if completion_day > host.clock.local_today():
+        raise HTTPException(422, "Future completion dates are not allowed")
 
     try:
         if action == "mark":
@@ -354,6 +424,34 @@ async def discipline_toggle(request: Request):
             "day": day,
             "marked": want_marked,
             "today_iso": host.clock.local_today().isoformat(),
+        },
+        headers={
+            "Cache-Control": "no-store",
+            "HX-Trigger-After-Swap": host._hx_trigger(**{
+                "luigi:discipline-updated": {"uuid": discipline_uuid, "day": day, "marked": want_marked},
+            }),
+        },
+    )
+
+
+@router.post("/discipline/{row_uuid}", dependencies=[Depends(require_auth)])
+async def discipline_update(request: Request, row_uuid: str):
+    from ... import application as host
+
+    host._require_v2()
+    form = dict(await request.form())
+    try:
+        host.db.update_discipline(row_uuid, form)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return Response(
+        status_code=204,
+        headers={
+            "HX-Trigger": host._hx_trigger(
+                flashSuccess={"message": "Discipline saved"},
+                closeModal=None,
+            ),
+            "HX-Refresh": "true",
         },
     )
 

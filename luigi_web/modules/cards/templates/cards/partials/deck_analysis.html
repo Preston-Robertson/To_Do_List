@@ -1,0 +1,37 @@
+{% if analysis %}
+<link rel="stylesheet" href="/module-assets/cards/analysis.css?v={{ asset_version }}">
+<section class="deck-analysis" aria-label="Deck analysis">
+  <header class="analysis-heading"><h2>Deck analysis</h2><a class="btn" href="/cards/{{ analysis.game }}/decks/{{ analysis.deck_id }}/build"><span class="shell-icon" style="--shell-icon: url('/static/icons/lucide/list-checks.svg')" aria-hidden="true"></span> Build checklist</a></header>
+  <dl class="analysis-totals">
+    <div><dt>Main + commander</dt><dd>{{ analysis.counts.playable }}</dd></div>
+    <div><dt>Sideboard</dt><dd>{{ analysis.counts.side }}</dd></div>
+    <div><dt>Maybeboard</dt><dd>{{ analysis.counts.maybe }}</dd></div>
+    <div><dt>Known value (USD)</dt><dd>{{ analysis.prices.known_value_minor|money_minor }}</dd></div>
+    <div><dt>Unpriced copies</dt><dd>{{ analysis.prices.missing_price_count }}</dd></div>
+  </dl>
+  <p class="analysis-note">{{ analysis.price_note }}</p>
+  <div class="analysis-table-wrap" tabindex="0" aria-label="Board statistics">
+    <table class="analysis-table"><thead><tr><th scope="col">Board</th><th scope="col">Copies</th><th scope="col">Priced / unpriced</th><th scope="col">Known USD subtotal</th><th scope="col">Cached price dates</th></tr></thead>
+      <tbody>{% for board in analysis.boards %}<tr><th scope="row">{{ board.board|title }}</th><td>{{ board.quantity }}</td><td>{{ board.prices.priced_count }} / {{ board.prices.missing_price_count }}</td><td>{{ board.prices.known_value_minor|money_minor }}</td><td>{{ board.prices.as_of_min or 'Unknown' }}{% if board.prices.as_of_max != board.prices.as_of_min %} to {{ board.prices.as_of_max }}{% endif %}{% if board.prices.undated_priced_count %}; {{ board.prices.undated_priced_count }} undated{% endif %}</td></tr>{% endfor %}</tbody>
+    </table>
+  </div>
+  <div class="analysis-distributions">
+    {% if analysis.game == 'mtg' %}
+    <section><h3>Nonland mana curve</h3><p class="analysis-note">{{ analysis.mana_curve.label }}</p>
+      {% for bucket in analysis.mana_curve.buckets %}<div class="analysis-bar"><span>{{ bucket.label }}</span><meter min="0" max="{{ [analysis.counts.playable, 1]|max }}" value="{{ bucket.quantity }}" aria-label="Mana {{ bucket.label }}: {{ bucket.quantity }} copies">{{ bucket.quantity }}</meter><strong>{{ bucket.quantity }}</strong></div>{% else %}<p>No nonland copies.</p>{% endfor %}
+      <p class="analysis-note">{{ analysis.mana_curve.land_count }} land copies excluded; {{ analysis.mana_curve.unknown_count }} unknown.</p>
+    </section>
+    <section><h3>Colors</h3>{% for item in analysis.colors %}<div class="analysis-bar"><span>{{ item.label }}</span><meter min="0" max="{{ [analysis.counts.playable, 1]|max }}" value="{{ item.quantity }}" aria-label="{{ item.label }}: {{ item.quantity }} copies">{{ item.quantity }}</meter><strong>{{ item.quantity }}</strong></div>{% else %}<p>No playable copies.</p>{% endfor %}</section>
+    {% endif %}
+    {% if analysis.game == 'pokemon' %}<section><h3>Supertypes</h3><dl class="analysis-counts">{% for item in analysis.supertypes %}<div><dt>{{ item.label }}</dt><dd>{{ item.quantity }}</dd></div>{% endfor %}</dl></section>{% endif %}
+    <section><h3>Card types</h3><dl class="analysis-counts">{% for item in analysis.types %}<div><dt>{{ item.label }}</dt><dd>{{ item.quantity }}</dd></div>{% else %}<div><dt>No playable copies</dt><dd>0</dd></div>{% endfor %}</dl></section>
+  </div>
+  <p class="analysis-note">{{ analysis.distribution_note }}</p>
+  <section class="analysis-section"><h3>Categories by board</h3><dl class="analysis-counts">{% for item in analysis.categories %}<div><dt>{{ item.board|title }} / {{ item.category or 'Uncategorized' }}</dt><dd>{{ item.quantity }}</dd></div>{% else %}<div><dt>No categories</dt><dd>0</dd></div>{% endfor %}</dl></section>
+  <section class="analysis-section" aria-label="Format advisory"><h3>{{ analysis.advisory.format_label }} advisory</h3>
+    <p>{{ analysis.advisory.severity_counts.warning }} warnings; {{ analysis.advisory.severity_counts.unknown }} unknown; {{ analysis.advisory.severity_counts.pass }} checks passed.</p>
+    <ul class="analysis-issues">{% for issue in analysis.advisory.issues %}<li class="analysis-issue-{{ issue.severity }}"><strong>{{ issue.severity|title }}</strong><span>{{ issue.message }}{% if issue.count > 1 %} ({{ issue.count }}){% endif %}</span></li>{% endfor %}</ul>
+    <p class="analysis-note">{{ analysis.advisory.freshness_note }} Cache: {{ analysis.advisory.cache_as_of_min or 'unknown' }}{% if analysis.advisory.cache_as_of_max != analysis.advisory.cache_as_of_min %} to {{ analysis.advisory.cache_as_of_max }}{% endif %}.</p>
+  </section>
+</section>
+{% endif %}

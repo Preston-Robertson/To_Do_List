@@ -12,18 +12,41 @@ authentication, and source deployment entry points.
 
 ## Highlights
 
-- **Tasks:** Kanban and compact list views, Quick Add, filters, snooze, Undo,
-  completion triggers, interval/weekday/monthly-position recurrence, projects,
-  archive, dependencies, local reminders, a migration-aware Activity timeline,
-  and projected recurring occurrences on Month/Agenda calendar views.
-- **Discipline:** daily completion controls, yearly heatmaps, streaks, weekly
-  progress, and shared data with LuigiBot.
+- **Tasks:** Board-first workspace with stable status columns, an optional
+  compact List, browser-local saved views, name-only quick capture, and one
+  Add task form with optional Repeat. Existing snooze, Undo, completion triggers,
+  interval/weekday/monthly-position recurrence, projects, archive, dependencies,
+  local reminders, a migration-aware Activity timeline, and projected recurring
+  occurrences on Month/Agenda calendar views remain available. See
+  [docs/tasks.md](docs/tasks.md) for live behavior and example-only proposals.
+  Copy-per-occurrence scheduling preserves completed rows when explicitly
+  enabled; it is off by default. See
+  [docs/recurring-occurrences.md](docs/recurring-occurrences.md) for ownership,
+  upgrade, and backup requirements.
+- **Discipline:** full-year heatmaps remain the main view, with current-week
+  target progress, daily streaks for seven-day targets, pause/resume, search,
+  category filters, and browser-local pins/order. History is shared with LuigiBot.
+  Detailed Month/Year/Log history is now live through each habit's **History**
+  link, with version-checked corrections and 12-second Undo. The main heatmap
+  and separate synthetic **History example** remain. See
+  [docs/discipline.md](docs/discipline.md) for behavior, browser-local organization,
+  and preview commands.
 - **Projects:** named-project timeline with scheduled and unscheduled work.
-- **Games and shows:** shared Game'N'Watch Google Sheet, metadata search,
-  covers, ratings, statuses, Steam playtime, achievements, and local Insights
-  charts/tables with backlog health and health-aware weighted picks.
-- **Trading Cards:** local catalogs, decks, collections, and price history in
-  one isolated app-owned database. See [docs/trading-cards.md](docs/trading-cards.md).
+- **Games and shows:** Continue-first library with Board/List views,
+  browser-local saved filters, filtered weighted picks, quick show progress,
+  explicit Steam refresh/playtime saves, and replay/rewatch history. Current
+  records stay in the shared Game'N'Watch Google Sheet; confirmed web activity
+  uses an isolated local store. Insights separate recent web-recorded changes
+  from legacy completion baselines. See [docs/media.md](docs/media.md) for
+  storage, confirmation limits, Undo, and synthetic validation.
+- **Trading Cards:** local catalogs, full Table/40-row Stacks deck views,
+  owned/needed build plans with explicit competing-deck allocation, board-aware
+  statistics and scoped format advisories, plus clone/version comparison and
+  guarded restore. Filtered, paginated collections track purchase lots with
+  separate actual, estimated, legacy, and unknown costs, retained history,
+  CSV exchange, and dated cached market values in one isolated app-owned
+  database. See [docs/trading-cards.md](docs/trading-cards.md) for limits,
+  pricing provenance, preview, and the measured local catalog benchmark.
 - **Characters:** private D&D 5e (2014) and Pathfinder 2e sheets with live
   resources, abilities, saves, skills, spells, equipment, notes, and cloned
   level-path states, plus a reusable local rules library and guided class
@@ -32,7 +55,15 @@ authentication, and source deployment entry points.
   investments, net worth, CSV import, reports, alerts, audit history, and
   exports. Finance data is isolated from LuigiBot and the LLM.
 - **Assistant:** optional GitHub Copilot subscription or OpenAI-compatible chat
-  with an allow-listed task tool registry. Finance is intentionally excluded.
+  with an allow-listed task tool registry, opened on demand from the shared
+  toolbar. Opening the panel does not send a message or capture page content.
+  Finance is intentionally excluded.
+- **Home:** the approved redesign is live at `/home`: one task list with Today,
+  Upcoming, and All views, habits, Today's progress, Coming up, and static
+  Continue links, without duplicate summary tiles. Today is an explicit daily
+  selection, independent of due dates. Show, hide, pin, reorder within fixed
+  lanes, and reset the layout; browser-local preferences remain the default,
+  with sharing across devices opt-in. See [docs/home.md](docs/home.md).
 - **Operations:** guided Daily/Weekly Review, verified preview-first shared-task
   restore, integration health, environment editor, self-update, local Feedback,
   approved-feedback draft PR automation, bulk task actions, isolated branch
@@ -196,6 +227,7 @@ control. Core settings:
 | `LUIGI_WEB_DATA_DIR` | Optional writable defaults root; source `data/` or platform per-user storage when installed |
 | `LUIGI_WEB_PG_*` | Shared LuigiBot PostgreSQL connection |
 | `LUIGI_WEB_PG_CONNECT_TIMEOUT` | Connection timeout in seconds, clamped to `1`–`30` (default `5`) |
+| `LUIGI_WEB_RECURRENCE_OWNER` | Deployment-managed `external` (default, no web scheduled generation) or explicit `web` after disabling/coordinating the legacy LuigiBot reset scheduler |
 | `LUIGI_WEB_UI_TOKEN` | Main application login token |
 | `LUIGI_WEB_FINANCE_TOKEN` | Separate Finance unlock token |
 | `LUIGI_WEB_SECURE_COOKIES` | Set to `1` behind HTTPS |
@@ -204,7 +236,7 @@ control. Core settings:
 | `LUIGI_WEB_FINANCE_DB` | App-owned Finance SQLite path |
 | `LUIGI_WEB_FINANCE_BASE_CURRENCY` | ISO currency used for reports |
 | `LUIGI_WEB_REVIEW_DB` | App-owned Daily/Weekly Review SQLite path |
-| `LUIGI_WEB_OPERATIONS_DB` | App-owned task dependencies and reminders SQLite path |
+| `LUIGI_WEB_OPERATIONS_DB` | App-owned task dependencies, reminders, and date-scoped Home Today references SQLite path |
 | `LUIGI_WEB_RPG_DB` | App-owned character sheets and level paths SQLite path |
 | `LUIGI_WEB_LLM_*` | Optional GitHub Copilot or OpenAI-compatible assistant |
 | `LUIGI_WEB_COPILOT_HOME` | Writable cache for the bundled Copilot runtime |
@@ -212,10 +244,22 @@ control. Core settings:
 | `LUIGI_WEB_STEAM_*` | Optional Steam progress integration |
 | `LUIGI_WEB_YOUTUBE_API_KEY` | Optional playlist search |
 
+**Recurrence upgrade compatibility:** installing this update does not
+automatically activate copy-per-occurrence generation in production. The default
+`LUIGI_WEB_RECURRENCE_OWNER=external` performs no web scheduled generation and
+never runs the old web reset behavior. Existing web-only installations that
+relied on automatic recurrence now need an explicit deployment opt-in to `web`,
+only after disabling/coordinating LuigiBot's legacy reset scheduler. Luigi Web
+does not detect or disable that scheduler. `external` leaves recurrence handling
+external; it cannot preserve copy history if a legacy bot still resets rows.
+Ownership is not an Admin setting or a GUI toggle. Read the
+[recurrence guide](docs/recurring-occurrences.md) before changing it.
+
 Until the shared `task_events` migration is installed, Calendar still displays
 currently completed task rows using `completed_time`, converted from legacy UTC
 timestamps into `LUIGI_WEB_TIMEZONE`. It labels this as limited history because
-older recurring completions cannot be reconstructed after reactivation.
+older recurring completions cannot be reconstructed after earlier in-place
+resets. New copy-per-occurrence scheduling does not reconstruct that lost history.
 
 The authenticated Admin page can edit allow-listed settings and run read-only
 integration checks. It deliberately cannot read or change
@@ -228,6 +272,12 @@ one-time confirmation token gates the transactional commit. Rows absent from a
 backup are never deleted. This backup covers the five LuigiBot task tables and
 web-owned task metadata; it intentionally excludes Finance, Feedback, Review
 notes, dependency/reminder rules, credentials, and deployment settings.
+It also excludes the new `luigi_web_recurring_occurrences` ledger, so it is not
+a complete recurrence disaster-recovery backup. Coordinate a consistent
+PostgreSQL backup containing both `recurring_tasks` and that ledger; do not
+restore old recurring rows without their matching ledger.
+The task-only restore rejects rows or metadata for completed occurrences that
+already have successors, rechecking that guard inside its transaction.
 
 Task dependencies and reminders are local Luigi Web features. Every Luigi Web
 status/completion path enforces blockers, but LuigiBot requires a coordinated
@@ -295,6 +345,10 @@ Run the offline regression suite and repository checks from the repository root:
 
 ```powershell
 pip install "setuptools>=68" wheel
+python -m unittest discover -s tests -p "test_home*.py" -v
+python -m unittest discover -s tests -p "test_operations.py" -v
+python -m unittest discover -s tests -p "test_task*.py" -v
+python -m unittest discover -s tests -p "test_discipline*.py" -v
 python -m unittest discover -s tests -v
 python scripts/validate_repo.py
 git diff --check
@@ -334,10 +388,59 @@ python scripts/preview_workspace.py
 
 The helper prints an available loopback URL, uses synthetic records and
 temporary databases, and blocks deployment actions and external refreshes.
-Task changes are read-only; module selection and Cards/Characters changes stay
-in disposable storage. It does not exercise production integrations or apply
-saved module selections to a running process. Stop it with Ctrl+C when done.
-The latest checked workflows are recorded in
+This disposable preview signs in automatically, including direct links; do
+not enter production credentials. Preview sessions are scoped by port and do
+not replace the normal application's session. Production login is unchanged.
+The helper opts into bounded synthetic task adapters for completion/reopening,
+creation, editing, dates, Today membership, habits, and Undo. Task and habit
+records stay in memory; Today references use a temporary operations database.
+It also seeds an example recurring task and supports one-off quick capture and
+status changes, plus recurring creation, editing, status, completion, and Undo.
+Task mutations require a valid demo session, allow-listed synthetic IDs/routes,
+and the normal browser CSRF checks.
+The preview preselects two tasks for screenshot/demo coverage only; production
+starts with no Today selections. Real shared `get_engine` access, integration,
+Admin, external refresh, deployment, and chat writes remain blocked.
+
+Module selection, Home layout preferences, and Cards/Characters changes stay
+in disposable storage. Assistant opens in its unconfigured state without
+contacting a provider. The helper does not exercise production integrations
+or apply saved module selections to a running process. Stop it with Ctrl+C
+when done. Its `--check` command checks 16 synthetic workspace endpoints,
+including `/home/data`, `/tasks/preview`, `/discipline/progress`, and
+`/discipline/history-preview`; it is not a production write test.
+
+The default preview still has one habit. Add `--discipline-demo` for four
+synthetic habits with multiple categories, weekly/daily targets, and one paused
+habit. The flag can be combined with `--occurrence-demo`:
+
+```powershell
+python scripts/preview_workspace.py --discipline-demo --check
+python scripts/preview_workspace.py --discipline-demo
+python scripts/preview_workspace.py --discipline-demo --occurrence-demo
+```
+
+Discipline preview writes are limited to synthetic pause/resume, heatmap
+toggles, today's completion, and version-checked live history corrections/Undo
+for seeded habit UUIDs. These share one in-memory completion state and retain
+original logged timestamps on Undo; habit creation, editing, and deletion
+remain blocked. **History example** in the toolbar still opens the separate,
+memory-only example. The 16-endpoint smoke check is unchanged; dedicated cold
+subprocess tests cover the live history paths. See
+[docs/discipline.md](docs/discipline.md) for the legacy date/logged-at limits,
+live behavior, example boundary, and validation commands.
+
+**Tasks > Examples** opens `/tasks/preview`: proposal #1 (List-first workspace
+with compact mobile rows) and proposal #6 (consolidated Automation tabs) remain
+examples only, awaiting approval. Their fictional records and simulated changes
+stay in browser memory and reset on reload; they do not replace the live Board
+default or the separate completion-trigger, task-rule, and archive links.
+
+The approved Home layout is now live at `/home`. The separate authenticated
+`/home/preview` remains a synthetic comparison page: its simulated changes
+are browser-memory-only and reset on reload or **Reset demo**. See
+[docs/home.md](docs/home.md) for Today storage, layout compatibility, and
+focused validation. Earlier modular-workspace checks are recorded in
 [docs/modular-validation-2026-09-17.md](docs/modular-validation-2026-09-17.md).
 
 Repository guidance:
@@ -350,6 +453,9 @@ Repository guidance:
   external-module contracts
 - [examples/example-module/README.md](examples/example-module/README.md) -
   editable-install demo and independent wheel verification
+- [docs/discipline.md](docs/discipline.md) - live annual heatmaps, weekly targets,
+  Month/Year/Log history, pause/resume, browser-local organization, and separate
+  synthetic history example
 - [`docs/discipline-v2-plan.md`](docs/discipline-v2-plan.md) — coordinated
   LuigiBot Discipline migration
 - [`docs/task-events-plan.md`](docs/task-events-plan.md) — shared completion

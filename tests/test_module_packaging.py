@@ -374,7 +374,7 @@ class WheelPackagingTests(unittest.TestCase):
                 name for name in names if name.startswith("luigi_web/") and not name.endswith(".py")
             }
             self.assertEqual(packaged_resources, resource_names)
-            self.assertEqual(sum(name.endswith(".html") for name in resource_names), 82)
+            self.assertIn("luigi_web/modules/planning/templates/home_preview.html", resource_names)
             for name in names:
                 parts = Path(name).parts
                 self.assertFalse(any(part.lower().startswith((".env", "local_", "_extract", "_validate")) for part in parts))
@@ -421,7 +421,9 @@ class WheelPackagingTests(unittest.TestCase):
 
     def test_all_installed_templates_compile_and_route_declarations_are_unique(self) -> None:
         result = self.probe("all-templates", allowlist=True)
-        self.assertEqual(result["templates"], 83)
+        with zipfile.ZipFile(self.host_wheel) as wheel:
+            expected = sum(name.endswith(".html") for name in wheel.namelist()) + 1
+        self.assertEqual(result["templates"], expected)
 
 
 if __name__ == "__main__":

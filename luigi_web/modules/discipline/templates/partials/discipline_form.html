@@ -11,7 +11,7 @@
   <h2>{{ 'New discipline' if is_new else 'Edit discipline' }}</h2>
 
   <label>
-    Task
+    Discipline
     <input type="text" name="task" required value="{{ d.task or '' }}">
   </label>
 
@@ -21,12 +21,12 @@
       <input type="text" name="catagory" value="{{ d.catagory or '' }}">
     </label>
     <label>
-      Freq / week
-      <input type="number" name="frequency_per_week" min="1" max="7" required value="{{ d.frequency_per_week if d.frequency_per_week is not none else 7 }}">
+      Weekly target
+      <input type="number" name="frequency_per_week" min="1" max="7" required value="{{ d.frequency_per_week|default(7, true) }}">
     </label>
     <label class="checkbox">
-      <input type="checkbox" name="active" value="1" {% if is_new or d.active %}checked{% endif %}>
-      Active
+      <input type="checkbox" name="active" value="1" {% if is_new or d.active|default(0)|int == 1 %}checked{% endif %}>
+      Keep active
     </label>
   </div>
 

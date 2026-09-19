@@ -13,12 +13,17 @@
     {% for t in rows %}
       {% set row_endpoint = t._endpoint_root or endpoint_root %}
       {% set schedule_label = recurrence_schedule_label(t) %}
+      {% set next_due = reactivation_date(t) %}
+      {% set history_locked = row_endpoint == '/recurring' and t._recurrence_generated %}
+      {% set history_title = 'This occurrence has a successor and its history cannot be changed.' %}
       <article
         class="task-list-row{% if t.completed %} is-completed{% endif %}"
         role="row"
         data-task-list-row
         data-uuid="{{ t.uuid }}"
         data-task-source="{{ 'recurring' if row_endpoint == '/recurring' else 'task' }}"
+        data-task-key="{{ 'recurring' if row_endpoint == '/recurring' else 'task' }}:{{ t.uuid }}"
+        data-endpoint="{{ row_endpoint }}"
         data-title="{{ (t.task or '')|lower }}"
         data-project="{{ (t.project or '')|lower }}"
         data-priority="{{ t.priority or 0 }}"
@@ -29,15 +34,22 @@
         data-due-date="{{ t.due_date or '' }}"
         data-completed="{{ 1 if t.completed else 0 }}"
         data-completed-time="{{ t.completed_time or '' }}"
-        data-reactivation-date="{{ reactivation_date(t) or '' }}"
+        data-reactivation-date="{{ next_due or '' }}"
       >
         <div class="task-list-name" role="cell">
+          {% if not history_locked %}
           <label class="task-select" title="Select {{ t.task }}"><input type="checkbox" data-task-select aria-label="Select {{ t.task }}"></label>
+          {% endif %}
           <button type="button" class="task-list-title"
             hx-get="{{ row_endpoint }}/{{ t.uuid }}/edit"
             hx-target="#modal-body" onclick="openModal()">{{ t.task }}</button>
-          <div class="task-list-submeta">
+          <div class="task-list-submeta" style="flex-wrap: wrap">
             {% if t.recurring %}<span class="chip chip-recurring">↻ Recurring</span>{% endif %}
+            {% if row_endpoint == '/recurring' and t.completed and t.completed_time %}
+              <span title="Completed {{ t.completed_time }}">Completed {{ (t.completed_time|string)[:10] }}</span>
+            {% endif %}
+            {% if history_locked %}<span class="chip chip-recurring" title="{{ history_title }}">Next instance created</span>{% endif %}
+            {% if next_due and not history_locked %}<span class="chip chip-recurring">New instance due {{ next_due }}</span>{% endif %}
             {% if t.recurring and schedule_label %}<span>{{ schedule_label }}</span>{% endif %}
             {% if t.task_group %}<span>{{ t.task_group }}</span>{% endif %}
             {% if t._blockers %}<span class="chip chip-blocked">Blocked by {{ t._blockers|join(', ') }}</span>{% endif %}
@@ -54,6 +66,9 @@
         <div role="cell"><span class="card-priority p{{ t.priority or 0 }}">P{{ t.priority or 0 }}</span></div>
 
         <div role="cell">
+          {% if history_locked %}
+          <span title="{{ history_title }}">{{ t.status or 'Done' }}</span>
+          {% else %}
           <select class="task-list-status" name="status"
             aria-label="Status for {{ t.task }}"
             hx-post="{{ row_endpoint }}/{{ t.uuid }}/status"
@@ -62,6 +77,7 @@
               <option value="{{ status }}" {% if status == t.status %}selected{% endif %}>{{ status }}</option>
             {% endfor %}
           </select>
+          {% endif %}
         </div>
 
         <div class="task-list-due" role="cell">
@@ -69,17 +85,21 @@
         </div>
 
         <div class="task-list-actions" role="cell">
+          {% if history_locked %}
+          <button class="btn btn-tiny" disabled title="{{ history_title }}">Completed</button>
+          {% else %}
           <button class="btn btn-tiny {% if not t.completed %}btn-primary{% endif %}"
             hx-post="{{ row_endpoint }}/{{ t.uuid }}/complete"
             hx-swap="none">{{ 'Undo' if t.completed else 'Done' }}</button>
+          {% endif %}
 
           <details class="action-menu" data-action-menu>
             <summary class="btn btn-tiny btn-ghost" aria-label="More actions for {{ t.task }}" title="More actions">•••</summary>
             <div class="action-menu-popover">
               <button type="button" class="action-menu-item"
                 hx-get="{{ row_endpoint }}/{{ t.uuid }}/edit"
-                hx-target="#modal-body" onclick="openModal()">Edit</button>
-              {% if not t.completed %}
+                hx-target="#modal-body" onclick="openModal()"{% if history_locked %} title="{{ history_title }}"{% endif %}>{{ 'Details' if history_locked else 'Edit' }}</button>
+              {% if not t.completed and not history_locked %}
                 <div class="action-menu-label">Snooze</div>
                 <div class="action-menu-grid">
                   {% for days, label in [(1,'1d'),(3,'3d'),(7,'1w'),(14,'2w')] %}
@@ -114,7 +134,7 @@
         </div>
       </article>
     {% else %}
-      <p class="empty">No tasks yet.</p>
+      <p class="empty" data-task-list-empty>No tasks yet.</p>
     {% endfor %}
   </div>
 </section>

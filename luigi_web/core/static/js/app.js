@@ -256,6 +256,7 @@
   });
 
   document.addEventListener("keydown", (e) => {
+    if (document.querySelector("dialog[open]")) return;
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
       e.preventDefault();
       const palette = commandPalette();
@@ -683,6 +684,10 @@
           throw new Error(message || `Couldn't save (${resp.status}).`);
         }
         const state = await resp.json();
+        if (state.ok !== true || state.discipline_uuid !== card?.dataset.disciplineUuid
+            || state.marked !== (action === "mark") || !/^\d{4}-\d{2}-\d{2}$/.test(state.day)) {
+          throw new Error("The completion could not be verified. Reload before retrying.");
+        }
         const marked = state.marked === true;
         btn.dataset.action = marked ? "unmark" : "mark";
         btn.textContent = marked ? "✓ Done today" : "Done today";
@@ -694,7 +699,7 @@
 
         if (card) {
           const streak = card.querySelector("[data-discipline-streak]");
-          if (streak) streak.textContent = `🔥 ${Number(state.streak) || 0}`;
+          if (streak) streak.textContent = `Daily streak: ${Number(state.streak) || 0} days (current)`;
           const todayCell = card.querySelector(`[data-day="${state.day || ""}"]`);
           if (todayCell) {
             todayCell.classList.toggle("is-marked", marked);
@@ -708,6 +713,9 @@
             }));
           }
         }
+        document.dispatchEvent(new CustomEvent("luigi:discipline-updated", {
+          detail: { uuid: state.discipline_uuid, day: state.day, marked, streak: Number(state.streak) || 0 },
+        }));
         window.showSuccess(state.message || "Discipline updated.");
       })
       .catch((error) => {
@@ -761,7 +769,7 @@
 
   function setTaskView(view) {
     const scope = document.querySelector("[data-tasks-scope]");
-    if (!scope) return;
+    if (!scope || scope.hasAttribute("data-task-views")) return;
     const next = view === "list" ? "list" : "board";
     scope.querySelectorAll("[data-view-panel]").forEach((panel) => {
       panel.hidden = panel.dataset.viewPanel !== next;
@@ -776,7 +784,8 @@
   }
 
   function initTaskView() {
-    if (!document.querySelector("[data-tasks-scope]")) return;
+    const scope = document.querySelector("[data-tasks-scope]");
+    if (!scope || scope.hasAttribute("data-task-views")) return;
     let saved = "board";
     try {
       saved = localStorage.getItem(taskViewKey())
@@ -849,46 +858,6 @@
     }
   });
 
-  // ------------------- Home page widget visibility (localStorage) -------------------
-  const HIDDEN_KEY = "luigi.home.hiddenWidgets";
-  function loadHidden() {
-    try { return new Set(JSON.parse(localStorage.getItem(HIDDEN_KEY) || "[]")); }
-    catch { return new Set(); }
-  }
-  function saveHidden(s) {
-    localStorage.setItem(HIDDEN_KEY, JSON.stringify([...s]));
-  }
-  function initHomeWidgets() {
-    const toggles = document.querySelectorAll(".widget-toggle");
-    if (!toggles.length) return;
-    const hidden = loadHidden();
-    document.querySelectorAll(".widget[data-widget]").forEach((w) => {
-      if (hidden.has(w.dataset.widget)) w.classList.add("is-hidden");
-    });
-    toggles.forEach((cb) => {
-      const id = cb.dataset.widget;
-      cb.checked = !hidden.has(id);
-      cb.addEventListener("change", () => {
-        const target = document.querySelector(`.widget[data-widget="${id}"]`);
-        if (!target) return;
-        if (cb.checked) {
-          target.classList.remove("is-hidden");
-          hidden.delete(id);
-        } else {
-          target.classList.add("is-hidden");
-          hidden.add(id);
-        }
-        saveHidden(hidden);
-      });
-    });
-  }
-
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", initHomeWidgets);
-  } else {
-    initHomeWidgets();
-  }
-
   // ------------------- Push-empty-to-end (home widgets + kanban columns) ---
   // Server-rendered widgets and kanban columns keep their natural
   // (semantic) order in the HTML. On the client we shove any container that
@@ -917,8 +886,10 @@
     return !body || body.querySelectorAll(".card").length === 0;
   }
   function reorderEmptyLast() {
-    pushEmptyChildrenToEnd(document.querySelector(".home-grid"), widgetIsEmpty);
-    pushEmptyChildrenToEnd(document.getElementById("kanban-board"), kanbanColumnIsEmpty);
+    const home = document.querySelector(".home-grid");
+    if (home && !home.hasAttribute("data-home-layout")) pushEmptyChildrenToEnd(home, widgetIsEmpty);
+    const board = document.getElementById("kanban-board");
+    if (!board?.closest("[data-task-views]")) pushEmptyChildrenToEnd(board, kanbanColumnIsEmpty);
   }
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", reorderEmptyLast);
@@ -941,11 +912,12 @@
     return typeof window !== "undefined" && "speechSynthesis" in window;
   }
   function ttsEnabled() {
-    return localStorage.getItem(TTS_ENABLED_KEY) === "1";
+    try { return localStorage.getItem(TTS_ENABLED_KEY) === "1"; } catch { return false; }
   }
   function ttsGetVoice() {
     if (!ttsSupported()) return null;
-    const uri = localStorage.getItem(TTS_VOICE_KEY);
+    let uri = "";
+    try { uri = localStorage.getItem(TTS_VOICE_KEY); } catch {}
     if (!uri) return null;
     return window.speechSynthesis.getVoices().find((v) => v.voiceURI === uri) || null;
   }
@@ -964,7 +936,8 @@
   function populateVoiceOptions(select) {
     if (!ttsSupported()) return;
     const voices = window.speechSynthesis.getVoices();
-    const current = localStorage.getItem(TTS_VOICE_KEY) || "";
+    let current = "";
+    try { current = localStorage.getItem(TTS_VOICE_KEY) || ""; } catch {}
     // Preserve the default option, then rebuild the rest.
     select.querySelectorAll("option:not([value=''])").forEach((o) => o.remove());
     voices
@@ -981,7 +954,8 @@
 
   function initTtsSettings() {
     const wrap = document.querySelector("[data-tts-menu]");
-    if (!wrap) return;
+    if (!wrap || wrap.dataset.ttsReady === "true") return;
+    wrap.dataset.ttsReady = "true";
     const enabledEl = wrap.querySelector("[data-tts-enabled]");
     const voiceEl = wrap.querySelector("[data-tts-voice]");
     const testEl = wrap.querySelector("[data-tts-test]");
@@ -1000,11 +974,11 @@
     window.speechSynthesis.addEventListener?.("voiceschanged", () => populateVoiceOptions(voiceEl));
 
     enabledEl.addEventListener("change", () => {
-      localStorage.setItem(TTS_ENABLED_KEY, enabledEl.checked ? "1" : "0");
+      try { localStorage.setItem(TTS_ENABLED_KEY, enabledEl.checked ? "1" : "0"); } catch {}
       if (!enabledEl.checked) window.speechSynthesis.cancel();
     });
     voiceEl.addEventListener("change", () => {
-      localStorage.setItem(TTS_VOICE_KEY, voiceEl.value || "");
+      try { localStorage.setItem(TTS_VOICE_KEY, voiceEl.value || ""); } catch {}
     });
     testEl.addEventListener("click", () => {
       // Force-speak for the test even if the enabled toggle is off, so the
@@ -1040,7 +1014,7 @@
   // clicks the button.
   function initChatMic() {
     const btn = document.querySelector("[data-chat-mic]");
-    if (!btn) return;
+    if (!btn || btn.dataset.micReady === "true") return;
     const panel = document.getElementById("chat-panel");
     if (!panel || panel.classList.contains("chat-disabled")) return;
 
@@ -1050,10 +1024,15 @@
       return;
     }
     btn.disabled = false;
+    btn.dataset.micReady = "true";
     btn.title = "Click to dictate (Web Speech API)";
 
     let recognition = null;
     let listening = false;
+
+    document.getElementById("assistant-drawer")?.addEventListener("close", () => {
+      if (recognition) recognition.abort();
+    });
 
     btn.addEventListener("click", () => {
       const textarea = document.querySelector(".chat-composer textarea");
@@ -1086,6 +1065,11 @@
   } else {
     initChatMic();
   }
+
+  document.addEventListener("luigi:assistant-ready", () => {
+    initTtsSettings();
+    initChatMic();
+  });
 
   // ------------------- Admin environment editor -------------------
   function initAdminEnvEditor(root) {
@@ -1711,7 +1695,7 @@
 
   function initTasksFilter() {
     const bar = document.querySelector("[data-filter-bar]");
-    if (!bar) return;
+    if (!bar || bar.closest("[data-task-views]")) return;
     populateCategoryOptions(bar);
     renderSavedList(bar);
 

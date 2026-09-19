@@ -1,0 +1,43 @@
+{% set board_labels = {'commander': 'Commander', 'main': 'Mainboard', 'side': 'Sideboard', 'maybe': 'Maybeboard', 'deck': 'Main + commander', 'all': 'All boards'} %}
+{% if comparison %}
+<div class="versions-comparison">
+  <div class="versions-table-scroll" role="region" aria-label="Board totals" tabindex="0">
+    <table class="versions-table versions-totals">
+      <caption>{{ before_label }} to {{ after_label }}</caption>
+      <thead><tr><th scope="col">Board</th><th scope="col">Before</th><th scope="col">After</th><th scope="col">Change</th></tr></thead>
+      <tbody>{% for board, label in board_labels.items() %}{% set delta = comparison.after_totals[board] - comparison.before_totals[board] %}<tr>
+        <th scope="row">{{ label }}</th><td>{{ comparison.before_totals[board] }}</td><td>{{ comparison.after_totals[board] }}</td><td>{% if delta > 0 %}+{% endif %}{{ delta }}</td>
+      </tr>{% endfor %}</tbody>
+    </table>
+  </div>
+  {% if not comparison.changed %}<p class="versions-empty">No changes.</p>{% endif %}
+  {% if comparison.slots %}
+  <div class="versions-table-scroll" role="region" aria-label="Card changes" tabindex="0">
+    <table class="versions-table versions-changes">
+      <thead><tr><th scope="col">Card / printing</th><th scope="col">Change</th><th scope="col">Before</th><th scope="col">After</th></tr></thead>
+      <tbody>{% for change in comparison.slots %}{% set card = comparison.cards[change.card_id] %}<tr>
+        <th scope="row">{{ card.name }}<small>{{ card.set_code or '' }} {{ card.collector_number or '' }} / #{{ change.card_id }}</small></th>
+        <td>{{ change.kind | capitalize }}</td>
+        {% for slot in [change.before, change.after] %}<td>{% if slot %}<strong>{{ slot.qty }}</strong> {{ board_labels[slot.board] }}<small>{{ slot.category or 'Uncategorized' }}</small>{% else %}None{% endif %}</td>{% endfor %}
+      </tr>{% endfor %}</tbody>
+    </table>
+  </div>
+  {% endif %}
+  {% if comparison.metadata %}
+  <div class="versions-table-scroll" role="region" aria-label="Deck details changes" tabindex="0">
+    <table class="versions-table versions-metadata">
+      <thead><tr><th scope="col">Deck detail</th><th scope="col">Before</th><th scope="col">After</th></tr></thead>
+      <tbody>{% for change in comparison.metadata %}<tr><th scope="row">{{ change.field | replace('_card_id', '') | replace('notes_xml', 'diagram') | replace('_', ' ') | capitalize }}</th>
+        {% for value in [change.before, change.after] %}<td>{% if change.field in ['commander_card_id', 'partner_card_id', 'cover_card_id'] and value %}{{ comparison.cards[value].name }} <small>#{{ value }}</small>{% elif change.field == 'archived' %}{{ 'Archived' if value else 'Active' }}{% else %}{{ value or 'None' }}{% endif %}</td>{% endfor %}
+      </tr>{% endfor %}</tbody>
+    </table>
+  </div>
+  {% endif %}
+  {% if comparison.tags_added or comparison.tags_removed %}
+  <dl class="versions-tags">
+    {% if comparison.tags_removed %}<dt>Removed tags</dt><dd>{% for tag in comparison.tags_removed %}<span>{{ tag.name }}</span>{% endfor %}</dd>{% endif %}
+    {% if comparison.tags_added %}<dt>Added tags</dt><dd>{% for tag in comparison.tags_added %}<span>{{ tag.name }}</span>{% endfor %}</dd>{% endif %}
+  </dl>
+  {% endif %}
+</div>
+{% endif %}

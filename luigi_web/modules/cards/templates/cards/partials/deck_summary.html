@@ -1,6 +1,7 @@
 <div class="deck-detail-meta" id="deck-summary"{% if refresh_summary %} hx-swap-oob="outerHTML"{% endif %}>
   <span>{{ deck.format or 'No format' }}</span>
   <span>{{ total_qty }} cards</span>
-  <span>{{ total_price_minor | money_minor }}</span>
+  <span>{{ total_price_minor | money_minor }} known value</span>
+  {% if analysis and analysis.prices.missing_price_count %}<span>{{ analysis.prices.missing_price_count }} unpriced copies</span>{% endif %}
   {% if deck.commander_name %}<span>{{ deck.commander_name }}</span>{% endif %}
 </div>

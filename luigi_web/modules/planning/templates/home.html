@@ -1,471 +1,143 @@
 {% extends "base.html" %}
+{% block head_scripts %}
+{{ super() }}
+<link rel="stylesheet" href="/module-assets/planning/home-layout.css?v={{ shell_asset_version }}">
+<link rel="stylesheet" href="/module-assets/planning/home.css?v={{ shell_asset_version }}">
+<script src="/module-assets/planning/home-layout.js?v={{ shell_asset_version }}" defer></script>
+<script src="/module-assets/planning/home.js?v={{ shell_asset_version }}" defer></script>
+{% endblock %}
 {% block content %}
-{% if module_enabled('assistant') %}
-{% include "partials/chat_panel.html" %}
-{% endif %}
-
-{% if disciplines_at_risk %}
-  {# Streak-breaker warning. Dismissable for the day via localStorage
-     (see initAtRiskBanner in app.js). Renders only when non-empty. #}
-  <section class="at-risk-banner"
-           data-at-risk
-           data-at-risk-signature="{{ today_iso }}:{{ disciplines_at_risk|length }}">
-    <span class="at-risk-icon" aria-hidden="true">⚠</span>
-    <div class="at-risk-body">
-      <strong>Streaks at risk today ({{ disciplines_at_risk|length }})</strong>
-      <ul class="at-risk-list">
-        {% for d in disciplines_at_risk[:5] %}
-          <li>
-            <span class="at-risk-name">{{ d.task }}</span>
-            <span class="at-risk-meta">
-              streak {{ d.current_streak }} &middot;
-              last {{ d.days_since }}d ago
-              {% if d.catagory %} &middot; {{ d.catagory }}{% endif %}
-            </span>
-            <button type="button" class="btn btn-tiny"
-                    data-at-risk-done
-                    data-endpoint="/discipline/{{ d.uuid }}/today">Done</button>
-          </li>
-        {% endfor %}
-        {% if disciplines_at_risk|length > 5 %}
-          <li class="muted-hint">…{{ disciplines_at_risk|length - 5 }} more</li>
-        {% endif %}
-      </ul>
+{% set state = home_state | default({'today': today_iso, 'tasks': [], 'habits': [], 'shortcuts': [], 'selection_available': false, 'selection_error': none}) %}
+{% set today_tasks = state.tasks | selectattr('today') | list %}
+{% set today_open = today_tasks | rejectattr('done') | list %}
+{% set completed = today_tasks | selectattr('done') | list | length %}
+<div class="home-live" id="home-live" data-home-data="/home/data">
+  <header class="home-header">
+    <div><h1>Today</h1><p id="home-date">{{ home_date | default(today_iso) }}</p></div>
+    <div class="home-layout-actions">
+      <button type="button" class="home-tool" data-home-layout-open aria-label="Customize layout" title="Customize layout"
+              aria-haspopup="dialog" aria-controls="home-layout-dialog" hidden>{{ shell_icon('settings-2') }}</button>
+      <button type="button" class="home-button home-primary" data-home-editor data-home-write hx-get="/tasks/new"
+              hx-target="#modal-body" hx-swap="innerHTML" disabled>{{ shell_icon('plus') }} Add task</button>
     </div>
-    <button type="button" class="at-risk-dismiss" data-at-risk-dismiss aria-label="Dismiss for today">&times;</button>
-  </section>
-{% endif %}
-
-<section class="board-header">
-  <div class="home-title">
-    <h1>Home</h1>
-    <span class="muted-hint">Week of {{ week_of }}</span>
+  </header>
+  <noscript><p class="home-empty">{{ today_open|length }} tasks selected today. <a href="/tasks">All tasks</a> &middot; <a href="/discipline">Habits</a></p></noscript>
+  <div class="home-status-bar">
+    <p id="home-status" role="status" aria-live="polite" aria-atomic="true"></p>
+    <button type="button" class="home-tool" data-home-action="reload" title="Reload Home" aria-label="Reload Home" hidden>{{ shell_icon('rotate-ccw') }}</button>
   </div>
-
-  <details class="widget-customizer">
-    <summary class="btn btn-ghost">Customize widgets ▾</summary>
-    <div class="widget-toggle-list">
-      <label><input type="checkbox" class="widget-toggle" data-widget="overdue" checked> Overdue</label>
-      <label><input type="checkbox" class="widget-toggle" data-widget="upcoming" checked> Upcoming (7 days)</label>
-      <label><input type="checkbox" class="widget-toggle" data-widget="open-tasks" checked> Open tasks</label>
-      <label><input type="checkbox" class="widget-toggle" data-widget="disc-pending" checked> Discipline (today)</label>
-      {% if gnw_enabled %}
-      <label><input type="checkbox" class="widget-toggle" data-widget="gnw-playing" checked> Currently playing</label>
-      <label><input type="checkbox" class="widget-toggle" data-widget="gnw-watching" checked> Currently watching</label>
-      {% endif %}      <label><input type="checkbox" class="widget-toggle" data-widget="disc-streaks" checked> Discipline streaks</label>
-      <label><input type="checkbox" class="widget-toggle" data-widget="follow-ups" checked> Follow-ups</label>
-      <label><input type="checkbox" class="widget-toggle" data-widget="recent-done" checked> Recent completions</label>
-      <label><input type="checkbox" class="widget-toggle" data-widget="disc-week" checked> Discipline this week</label>
-      <label><input type="checkbox" class="widget-toggle" data-widget="task-week" checked> Tasks completed this week</label>
-      <label><input type="checkbox" class="widget-toggle" data-widget="activity" checked> Recent activity</label>
-      <label><input type="checkbox" class="widget-toggle" data-widget="weekly-review" checked> Weekly review</label>
-    </div>
-  </details>
-</section>
-
-<section class="home-grid">
-  <!-- Widget: Overdue tasks -->
-  <article class="widget" data-widget="overdue">
-    <header class="widget-header">
-      <h2>Overdue</h2>
-      <span class="widget-count">{{ overdue_tasks|length }}</span>
-    </header>
-    <div class="widget-body scroll-y">
-      {% if overdue_tasks %}
-        <ul class="widget-list">
-          {% for t in overdue_tasks %}
-            <li class="widget-row">
-              <span class="card-priority p{{ t.priority or 0 }}">P{{ t.priority or 0 }}</span>
-              <span class="widget-row-title" title="{{ t.task }}">{{ t.task }}</span>
-              <span class="widget-row-meta">
-                <span class="chip chip-overdue">{{ t.due_date[:10] }}</span>
-                {% if t.catagory %}<span class="chip">{{ t.catagory }}</span>{% endif %}
-                {% if t.source == 'recurring' %}<span class="chip chip-muted">↻</span>{% endif %}
-              </span>
-              <button
-                type="button"
-                class="btn btn-tiny btn-ghost widget-row-check"
-                title="Mark complete"
-                aria-label="Mark complete"
-                hx-post="/{{ 'recurring' if t.source == 'recurring' else 'tasks' }}/{{ t.uuid }}/complete"
-                hx-target="closest li"
-                hx-swap="delete"
-              >✓</button>
-            </li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <p class="empty">Nothing overdue.</p>
-      {% endif %}
-    </div>
-  </article>
-
-  <!-- Widget: Upcoming (next 7 days) -->
-  <article class="widget" data-widget="upcoming">
-    <header class="widget-header">
-      <h2>Upcoming &middot; 7 days</h2>
-      <span class="widget-count">{{ upcoming_tasks|length }}</span>
-    </header>
-    <div class="widget-body scroll-y">
-      {% if upcoming_tasks %}
-        <ul class="widget-list">
-          {% for t in upcoming_tasks %}
-            <li class="widget-row">
-              <span class="card-priority p{{ t.priority or 0 }}">P{{ t.priority or 0 }}</span>
-              <span class="widget-row-title" title="{{ t.task }}">{{ t.task }}</span>
-              <span class="widget-row-meta">
-                <span class="chip chip-due">{{ t.due_date[:10] }}</span>
-                {% if t.catagory %}<span class="chip">{{ t.catagory }}</span>{% endif %}
-                {% if t.source == 'recurring' %}<span class="chip chip-muted">↻</span>{% endif %}
-              </span>
-              <button
-                type="button"
-                class="btn btn-tiny btn-ghost widget-row-check"
-                title="Mark complete"
-                aria-label="Mark complete"
-                hx-post="/{{ 'recurring' if t.source == 'recurring' else 'tasks' }}/{{ t.uuid }}/complete"
-                hx-target="closest li"
-                hx-swap="delete"
-              >✓</button>
-            </li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <p class="empty">Nothing scheduled this week.</p>
-      {% endif %}
-    </div>
-  </article>
-
-  <!-- Widget: Open tasks -->
-  <article class="widget" data-widget="open-tasks">
-    <header class="widget-header">
-      <h2>Open Tasks</h2>
-      <span class="widget-count">{{ open_tasks|length }}</span>
-    </header>
-    <div class="widget-body scroll-y">
-      {% if open_tasks %}
-        <ul class="widget-list">
-          {% for t in open_tasks %}
-            <li class="widget-row">
-              <span class="card-priority p{{ t.priority or 0 }}">P{{ t.priority or 0 }}</span>
-              <span class="widget-row-title" title="{{ t.task }}">{{ t.task }}</span>
-              <span class="widget-row-meta">
-                {% if t.due_date %}<span class="chip chip-due">{{ t.due_date[:10] }}</span>{% endif %}
-                {% if t.catagory %}<span class="chip">{{ t.catagory }}</span>{% endif %}
-                <span class="chip chip-muted">{{ t.status }}</span>
-                {% if t.source == 'recurring' %}<span class="chip chip-muted">↻</span>{% endif %}
-              </span>
-              <button
-                type="button"
-                class="btn btn-tiny btn-ghost widget-row-check"
-                title="Mark complete"
-                aria-label="Mark complete"
-                hx-post="/{{ 'recurring' if t.source == 'recurring' else 'tasks' }}/{{ t.uuid }}/complete"
-                hx-target="closest li"
-                hx-swap="delete"
-              >✓</button>
-            </li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <p class="empty">Nothing open. Nice.</p>
-      {% endif %}
-    </div>
-  </article>
-
-  <!-- Widget: Discipline pending today -->
-  <article class="widget" data-widget="disc-pending">
-    <header class="widget-header">
-      <h2>Discipline &middot; Today</h2>
-      <span class="widget-count">{{ disciplines_pending|length }}</span>
-    </header>
-    <div class="widget-body scroll-y">
-      {% if disciplines_pending %}
-        <ul class="widget-list">
-          {% for d in disciplines_pending %}
-            <li class="widget-row">
-              <span class="widget-row-title" title="{{ d.task }}">{{ d.task }}</span>
-              <span class="widget-row-meta">
-                {% if d.catagory %}<span class="chip">{{ d.catagory }}</span>{% endif %}
-                <span class="chip chip-muted">{{ d.frequency_per_week }}/wk</span>
-              </span>
-              <button
-                type="button"
-                class="btn btn-tiny btn-primary"
-                data-discipline-done
-                data-discipline-uuid="{{ d.uuid }}"
-                data-task="{{ d.task }}"
-                data-catagory="{{ d.catagory or '' }}"
-                data-day="{{ today_iso }}"
-              >Done</button>
-            </li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <p class="empty">All disciplines done for today. 🎉</p>
-      {% endif %}
-    </div>
-  </article>
-
-  {% if gnw_enabled %}
-  <!-- Widget: Currently Playing (Game'N'Watch) -->
-  <article class="widget" data-widget="gnw-playing">
-    <header class="widget-header">
-      <h2>Currently Playing</h2>
-      <span class="widget-count">{{ gnw_playing|length }}</span>
-    </header>
-    <div class="widget-body scroll-y">
-      {% if gnw_playing %}
-        <ul class="widget-list">
-          {% for g in gnw_playing %}
-            <li class="widget-row">
-              <span class="widget-row-title" title="{{ g.title }}">
-                {% if g.link %}<a href="{{ g.link }}" target="_blank" rel="noopener noreferrer">{{ g.title }}</a>{% else %}{{ g.title }}{% endif %}
-              </span>
-              <span class="widget-row-meta">
-                <span class="chip chip-muted">{{ g.profile }}</span>
-                {% if g.platform %}<span class="chip">{{ g.platform }}</span>{% endif %}
-              </span>
-            </li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <p class="empty"><a href="/games">Start a game →</a></p>
-      {% endif %}
-    </div>
-  </article>
-
-  <!-- Widget: Currently Watching (Game'N'Watch) -->
-  <article class="widget" data-widget="gnw-watching">
-    <header class="widget-header">
-      <h2>Currently Watching</h2>
-      <span class="widget-count">{{ gnw_watching|length }}</span>
-    </header>
-    <div class="widget-body scroll-y">
-      {% if gnw_watching %}
-        <ul class="widget-list">
-          {% for s in gnw_watching %}
-            <li class="widget-row">
-              <span class="widget-row-title" title="{{ s.title }}">
-                {% if s.link %}<a href="{{ s.link }}" target="_blank" rel="noopener noreferrer">{{ s.title }}</a>{% else %}{{ s.title }}{% endif %}
-              </span>
-              <span class="widget-row-meta">
-                <span class="chip chip-muted">{{ s.profile }}</span>
-                <span class="chip">S{{ s.current_season or 1 }}·E{{ s.current_episode or 0 }}{% if s.total_episodes %}/{{ s.total_episodes }}{% endif %}</span>
-              </span>
-            </li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <p class="empty"><a href="/shows">Start a show →</a></p>
-      {% endif %}
-    </div>
-  </article>
-  {% endif %}
-
-  <!-- Widget: Discipline streaks -->
-  <article class="widget" data-widget="disc-streaks">
-    <header class="widget-header">
-      <h2>Discipline &middot; Streaks</h2>
-      <span class="widget-count">{{ discipline_streaks|length }}</span>
-    </header>
-    <div class="widget-body scroll-y">
-      {% if discipline_streaks %}
-        <ul class="widget-list">
-          {% for d in discipline_streaks %}
-            <li class="widget-row">
-              <span class="streak-badge" title="Current streak">
-                {{ d.current_streak or 0 }}<small>d</small>
-              </span>
-              <span class="widget-row-title" title="{{ d.task }}">{{ d.task }}</span>
-              <span class="widget-row-meta">
-                {% if d.catagory %}<span class="chip">{{ d.catagory }}</span>{% endif %}
-                <span class="chip chip-muted">{{ d.frequency_per_week }}/wk</span>
-              </span>
-            </li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <p class="empty">No active disciplines.</p>
-      {% endif %}
-    </div>
-  </article>
-
-  <!-- Widget: Follow-ups -->
-  <article class="widget" data-widget="follow-ups">
-    <header class="widget-header">
-      <h2>Follow-ups</h2>
-      <span class="widget-count">{{ follow_ups|length }}</span>
-    </header>
-    <div class="widget-body scroll-y">
-      {% if follow_ups %}
-        <ul class="widget-list">
-          {% for f in follow_ups %}
-            <li class="widget-row">
-              <span class="card-priority p{{ f.priority or 0 }}">P{{ f.priority or 0 }}</span>
-              <span class="widget-row-title" title="{{ f.follow_up_task }}">
-                {{ f.follow_up_task }}
-                <small class="muted-hint">← {{ f.trigger_task }}</small>
-              </span>
-              <span class="widget-row-meta">
-                {% if f.catagory %}<span class="chip">{{ f.catagory }}</span>{% endif %}
-                {% if f.due_offset_days is not none %}
-                  <span class="chip chip-muted">+{{ f.due_offset_days }}d</span>
-                {% endif %}
-              </span>
-            </li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <p class="empty">No follow-ups defined.</p>
-      {% endif %}
-    </div>
-  </article>
-
-  <!-- Widget: Recent completions -->
-  <article class="widget" data-widget="recent-done">
-    <header class="widget-header">
-      <h2>Recently completed</h2>
-      <span class="widget-count">{{ recent_completions|length }}</span>
-    </header>
-    <div class="widget-body scroll-y">
-      {% if recent_completions %}
-        <ul class="widget-list">
-          {% for t in recent_completions %}
-            <li class="widget-row">
-              <span class="check-badge" aria-hidden="true">✓</span>
-              <span class="widget-row-title" title="{{ t.task }}">{{ t.task }}</span>
-              <span class="widget-row-meta">
-                {% if t.catagory %}<span class="chip">{{ t.catagory }}</span>{% endif %}
-                {% if t.completed_time %}
-                  <span class="chip chip-muted">{{ t.completed_time[:10] }}</span>
-                {% endif %}
-                {% if t.source == 'recurring' %}<span class="chip chip-muted">↻</span>{% endif %}
-              </span>
-            </li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <p class="empty">Nothing completed yet.</p>
-      {% endif %}
-    </div>
-  </article>
-
-  <!-- Widget: Weekly review — rollup of the last 7 completed days.
-       Uses db.weekly_review() which reports on the window ending yesterday
-       so a Monday-morning refresh stays stable. -->
-  <article class="widget" data-widget="weekly-review">
-    <header class="widget-header">
-      <h2>Weekly review</h2>
-      <span class="widget-count">{{ weekly_review.completed_total }}</span>
-    </header>
-    <div class="widget-body scroll-y">
-      <p class="muted-hint">
-        {{ weekly_review.start_iso }} &rarr; {{ weekly_review.end_iso }}
-      </p>
-      <div class="wr-stats">
-        <div class="wr-stat">
-          <span class="wr-stat-num">{{ weekly_review.completed_total }}</span>
-          <span class="wr-stat-label">tasks completed</span>
+  <p class="home-layout-status" data-home-layout-status role="status" hidden></p>
+  <dialog id="home-layout-dialog" class="home-layout-dialog" aria-labelledby="home-layout-title">
+    <form data-home-layout-form>
+      <header class="home-layout-heading">
+        <h2 id="home-layout-title">Customize layout</h2>
+        <button type="button" class="home-layout-tool" data-home-layout-cancel aria-label="Close layout customization" title="Close layout customization">
+          <span class="home-layout-icon home-layout-icon--close" aria-hidden="true"></span>
+        </button>
+      </header>
+      <fieldset class="home-layout-scope">
+        <legend>Save layout</legend>
+        <label><input type="radio" name="home-layout-scope" value="browser" checked> This browser</label>
+        <label><input type="radio" name="home-layout-scope" value="shared"> Across devices</label>
+      </fieldset>
+      <ul class="home-layout-list" data-home-layout-list aria-label="Home widgets"></ul>
+      <p class="sr-only" data-home-layout-announcement role="status"></p>
+      <p class="home-layout-status" data-home-layout-error role="alert" hidden></p>
+      <footer class="home-layout-footer">
+        <button type="button" class="btn btn-ghost" data-home-layout-reset><span class="home-layout-icon home-layout-icon--reset" aria-hidden="true"></span> Restore defaults</button>
+        <div class="home-layout-actions">
+          <button type="button" class="btn btn-ghost" data-home-layout-cancel>Cancel</button>
+          <button type="submit" class="btn btn-primary" data-home-layout-save><span class="home-layout-icon home-layout-icon--save" aria-hidden="true"></span><span data-home-layout-save-label>Save</span></button>
         </div>
-        <div class="wr-stat">
-          <span class="wr-stat-num">{{ weekly_review.discipline_total }}</span>
-          <span class="wr-stat-label">
-            discipline hits<br>
-            <small class="muted-hint">{{ weekly_review.discipline_days }} / 7 days</small>
-          </span>
+      </footer>
+    </form>
+  </dialog>
+  <p class="home-empty" data-home-layout-empty hidden>No widgets selected.</p>
+  <div class="home-columns" data-home-layout data-home-preferences="/home/layout">
+    <div class="home-main" data-home-zone="main">
+      <section class="widget" data-widget="open-tasks" aria-labelledby="home-tasks-heading">
+        <header class="widget-header home-section-heading"><h2 id="home-tasks-heading">Tasks</h2><span id="home-attention" class="home-attention" hidden>{{ shell_icon('triangle-alert') }} <span></span></span></header>
+        <div class="home-filter-bar">
+          <fieldset class="home-filters" aria-label="Task view" disabled>
+            <legend class="sr-only">Task view</legend>
+            {% for value, label in [('today', 'Today'), ('upcoming', 'Upcoming'), ('all', 'All')] %}
+            <label><input type="radio" name="home-filter" value="{{ value }}" {% if value == 'today' %}checked{% endif %}><span>{{ label }} <span data-home-count="{{ value }}">{% if value == 'today' %}{{ today_open|length }}{% endif %}</span></span></label>
+            {% endfor %}
+          </fieldset>
+          <label class="home-check home-completed" hidden><input type="checkbox" id="home-show-completed"> Show completed</label>
         </div>
-        <div class="wr-stat">
-          <span class="wr-stat-num">{{ weekly_review.carried_over }}</span>
-          <span class="wr-stat-label">carried over</span>
+        <p id="home-selection-error" class="home-error" {% if state.selection_available %}hidden{% endif %}>Today selection is unavailable.</p>
+        <ul id="home-task-list" class="home-task-list" aria-label="Tasks">
+          {% for task in today_open | unique(attribute='id') %}
+          <li class="home-task" data-task-id="{{ task.id }}">
+            <label class="home-check-target"><input type="checkbox" disabled aria-label="Complete {{ task.title }}"></label>
+            <div class="home-task-open"><span class="home-task-title">{{ task.title }}</span><span class="home-task-meta">
+              <span>{% if task.due %}Due {{ task.due[:10] }}{% else %}No due date{% endif %}</span>
+              {% if task.due and task.due[:10] < state.today %}<span class="home-attention">Overdue</span>{% endif %}
+              {% if task.blockers %}<span class="home-attention">Blocked by {{ task.blockers | join(', ') }}</span>{% endif %}
+            </span></div>
+          </li>
+          {% endfor %}
+        </ul>
+        <p id="home-task-empty" class="home-empty" {% if today_open %}hidden{% endif %}>{% if today_tasks %}Today's selected tasks are complete.{% else %}No tasks selected for today.{% endif %}</p>
+      </section>
+      <section class="widget" data-widget="disc-pending" aria-labelledby="home-habits-heading">
+        <header class="widget-header home-section-heading"><h2 id="home-habits-heading">Habits</h2><span id="home-habit-count" class="home-muted">{{ state.habits | selectattr('done') | list | length }} / {{ state.habits|length }}</span></header>
+        <div id="home-habit-list" class="home-habit-list">
+          {% for habit in state.habits %}
+          <label class="home-habit"><input type="checkbox" {% if habit.done %}checked{% endif %} disabled><span>{{ habit.title }}</span>{{ shell_icon('check') }}</label>
+          {% else %}<p class="home-empty">No habits today.</p>{% endfor %}
         </div>
-        <div class="wr-stat">
-          <span class="wr-stat-num">{{ weekly_review.upcoming_next_week }}</span>
-          <span class="wr-stat-label">due next 7 days</span>
+      </section>
+    </div>
+    <aside class="home-support" data-home-zone="support" aria-label="Day overview">
+      <section class="widget" data-widget="task-week" aria-labelledby="home-progress-heading">
+        <header class="widget-header home-section-heading"><h2 id="home-progress-heading">Today's progress</h2>{{ shell_icon('chart-no-axes-combined') }}</header>
+        <p id="home-progress-label" class="home-progress-label">{{ completed }} of {{ today_tasks|length }} tasks complete</p>
+        <progress id="home-progress" value="{{ completed }}" max="{{ today_tasks|length or 1 }}" aria-labelledby="home-progress-heading home-progress-label"></progress>
+      </section>
+      <section class="widget" data-widget="upcoming" aria-labelledby="home-agenda-heading">
+        <header class="widget-header home-section-heading"><h2 id="home-agenda-heading">Coming up</h2>{{ shell_icon('calendar-days') }}</header>
+        <ul id="home-agenda" class="home-agenda">
+          {% set agenda = namespace(dates=[]) %}
+          {% for task in state.tasks if not task.done and not task.today and task.due and task.due[:10] > state.today %}
+            {% if task.due[:10] not in agenda.dates %}{% set agenda.dates = agenda.dates + [task.due[:10]] %}{% endif %}
+          {% endfor %}
+          {% for day in (agenda.dates | sort)[:5] %}<li><strong>{{ day }}</strong><span>Tasks due</span></li>{% else %}<li class="home-empty">Nothing coming up.</li>{% endfor %}
+        </ul>
+      </section>
+      <section class="widget" data-widget="gnw-playing" aria-labelledby="home-continue-heading">
+        <header class="widget-header home-section-heading"><h2 id="home-continue-heading">Continue</h2></header>
+        <div id="home-shortcuts">
+          {% for link in state.shortcuts %}<a class="home-shortcut" href="{{ link.href }}">{{ shell_icon(link.icon) }}<span>{{ link.label }}</span>{{ shell_icon('chevron-right') }}</a>{% else %}<p class="home-empty">No shortcuts available.</p>{% endfor %}
         </div>
+      </section>
+    </aside>
+  </div>
+  <dialog class="home-dialog" id="home-reschedule" aria-labelledby="home-reschedule-heading">
+    <header class="home-dialog-heading"><h2 id="home-reschedule-heading">Reschedule</h2><button type="button" class="home-tool" data-home-action="cancel-date" aria-label="Close reschedule" title="Close">{{ shell_icon('x') }}</button></header>
+    <p id="home-reschedule-title" class="home-muted"></p>
+    <form id="home-reschedule-form">
+      <label class="home-field">Due date<input type="date" id="home-due-input" name="due_date" min="1900-01-01" max="9999-12-31" autofocus></label>
+      <p id="home-date-error" class="home-error" role="alert" hidden></p>
+      <div class="home-dialog-actions">
+        <button type="button" class="home-button" data-home-action="clear-date">Clear date</button>
+        <button type="button" class="home-button" data-home-action="cancel-date" >Cancel</button>
+        <button type="submit" class="home-button home-primary" data-home-write>{{ shell_icon('check') }} Save date</button>
       </div>
-      {% if weekly_review.top_categories %}
-        <h3 class="wr-subhead">Top categories</h3>
-        <ul class="wr-cat-list">
-          {% for c in weekly_review.top_categories %}
-            <li class="wr-cat-row">
-              <span class="wr-cat-name">{{ c.name }}</span>
-              <span class="wr-cat-bar">
-                <span class="wr-cat-bar-fill"
-                      style="--w: {{ (c.count / weekly_review.top_categories[0].count * 100)|round(0, 'floor') }}%"></span>
-              </span>
-              <span class="wr-cat-count">{{ c.count }}</span>
-            </li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <p class="empty">Nothing completed last week.</p>
-      {% endif %}
-    </div>
-  </article>
-
-  <!-- Widget: Discipline weekly bar chart -->
-  <article class="widget" data-widget="disc-week">
-    <header class="widget-header">
-      <h2>Discipline &middot; This week</h2>
-      <span class="widget-count">{{ disc_week|sum(attribute='count') }}</span>
-    </header>
-    <div class="widget-body">
-      {% with week=disc_week, accent='var(--success)' %}
-        {% include "partials/week_chart.html" %}
-      {% endwith %}
-    </div>
-  </article>
-
-  <!-- Widget: Tasks completed weekly bar chart -->
-  <article class="widget" data-widget="task-week">
-    <header class="widget-header">
-      <h2>Tasks completed &middot; This week</h2>
-      <span class="widget-count">{{ task_week|sum(attribute='count') }}</span>
-    </header>
-    <div class="widget-body">
-      {% with week=task_week, accent='#b06bff' %}
-        {% include "partials/week_chart.html" %}
-      {% endwith %}
-    </div>
-  </article>
-
-  <!-- Widget: Recent activity (audit log)
-       Union feed of writes across tasks/recurring/discipline/follow_ups —
-       captures both LuigiBot's and luigi-web's writes because it's built
-       from existing timestamp columns (no DDL, per the README contract). -->
-  <article class="widget" data-widget="activity">
-    <header class="widget-header">
-      <h2>Recent activity</h2>
-      <span class="widget-count">{{ recent_activity|length }}</span>
-    </header>
-    <div class="widget-body scroll-y">
-      {% if recent_activity %}
-        <ul class="widget-list activity-list">
-          {% for a in recent_activity %}
-            <li class="widget-row activity-row activity-{{ a.kind }}">
-              <span class="activity-icon activity-icon-{{ a.kind }}" aria-hidden="true">
-                {% if a.kind == 'completed' %}✓
-                {% elif a.kind == 'discipline' %}●
-                {% else %}+{% endif %}
-              </span>
-              <span class="widget-row-title" title="{{ a.what }}">
-                {{ a.what }}
-                <small class="muted-hint">
-                  {{ a.kind }} &middot; {{ a.source }}
-                  {% if a.catagory %} &middot; {{ a.catagory }}{% endif %}
-                </small>
-              </span>
-              <span class="widget-row-meta">
-                <span class="chip chip-muted">{{ a.when_ts[:16]|replace('T', ' ') }}</span>
-              </span>
-            </li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <p class="empty">No activity in the last two weeks.</p>
-      {% endif %}
-    </div>
-  </article>
-</section>
+    </form>
+  </dialog>
+  <template id="home-task-template">
+    <li class="home-task">
+      <label class="home-check-target"><input type="checkbox" data-home-complete data-home-write><span class="sr-only"></span></label>
+      <button type="button" class="home-task-open" data-home-editor data-home-write hx-target="#modal-body" hx-swap="innerHTML"><span class="home-task-title"></span><span class="home-task-meta"></span></button>
+      <div class="home-row-tools">
+        <button type="button" class="home-tool" data-home-action="today" data-home-write><span data-home-today-icon>{{ shell_icon('plus') }}</span></button>
+        <button type="button" class="home-tool" data-home-action="reschedule" data-home-write title="Reschedule due date" aria-label="Reschedule due date">{{ shell_icon('calendar-days') }}</button>
+      </div>
+    </li>
+  </template>
+  <template id="home-habit-template"><label class="home-habit"><input type="checkbox" data-home-habit data-home-write><span class="home-habit-name"></span><small class="home-muted"></small>{{ shell_icon('check') }}</label></template>
+  <script type="application/json" id="home-state">{{ state | tojson }}</script>
+</div>
 {% endblock %}

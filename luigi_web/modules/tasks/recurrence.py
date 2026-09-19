@@ -102,7 +102,7 @@ def calendar_occurrence_dates(
     end: date,
 ) -> list[date]:
     """Project a recurring row's schedule into an inclusive calendar range."""
-    if not row.get("recurring") or end < start:
+    if not row.get("recurring") or row.get("_recurrence_generated") or end < start:
         return []
 
     due = _stored_date(row.get("due_date"))

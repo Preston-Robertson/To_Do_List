@@ -1,0 +1,64 @@
+.cards-build, .deck-analysis { min-width: 0; letter-spacing: 0; }
+.analysis-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
+.analysis-heading h1 { margin: .6rem 0 .2rem; font-size: 1.6rem; overflow-wrap: anywhere; }
+.analysis-heading h2 { margin: 0; font-size: 1.25rem; }
+.analysis-heading p { margin: .25rem 0; }
+.cards-build .btn, .deck-analysis .btn { display: inline-flex; align-items: center; justify-content: center; gap: .4rem; white-space: normal; }
+.cards-build .btn .shell-icon, .deck-analysis .btn .shell-icon { width: 1rem; height: 1rem; flex: 0 0 1rem; }
+.build-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; padding: 1rem 0; border-block: 1px solid #8885; }
+.build-controls fieldset { border: 0; padding: 0; margin: 0; min-width: 0; display: flex; flex-wrap: wrap; gap: .6rem 1rem; }
+.build-controls legend { font-weight: 600; margin-bottom: .6rem; }
+.build-controls label { display: flex; align-items: center; gap: .45rem; min-width: 0; }
+.build-controls input[type="radio"], .build-controls input[type="checkbox"] { width: 1rem; height: 1rem; flex: 0 0 1rem; }
+.build-controls .build-reservations { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.build-reservations label { display: grid; gap: .3rem; }
+.build-reservations select { width: 100%; min-width: 0; max-width: 100%; min-height: 2.5rem; }
+.build-choice-pages, .build-actions { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; grid-column: 1 / -1; }
+.build-choice-pages { font-size: .85rem; }
+.build-choice-pages .btn { min-width: 2.5rem; min-height: 2.5rem; }
+.analysis-note { font-size: .85rem; opacity: .82; overflow-wrap: anywhere; }
+.analysis-notice { padding: .7rem 1rem; border-left: 3px solid #b77919; background: #b7791910; }
+.analysis-reserved-list { padding-left: 1.5rem; overflow-wrap: anywhere; }
+.analysis-totals { display: flex; flex-wrap: wrap; gap: 1rem 2rem; margin: 1.25rem 0; }
+.analysis-totals > div { min-width: 5rem; }
+.analysis-totals dt { font-size: .8rem; opacity: .8; }
+.analysis-totals dd { margin: .25rem 0 0; font-size: 1.25rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.analysis-table-wrap { max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; }
+.analysis-table { border-collapse: collapse; width: 100%; font-size: .85rem; }
+.analysis-table th, .analysis-table td { padding: .65rem .75rem; text-align: left; vertical-align: top; border-bottom: 1px solid #8884; font-variant-numeric: tabular-nums; }
+.analysis-table th { font-weight: 600; }
+.analysis-table small { display: block; font-weight: 400; opacity: .8; margin-top: .35rem; overflow-wrap: anywhere; }
+.build-table { min-width: 58rem; table-layout: fixed; }
+.build-table th:first-child { width: 31%; overflow-wrap: anywhere; }
+.build-table details { font-size: .8rem; font-weight: 400; margin-top: .35rem; }
+.build-table summary { cursor: pointer; }
+.build-table ul { padding-left: 1rem; }
+.analysis-distributions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1.5rem; margin-top: 1.5rem; }
+.analysis-distributions section { min-width: 0; }
+.deck-analysis h3 { font-size: 1rem; margin: .5rem 0 .8rem; }
+.analysis-bar { display: grid; grid-template-columns: minmax(4rem, 1fr) minmax(3rem, 2fr) 3rem; align-items: center; gap: .7rem; min-height: 1.8rem; font-size: .85rem; }
+.analysis-bar span { overflow-wrap: anywhere; }
+.analysis-bar meter { width: 100%; height: .8rem; accent-color: #218a78; }
+.analysis-bar strong { text-align: right; font-variant-numeric: tabular-nums; }
+.analysis-counts { margin: .5rem 0; }
+.analysis-counts > div { display: flex; justify-content: space-between; gap: 1rem; padding: .35rem 0; border-bottom: 1px solid #8883; }
+.analysis-counts dt { overflow-wrap: anywhere; min-width: 0; }
+.analysis-counts dd { margin: 0; font-variant-numeric: tabular-nums; }
+.analysis-section { padding-top: 1rem; margin-top: 1rem; border-top: 1px solid #8884; }
+.analysis-issues { list-style: none; margin: 1rem 0; padding: 0; }
+.analysis-issues li { display: grid; grid-template-columns: 5rem minmax(0, 1fr); gap: .7rem; padding: .6rem .8rem; margin: .35rem 0; border-left: 3px solid #888; font-size: .85rem; overflow-wrap: anywhere; }
+.analysis-issues .analysis-issue-warning { border-color: #bc8028; background: #bc80280c; }
+.analysis-issues .analysis-issue-pass { border-color: #218a78; }
+.analysis-issues .analysis-issue-unknown { border-color: #777; }
+@media (max-width: 800px) {
+  .analysis-distributions { grid-template-columns: 1fr; gap: 1rem; }
+  .build-controls .build-reservations { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 520px) {
+  .build-controls { grid-template-columns: 1fr; }
+  .build-controls .build-reservations { grid-template-columns: 1fr; }
+  .analysis-heading h1 { font-size: 1.3rem; }
+  .analysis-totals { gap: .9rem 1.25rem; }
+  .analysis-issues li { grid-template-columns: 1fr; gap: .2rem; }
+  .deck-analysis .analysis-table { min-width: 42rem; }
+}

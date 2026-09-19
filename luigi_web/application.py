@@ -140,6 +140,17 @@ templates.env.globals["has_web_column"] = db.has_web_column
 templates.env.globals["completion_day_policy"] = task_events.server_time_policy
 
 _STARTUP_SCHEMA: dict[str, Any] = {"version": None, "error": None}
+_RECURRENCE_ERROR: str | None = None
+
+
+def recurrence_status() -> dict[str, Any]:
+    from .modules.tasks import occurrences
+
+    try:
+        state = occurrences.scheduler_state()
+    except ValueError:
+        return {"owner": "invalid", "enabled": False, "message": "Recurring generation is disabled: invalid scheduler ownership.", "error": True}
+    return {**state, "error": bool(_RECURRENCE_ERROR), "message": _RECURRENCE_ERROR or state["message"]}
 
 
 def _module_enabled(module_id: str, request: Request | None = None) -> bool:
@@ -185,13 +196,14 @@ def _require_v2() -> None:
 
 
 def _reactivate_recurring() -> None:
-    """Bring due recurring tasks back to their boards. Safe to call on every
-    read path — it's idempotent and only writes when something is actually
-    due. Swallows errors so a transient DB hiccup never blocks a page load."""
+    """Generate due copies only when this host explicitly owns recurrence."""
+    global _RECURRENCE_ERROR
     try:
         db.reactivate_due_recurring()
-    except Exception as exc:  # pragma: no cover — best-effort, never fatal to a GET
-        logger.warning("Recurring task reactivation failed: %s", exc)
+        _RECURRENCE_ERROR = None
+    except Exception:
+        _RECURRENCE_ERROR = "Recurring generation is unavailable. Completed occurrences were not reset."
+        logger.warning("Recurring occurrence generation failed")
 
 
 import json as _json

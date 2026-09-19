@@ -1,6 +1,10 @@
 {% extends "base.html" %}
+{% block head_scripts %}
+<link rel="stylesheet" href="/module-assets/tasks/task-views.css?v={{ asset_version }}">
+<script src="/module-assets/tasks/task-views.js?v={{ asset_version }}" defer></script>
+{% endblock %}
 {% block content %}
-<div class="kanban-page" data-tasks-scope="{{ endpoint_root }}">
+<div class="kanban-page" data-tasks-scope="{{ endpoint_root }}" data-task-views data-task-calendar-date="{{ filter_date|default('') }}">
   <section class="board-header board-header-tasks">
     <div class="page-heading">
       <h1>{{ page_title }}</h1>
@@ -10,11 +14,11 @@
     <div class="board-header-actions">
       <div class="view-switcher" role="group" aria-label="Task view">
         <button type="button" class="view-switcher-btn active" data-task-view="board" aria-pressed="true">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="8" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="3" y="15" width="7" height="6" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/></svg>
+          {{ shell_icon('layers') }}
           Board
         </button>
         <button type="button" class="view-switcher-btn" data-task-view="list" aria-pressed="false">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r=".5"/><circle cx="3.5" cy="12" r=".5"/><circle cx="3.5" cy="18" r=".5"/></svg>
+          {{ shell_icon('list') }}
           List
         </button>
       </div>
@@ -31,40 +35,23 @@
         <a class="btn btn-ghost" href="/archive">Archived</a>
       {% endif %}
       <button
+        type="button"
         class="btn btn-primary"
-        hx-get="{{ endpoint_root }}/new"
+        hx-get="/tasks/new"
         hx-target="#modal-body"
         hx-trigger="click"
         onclick="openModal()"
-      >+ Task</button>
-      {% if consolidated %}
-        <button
-          class="btn"
-          hx-get="/recurring/new"
-          hx-target="#modal-body"
-          hx-trigger="click"
-          onclick="openModal()"
-        >+ Recurring</button>
-      {% endif %}
+      >{{ shell_icon('plus') }} Add task</button>
+      <a class="btn btn-ghost" href="/tasks/preview">Examples</a>
     </div>
 
     <form class="quick-add" hx-post="/tasks/quick" hx-swap="none">
       <span class="toolbar-label">Quick add</span>
       <input type="text" name="task" required maxlength="240"
              placeholder="Quick add a task…" aria-label="Task name">
-      <input type="date" name="due_date" aria-label="Due date" title="Due date">
-      <input type="number" name="priority" min="0" max="10" value="0"
-             aria-label="Priority" title="Priority">
-      <input type="text" name="project" placeholder="Project" aria-label="Project">
-      <button class="btn btn-primary" type="submit">Add</button>
+          <button class="btn btn-primary task-view-icon-button" type="submit" title="Add task" aria-label="Add task">{{ shell_icon('plus') }}</button>
     </form>
 
-    {# --- Filter bar ---------------------------------------------------------
-       Fully client-side. Filters are applied by initTasksFilter() in app.js
-       by toggling `.card-filtered-out` on cards whose data-* attrs miss the
-       criteria. Column counts are updated live. Saved filters persist to
-       localStorage under `luigi.tasks.savedFilters` and the last-active smart
-       list under `luigi.tasks.activeFilter.<endpoint>`. ---------------------- #}
     <div class="filter-bar" data-filter-bar>
       <input
         type="search"
@@ -78,40 +65,64 @@
         <option value="">All open + completed</option>
         <option value="open">Open only (hide completed)</option>
         <option value="overdue">Overdue</option>
+        <option value="upcoming">Upcoming</option>
         <option value="due-week">Due this week</option>
         <option value="no-due">No due date</option>
         <option value="high-priority">High priority (≥5)</option>
         <option value="completed-week">Completed this week</option>
         <option value="awaiting-reactivation">Awaiting reactivation</option>
+        <option value="recurring">Recurring</option>
+        <option value="completed">Completed</option>
       </select>
 
-      <select class="filter-select" data-filter-priority aria-label="Minimum priority">
-        <option value="0">Any priority</option>
-        <option value="1">P≥1</option>
-        <option value="3">P≥3</option>
-        <option value="5">P≥5</option>
-        <option value="7">P≥7</option>
-      </select>
+      <details class="task-view-popover" data-more-filters>
+        <summary class="btn btn-tiny">More filters {{ shell_icon('chevron-down') }}</summary>
+        <div class="task-view-popover-body task-view-fields">
+          <label>Project<select class="filter-select" data-filter-project><option value="">All projects</option></select></label>
+          <label>Status<select class="filter-select" data-filter-status>
+            <option value="">All statuses</option>
+            {% for status in statuses %}<option value="{{ status }}">{{ status }}</option>{% endfor %}
+          </select></label>
+          <label>Source<select class="filter-select" data-filter-source>
+            <option value="any">Any source</option><option value="task">One-off</option><option value="recurring">Recurring</option>
+          </select></label>
+          <label>Category<select class="filter-select" data-filter-catagory><option value="">All categories</option></select></label>
+          <label>Minimum priority<select class="filter-select" data-filter-priority>
+            <option value="0">Any priority</option>
+            {% for priority in range(1, 11) %}<option value="{{ priority }}">P≥{{ priority }}</option>{% endfor %}
+          </select></label>
+          <label>Sort<select class="filter-select" data-task-sort>
+            <option value="default">Default order</option><option value="due">Due date</option><option value="priority">Priority</option><option value="title">Title</option>
+          </select></label>
+          <label>Group list<select class="filter-select" data-task-group-list>
+            <option value="none">No grouping</option><option value="project">Project</option><option value="status">Status</option>
+          </select></label>
+          <label>Density<select class="filter-select" data-task-density>
+            <option value="comfortable">Comfortable</option><option value="compact">Compact</option>
+          </select></label>
+        </div>
+      </details>
 
-      <select class="filter-select" data-filter-catagory aria-label="Category">
-        <option value="">All categories</option>
-      </select>
-
-      <details class="saved-filters" data-saved-filters>
-        <summary class="btn btn-tiny" title="Saved filters">Saved ▾</summary>
-        <div class="saved-filters-body">
-          <ul class="saved-filters-list" data-saved-filters-list>
-            <li class="saved-filters-empty">No saved filters yet.</li>
+      <details class="task-view-popover" data-saved-views>
+        <summary class="btn btn-tiny">{{ shell_icon('save') }} Saved views {{ shell_icon('chevron-down') }}</summary>
+        <div class="task-view-popover-body">
+          <ul class="task-saved-views" data-saved-views-list>
+            <li>No saved views yet.</li>
           </ul>
-          <div class="saved-filters-form">
-            <input
-              type="text"
-              data-saved-filter-name
-              placeholder="Name this filter…"
-              maxlength="40"
-            >
-            <button type="button" class="btn btn-tiny btn-primary" data-saved-filter-save>Save</button>
+          <div class="task-save-view-form">
+            <input type="text" data-saved-view-name placeholder="Name this view" aria-label="View name" maxlength="40">
+            <button type="button" class="btn btn-tiny btn-primary" data-saved-view-save>{{ shell_icon('save') }} Save</button>
           </div>
+        </div>
+      </details>
+
+      <details class="task-view-popover" data-board-controls>
+        <summary class="btn btn-tiny">{{ shell_icon('layers') }} Columns {{ shell_icon('chevron-down') }}</summary>
+        <div class="task-view-popover-body task-column-options">
+          {% for status in statuses %}
+            <label><input type="checkbox" data-shown-column="{{ status }}" checked><span>{{ status }}</span><span data-column-option-count="{{ status }}">{{ columns[status]|length }}</span></label>
+          {% endfor %}
+          <label class="task-collapse-completed"><input type="checkbox" data-collapse-completed><span>Collapse completed</span></label>
         </div>
       </details>
 
@@ -121,10 +132,19 @@
         data-filter-clear
         title="Clear all filters"
       >Clear</button>
+      <button type="button" class="btn btn-tiny btn-ghost" data-view-reset>Reset view</button>
 
       <span class="filter-summary" data-filter-summary aria-live="polite"></span>
       <button type="button" class="btn btn-tiny" data-bulk-select-visible>Select visible</button>
     </div>
+    <p class="task-views-notice" data-task-views-notice role="status" hidden></p>
+    {% if recurrence_status is defined %}
+    <p class="task-views-notice" role="status" data-recurrence-status data-error="{{ 'true' if recurrence_status.error else 'false' }}">
+      {% if recurrence_status.error %}{{ recurrence_status.message }}
+      {% elif recurrence_status.enabled %}Recurring generation: new instances. Web-owned scheduler.
+      {% else %}Web recurring generation is paused. Scheduler ownership: external.{% endif %}
+    </p>
+    {% endif %}
   </section>
 
   <div class="bulk-task-bar" data-bulk-task-bar hidden>
@@ -147,12 +167,15 @@
 
   <section class="kanban" id="kanban-board" data-view-panel="board">
     {% for status in statuses %}
-      <div class="kanban-column" data-status="{{ status }}">
+      <div class="kanban-column" data-status="{{ status }}" data-task-column>
         <header class="kanban-column-header">
           <span class="kanban-column-title">{{ status }}</span>
           <span class="kanban-column-count" data-column-count>{{ columns[status]|length }}</span>
+          <button type="button" class="btn btn-tiny btn-ghost task-view-icon-button" data-column-collapse="{{ status }}"
+            aria-expanded="true" aria-controls="task-column-body-{{ loop.index }}" aria-label="Collapse {{ status }}" title="Collapse {{ status }}">{{ shell_icon('chevron-down') }}</button>
         </header>
         <div
+          id="task-column-body-{{ loop.index }}"
           class="kanban-column-body sortable"
           data-status="{{ status }}"
           data-endpoint="{{ endpoint_root }}"
@@ -166,5 +189,6 @@
   </section>
 
   {% include "partials/task_list.html" %}
+  <p class="empty" data-task-view-empty role="status" hidden></p>
 </div>
 {% endblock %}

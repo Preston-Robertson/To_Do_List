@@ -5,8 +5,28 @@ from typing import Any
 from fastapi import Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from ...auth import require_auth
+from . import occurrences
+from .examples import router as examples_router
 
 router = APIRouter()
+router.include_router(examples_router)
+
+
+def _task_write_error(exc: ValueError | occurrences.OccurrenceStorageError, status: int = 422) -> HTTPException:
+    if isinstance(exc, occurrences.OccurrenceStorageError):
+        return HTTPException(503, "Recurring task storage is unavailable. Please try again.")
+    if str(exc) == occurrences.HISTORY_MESSAGE:
+        return HTTPException(409, "Completed occurrence history cannot be changed.")
+    return HTTPException(status, str(exc))
+
+
+def _recurring_row(row_uuid: str) -> dict[str, Any] | None:
+    from ... import application as host
+
+    try:
+        return host.db.get_recurring(row_uuid)
+    except occurrences.OccurrenceStorageError as exc:
+        raise _task_write_error(exc) from None
 
 
 def startup(app: FastAPI | None = None) -> None:
@@ -124,6 +144,8 @@ def tasks_page(request: Request):
             "endpoint_root": "/tasks",
             "page_title": "Tasks",
             "consolidated": True,
+            "filter_date": host.clock.local_today().isoformat(),
+            "recurrence_status": host.recurrence_status(),
         },
     )
 
@@ -299,14 +321,32 @@ async def tasks_create(request: Request):
     from ... import application as host
 
     host._require_v2()
-    form = dict(await request.form())
-    row_uuid = host.db.create_task(form)
-    row = host.db.get_task(row_uuid)
+    form = await host._form_dict(request)
+    repeat = str(form.get("recurring") or "0").strip().lower()
+    if repeat not in {"0", "1", "false", "true", "off", "on", "no", "yes"}:
+        raise HTTPException(422, "Invalid Repeat setting")
+    repeating = repeat in {"1", "true", "on", "yes"}
+    if not str(form.get("task") or "").strip():
+        raise HTTPException(422, "Task name is required")
+    endpoint = "/recurring" if repeating else "/tasks"
+    try:
+        if repeating:
+            host._validate_recurring_form(form)
+            row_uuid = host.db.create_recurring(form)
+            row = host.db.get_recurring(row_uuid)
+        else:
+            form = {key: value for key, value in form.items() if not key.startswith("recurring")}
+            row_uuid = host.db.create_task(form)
+            row = host.db.get_task(row_uuid)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(422, "Task values are invalid") from exc
+    if not row or str(row.get("uuid")) != str(row_uuid):
+        raise HTTPException(503, "Task creation could not be verified. Reload before retrying.")
     return host.templates.TemplateResponse(
         "partials/task_card.html",
-        {"request": request, "t": row, "endpoint_root": "/tasks"},
+        {"request": request, "t": row, "endpoint_root": endpoint},
         headers={"HX-Trigger": host._hx_trigger(
-            flashSuccess={"message": "Task created"},
+            flashSuccess={"message": "Recurring task created" if repeating else "Task created"},
             closeModal=None,
             reloadBoard=None,
         )},
@@ -479,8 +519,8 @@ async def tasks_update(request: Request, row_uuid: str):
     form = dict(await request.form())
     try:
         host.db.update_task(row_uuid, form)
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
+    except (ValueError, occurrences.OccurrenceStorageError) as exc:
+        raise _task_write_error(exc) from None
     row = host.db.get_task(row_uuid)
     if not row:
         raise HTTPException(404)
@@ -504,8 +544,8 @@ async def tasks_set_status(request: Request, row_uuid: str):
     new_status = form.get("status", "")
     try:
         host.db.set_task_status(row_uuid, new_status)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
+    except (ValueError, occurrences.OccurrenceStorageError) as exc:
+        raise _task_write_error(exc, 400) from None
     return Response(status_code=204)
 
 
@@ -527,8 +567,8 @@ async def tasks_toggle_complete(request: Request, row_uuid: str):
         transition = host.db.toggle_task_completed(
             row_uuid, effective_date=effective_date
         )
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
+    except (ValueError, occurrences.OccurrenceStorageError) as exc:
+        raise _task_write_error(exc) from None
     row = host.db.get_task(row_uuid)
     if not row:
         raise HTTPException(404)
@@ -615,8 +655,11 @@ async def tasks_snooze(request: Request, row_uuid: str):
         days = int(form.get("days", "1"))
     except ValueError:
         raise HTTPException(400, "days must be an integer")
-    if not host.db.snooze_task(row_uuid, days):
-        raise HTTPException(404)
+    try:
+        if not host.db.snooze_task(row_uuid, days):
+            raise HTTPException(404)
+    except (ValueError, occurrences.OccurrenceStorageError) as exc:
+        raise _task_write_error(exc) from None
     row = host.db.get_task(row_uuid)
     if not row:
         raise HTTPException(404)
@@ -691,7 +734,7 @@ def recurring_edit_form(request: Request, row_uuid: str):
     from ... import application as host
 
     host._require_v2()
-    row = host.db.get_recurring(row_uuid)
+    row = _recurring_row(row_uuid)
     if not row:
         raise HTTPException(404)
     return host.templates.TemplateResponse(
@@ -719,9 +762,9 @@ async def recurring_update(request: Request, row_uuid: str):
     host._validate_recurring_form(form)
     try:
         host.db.update_recurring(row_uuid, form)
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
-    row = host.db.get_recurring(row_uuid)
+    except (ValueError, occurrences.OccurrenceStorageError) as exc:
+        raise _task_write_error(exc) from None
+    row = _recurring_row(row_uuid)
     if not row:
         raise HTTPException(404)
     return host.templates.TemplateResponse(
@@ -744,8 +787,8 @@ async def recurring_set_status(request: Request, row_uuid: str):
     new_status = form.get("status", "")
     try:
         host.db.set_recurring_status(row_uuid, new_status)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
+    except (ValueError, occurrences.OccurrenceStorageError) as exc:
+        raise _task_write_error(exc, 400) from None
     return Response(status_code=204)
 
 
@@ -758,7 +801,7 @@ async def recurring_toggle_complete(request: Request, row_uuid: str):
     from ... import application as host
 
     host._require_v2()
-    before = host.db.get_recurring(row_uuid)
+    before = _recurring_row(row_uuid)
     if not before:
         raise HTTPException(404)
     form = await request.form()
@@ -767,9 +810,9 @@ async def recurring_toggle_complete(request: Request, row_uuid: str):
         transition = host.db.toggle_recurring_completed(
             row_uuid, effective_date=effective_date
         )
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
-    row = host.db.get_recurring(row_uuid)
+    except (ValueError, occurrences.OccurrenceStorageError) as exc:
+        raise _task_write_error(exc) from None
+    row = _recurring_row(row_uuid)
     if not row:
         raise HTTPException(404)
     verb = "Completed" if int(row.get("completed") or 0) == 1 else "Reopened"
@@ -862,7 +905,7 @@ async def recurring_snooze(request: Request, row_uuid: str):
     from ... import application as host
 
     host._require_v2()
-    before = host.db.get_recurring(row_uuid)
+    before = _recurring_row(row_uuid)
     if not before:
         raise HTTPException(404)
     form = dict(await request.form())
@@ -870,9 +913,12 @@ async def recurring_snooze(request: Request, row_uuid: str):
         days = int(form.get("days", "1"))
     except ValueError:
         raise HTTPException(400, "days must be an integer")
-    if not host.db.snooze_recurring(row_uuid, days):
-        raise HTTPException(404)
-    row = host.db.get_recurring(row_uuid)
+    try:
+        if not host.db.snooze_recurring(row_uuid, days):
+            raise HTTPException(404)
+    except (ValueError, occurrences.OccurrenceStorageError) as exc:
+        raise _task_write_error(exc) from None
+    row = _recurring_row(row_uuid)
     if not row:
         raise HTTPException(404)
     op_id = host._stash_undo("recurring_tasks", before,
@@ -1019,8 +1065,15 @@ def undo(op_id: str):
                 entry.get("task_event_type"),
             )
             host.operations.restore_task_records(entry.get("operation_records"))
-    except Exception as exc:
-        raise HTTPException(500, f"undo failed: {exc}")
+    except (ValueError, occurrences.OccurrenceStorageError) as exc:
+        if isinstance(exc, occurrences.OccurrenceStorageError) or str(exc) == occurrences.HISTORY_MESSAGE:
+            with host._UNDO_LOCK:
+                host._UNDO_QUEUE[op_id] = entry
+                host._sweep_undo()
+            raise _task_write_error(exc) from None
+        raise HTTPException(409, "Undo could not be applied. Reload and try again.") from None
+    except Exception:
+        raise HTTPException(500, "Undo could not be completed.") from None
     return Response(
         status_code=200,
         content="",

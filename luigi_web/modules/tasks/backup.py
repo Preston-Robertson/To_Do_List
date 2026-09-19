@@ -12,6 +12,7 @@ from typing import Any
 from sqlalchemy import text
 
 from . import repository as db
+from . import occurrences
 
 FORMAT = "luigi-task-backup-v1"
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
@@ -272,8 +273,25 @@ def _existing_keys(conn, table: str) -> set[Any]:
     }
 
 
+def _check_occurrence_restore(conn, payload: dict[str, Any], *, lock: bool = False) -> None:
+    references = sorted(
+        {row["uuid"] for row in payload["tables"]["recurring_tasks"]}
+        | set(payload["web_metadata"].get("recurring_tasks", {}))
+    )
+    if not references:
+        return
+    if lock:
+        suffix = " FOR UPDATE" if conn.dialect.name == "postgresql" else ""
+        for row_uuid in references:
+            conn.execute(text(f"SELECT uuid FROM recurring_tasks WHERE uuid = :uuid{suffix}"), {"uuid": row_uuid}).first()
+    links = occurrences.lineage(conn, references) or {}
+    if any(link["annotations"]["_recurrence_generated"] for link in links.values()):
+        raise RestoreError("This backup includes recurring history with successors. Use a coordinated database restore including the occurrence ledger.")
+
+
 def preview_restore(payload: dict[str, Any]) -> dict[str, Any]:
     with db.get_engine().connect() as conn:
+        _check_occurrence_restore(conn, payload)
         tables: dict[str, dict[str, int]] = {}
         for table, rows in payload["tables"].items():
             existing = _existing_keys(conn, table)
@@ -346,6 +364,9 @@ def restore_backup(payload: dict[str, Any]) -> dict[str, dict[str, int]]:
         table: {"insert": 0, "update": 0} for table in _TABLES
     }
     try:
+        if connection.dialect.name == "sqlite":
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
+        _check_occurrence_restore(connection, payload, lock=True)
         for table in _UUID_TABLE_COLUMNS:
             for row in payload["tables"][table]:
                 outcome = _upsert_uuid_row(connection, table, row)

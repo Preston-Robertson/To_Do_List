@@ -80,6 +80,12 @@ def init_db() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_notifications_open
                 ON reminder_notifications(dismissed_at, snoozed_until, fired_at DESC);
+            CREATE TABLE IF NOT EXISTS home_today_selections (
+                task_uuid TEXT NOT NULL,
+                task_source TEXT NOT NULL CHECK(task_source IN ('task', 'recurring')),
+                selected_date TEXT NOT NULL,
+                PRIMARY KEY(task_source, task_uuid, selected_date)
+            );
         """)
 
 
@@ -99,6 +105,46 @@ def _label(value: Any, field: str) -> str:
 
 def _key(source: str, row_uuid: str) -> tuple[str, str]:
     return (_source(source), str(row_uuid or "").strip())
+
+
+def list_today_selections(day: date | None = None) -> set[tuple[str, str]]:
+    selected_date = (day or clock.local_today()).isoformat()
+    init_db()
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT task_source, task_uuid FROM home_today_selections WHERE selected_date = ?",
+            (selected_date,),
+        ).fetchall()
+    return {(row["task_source"], row["task_uuid"]) for row in rows}
+
+
+def set_today_selection(
+    task_uuid: str, source: str, selected: bool, *, day: date | None = None
+) -> bool:
+    source = _source(source)
+    task_uuid = _label(task_uuid, "task reference")
+    if len(task_uuid) > 200 or type(selected) is not bool:
+        raise ValueError("Invalid Today selection")
+    selected_date = (day or clock.local_today()).isoformat()
+    init_db()
+    with _connect() as conn:
+        if selected:
+            conn.execute(
+                "INSERT OR IGNORE INTO home_today_selections (task_uuid, task_source, selected_date) VALUES (?, ?, ?)",
+                (task_uuid, source, selected_date),
+            )
+        else:
+            conn.execute(
+                "DELETE FROM home_today_selections WHERE task_uuid = ? AND task_source = ? AND selected_date = ?",
+                (task_uuid, source, selected_date),
+            )
+        stored = conn.execute(
+            "SELECT 1 FROM home_today_selections WHERE task_uuid = ? AND task_source = ? AND selected_date = ?",
+            (task_uuid, source, selected_date),
+        ).fetchone() is not None
+        if stored != selected:
+            raise RuntimeError("Today selection could not be saved")
+    return stored
 
 
 def list_dependencies() -> list[dict[str, Any]]:
@@ -202,6 +248,14 @@ def delete_task_records(task_uuid: str, source: str) -> dict[str, Any]:
             SELECT * FROM reminder_rules
             WHERE task_uuid = ? AND task_source = ?
         """, (task_uuid, source)).fetchall()]
+        today_selections = [dict(row) for row in conn.execute(
+            "SELECT * FROM home_today_selections WHERE task_uuid = ? AND task_source = ?",
+            (task_uuid, source),
+        ).fetchall()]
+        conn.execute(
+            "DELETE FROM home_today_selections WHERE task_uuid = ? AND task_source = ?",
+            (task_uuid, source),
+        )
         conn.execute("""
             DELETE FROM reminder_notifications
             WHERE task_uuid = ? AND task_source = ?
@@ -215,7 +269,7 @@ def delete_task_records(task_uuid: str, source: str) -> dict[str, Any]:
             WHERE (dependent_uuid = ? AND dependent_source = ?)
                OR (blocker_uuid = ? AND blocker_source = ?)
         """, (task_uuid, source, task_uuid, source))
-    return {"dependencies": dependencies, "reminder_rules": reminder_rules}
+    return {"dependencies": dependencies, "reminder_rules": reminder_rules, "today_selections": today_selections}
 
 
 def restore_task_records(snapshot: dict[str, Any] | None) -> None:
@@ -231,6 +285,11 @@ def restore_task_records(snapshot: dict[str, Any] | None) -> None:
         "remind_on", "message", "active", "created_at", "updated_at",
     )
     with _connect() as conn:
+        for row in snapshot.get("today_selections", []):
+            conn.execute(
+                "INSERT OR IGNORE INTO home_today_selections (task_uuid, task_source, selected_date) VALUES (?, ?, ?)",
+                (row["task_uuid"], row["task_source"], row["selected_date"]),
+            )
         for row in snapshot.get("dependencies", []):
             conn.execute(
                 f"INSERT OR IGNORE INTO task_dependencies ({', '.join(dependency_columns)}) "

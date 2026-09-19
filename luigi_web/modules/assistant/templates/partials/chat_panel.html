@@ -1,11 +1,11 @@
-{# Home chat panel — top of the /home page. #}
-{# Collapsible so it doesn't dominate the dashboard when unused. #}
+{% macro assistant_icon(name) -%}
+<span class="shell-icon" style="--shell-icon: url('/static/icons/lucide/{{ name }}.svg')" aria-hidden="true"></span>
+{%- endmacro %}
 <section class="chat-panel {% if not chat_enabled %}chat-disabled{% endif %}"
          id="chat-panel">
   <header class="chat-header">
     <div class="chat-title">
       <span class="chat-dot" aria-hidden="true"></span>
-      <h2>Assistant</h2>
       {% if chat_enabled %}
         <span class="chat-badge" title="LLM provider / model">
           {{ chat_provider }} · {{ chat_model }}
@@ -18,7 +18,7 @@
     </div>
     <div class="chat-actions">
       <details class="chat-voice-menu-wrap" data-tts-menu>
-        <summary class="btn btn-ghost btn-tiny" title="Voice output settings" aria-label="Voice output settings">🔊</summary>
+        <summary class="btn btn-ghost btn-tiny" title="Voice output settings" aria-label="Voice output settings">{{ assistant_icon('settings-2') }}</summary>
         <div class="chat-voice-menu">
           <label class="chat-voice-toggle">
             <input type="checkbox" data-tts-enabled>
@@ -35,21 +35,20 @@
       </details>
       <button type="button" class="btn btn-ghost btn-tiny"
               hx-post="/chat/reset" hx-target="#chat-log" hx-swap="innerHTML"
-              title="Clear chat history (server-side)">Clear</button>
-      <button type="button" class="btn btn-ghost btn-tiny"
-              onclick="document.getElementById('chat-panel').classList.toggle('is-collapsed')"
-              title="Collapse / expand">▾</button>
+                    title="Clear chat history" aria-label="Clear chat history">{{ assistant_icon('trash-2') }}</button>
     </div>
   </header>
 
   <div class="chat-body">
     {% if not chat_enabled and chat_disabled_reason %}
       <div class="chat-config-notice">
-        {{ chat_disabled_reason }}{% if module_enabled('admin') %} <a href="/admin">Open Admin settings</a>.{% endif %}
+        Assistant is not configured.{% if module_enabled('admin') %} <a href="/admin">Open Admin settings</a>.{% endif %}
       </div>
     {% endif %}
     <div id="chat-log" class="chat-log" aria-live="polite">
-      {# Messages are appended here by HTMX after each /chat POST. #}
+      {% for message in chat_messages|default([]) %}
+      <div class="chat-msg chat-msg-{{ message.role }}"><div class="chat-bubble">{{ message.content }}</div></div>
+      {% endfor %}
     </div>
 
     <form class="chat-composer"
@@ -57,22 +56,22 @@
           hx-target="#chat-log"
           hx-swap="beforeend"
           hx-disabled-elt="find button, find textarea"
-          hx-on::after-request="this.reset(); this.querySelector('textarea').focus(); document.getElementById('chat-log').scrollTop = document.getElementById('chat-log').scrollHeight;"
+          data-assistant-composer
           {% if not chat_enabled %}onsubmit="return false;"{% endif %}>
-      <textarea name="message" rows="1" required
+      <textarea name="message" rows="3" required aria-label="Message Assistant"
               placeholder="{% if chat_enabled %}Add a task, mark a discipline done, ask what's overdue…{% elif module_enabled('admin') %}Configure the Assistant in Admin{% else %}Assistant is not configured{% endif %}"
                 {% if not chat_enabled %}disabled{% endif %}
-                onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();this.form.requestSubmit();}"></textarea>
+                onkeydown="if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();this.form.requestSubmit();}"></textarea>
       <div class="chat-composer-actions">
         {# Mic button is a placeholder wired to the Web Speech API. It stays #}
         {# disabled until app.js finds SpeechRecognition on the browser AND  #}
         {# the panel is enabled. See initChatMic() in static/js/app.js.       #}
         <button type="button" class="btn btn-ghost btn-tiny chat-mic"
                 data-chat-mic disabled
-                title="Voice input (coming soon)"
-                aria-label="Voice input">🎙</button>
+                title="Voice input"
+                aria-label="Voice input">{{ assistant_icon('mic') }}</button>
         <button type="submit" class="btn btn-primary btn-tiny"
-                {% if not chat_enabled %}disabled{% endif %}>Send</button>
+                {% if not chat_enabled %}disabled{% endif %}>{{ assistant_icon('chevron-right') }} Send</button>
       </div>
       <span class="htmx-indicator chat-spinner" aria-hidden="true">…</span>
     </form>

@@ -5,5 +5,6 @@
     <div><span>Board sections</span><strong>{{ deck_sections|length }}</strong></div>
     <div><span>Categories</span><strong>{{ category_count }}</strong></div>
   </div>
-  <div class="cards-trend"><h2>Value trend</h2><img src="/cards/{{ current_game }}/decks/{{ deck.id }}/value-trend.svg?days=180" alt="Deck value over the last 180 days" width="600" height="140"></div>
+  {% include "cards/partials/deck_analysis.html" %}
+  <div class="cards-trend"><h2>Historical prices of current cards</h2><img src="/cards/{{ current_game }}/decks/{{ deck.id }}/value-trend.svg?days=180" alt="Known historical USD prices applied to the current deck contents, including optional boards" width="600" height="140"></div>
 </div>

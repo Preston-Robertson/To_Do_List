@@ -1,0 +1,75 @@
+{% extends "cards/layout.html" %}
+{% block head_scripts %}
+  {{ super() }}
+  <link rel="stylesheet" href="/module-assets/cards/analysis.css?v={{ asset_version }}">
+{% endblock %}
+{% block cards_content %}
+<section class="cards-build" aria-labelledby="build-heading">
+  <header class="analysis-heading">
+    <div><a href="/cards/{{ current_game }}/decks/{{ build.deck_id }}" class="btn"><span class="shell-icon" style="--shell-icon: url('/static/icons/lucide/arrow-left.svg')" aria-hidden="true"></span> Deck</a>
+      <h1 id="build-heading">{{ build.deck.name }}</h1><p>Build checklist</p></div>
+  </header>
+  <form method="get" action="/cards/{{ current_game }}/decks/{{ build.deck_id }}/build" class="build-controls">
+    <input type="hidden" name="boards_set" value="1">
+    <fieldset><legend>Printing match</legend>
+      <label><input type="radio" name="match_mode" value="exact" {% if build.match_mode == 'exact' %}checked{% endif %}> Exact printing</label>
+      <label><input type="radio" name="match_mode" value="any" {% if build.match_mode == 'any' %}checked{% endif %}> Any equivalent printing</label>
+    </fieldset>
+    <fieldset><legend>Included boards</legend>
+      {% for board in board_options %}<label><input type="checkbox" name="board" value="{{ board }}" {% if board in build.boards %}checked{% endif %}> {{ board|title }}</label>{% endfor %}
+    </fieldset>
+    <fieldset class="build-reservations"><legend>Reserve first (included boards)</legend>
+      {% for selected in priorities %}
+      <label>Priority {{ loop.index }}
+        <select name="reserve_deck_id" aria-label="Reserve priority {{ loop.index }}">
+          <option value="">None</option>
+          {% for option in reservation_options %}<option value="{{ option.id }}" {% if option.id == selected %}selected{% endif %}>{{ option.name }} (#{{ option.id }}){% if option.archived %} - archived{% endif %}</option>{% endfor %}
+        </select>
+      </label>
+      {% endfor %}
+      <div class="build-choice-pages">
+        {% if choices.page > 1 %}<button class="btn" name="choices_page" value="{{ choices.page - 1 }}" type="submit" aria-label="Previous deck choices" title="Previous deck choices"><span class="shell-icon" style="--shell-icon: url('/static/icons/lucide/arrow-left.svg')" aria-hidden="true"></span></button>{% endif %}
+        <span>Deck choices: page {{ choices.page }}</span>
+        {% if choices.has_more %}<button class="btn" name="choices_page" value="{{ choices.page + 1 }}" type="submit" aria-label="Next deck choices" title="Next deck choices"><span class="shell-icon" style="--shell-icon: url('/static/icons/lucide/chevron-right.svg')" aria-hidden="true"></span></button>{% endif %}
+      </div>
+    </fieldset>
+    <div class="build-actions">
+      <button type="submit" class="btn btn-primary" name="choices_page" value="{{ choices.page }}"><span class="shell-icon" style="--shell-icon: url('/static/icons/lucide/list-checks.svg')" aria-hidden="true"></span> Update checklist</button>
+      <button type="submit" class="btn" formaction="/cards/{{ current_game }}/decks/{{ build.deck_id }}/build.csv"><span class="shell-icon" style="--shell-icon: url('/static/icons/lucide/download.svg')" aria-hidden="true"></span> Shopping CSV</button>
+    </div>
+  </form>
+  {% if build.match_notice %}<p class="analysis-notice" role="status">{{ build.match_notice }}</p>{% endif %}
+  <p class="analysis-note">{{ build.reservation_notice }}</p>
+  {% if build.reservations %}<ol class="analysis-reserved-list">{% for reservation in build.reservations %}<li>{{ reservation.name }}: {{ reservation.allocated }} allocated of {{ reservation.required }} required</li>{% endfor %}</ol>{% endif %}
+  <dl class="analysis-totals">
+    <div><dt>Required</dt><dd>{{ build.totals.required }}</dd></div>
+    <div><dt>Owned</dt><dd>{{ build.totals.owned }}</dd></div>
+    <div><dt>Reserved</dt><dd>{{ build.totals.reserved }}</dd></div>
+    <div><dt>Available</dt><dd>{{ build.totals.available }}</dd></div>
+    <div><dt>Allocated</dt><dd>{{ build.totals.allocated }}</dd></div>
+    <div><dt>Missing</dt><dd>{{ build.totals.missing }}</dd></div>
+    <div><dt>Missing cost (USD)</dt><dd>{% if build.totals.estimated_missing_cost_minor is not none %}{{ build.totals.estimated_missing_cost_minor|money_minor }}{% else %}Unknown{% endif %}</dd></div>
+  </dl>
+  <p class="analysis-note">Known missing-cost subtotal {{ build.totals.known_missing_cost_minor|money_minor }} USD; {{ build.totals.missing_price_count }} missing copies unpriced. {{ build.totals.priced_count }} required copies have an estimate.</p>
+  <p class="analysis-note">{{ build.price_notice }} As of {{ build.price_as_of_min or 'unknown' }}{% if build.price_as_of_max != build.price_as_of_min %} to {{ build.price_as_of_max }}{% endif %}.</p>
+  <div class="analysis-table-wrap" tabindex="0" aria-label="Build checklist">
+    <table class="analysis-table build-table">
+      <thead><tr><th scope="col">Card / printing</th><th scope="col">Required</th><th scope="col">Owned</th><th scope="col">Available</th><th scope="col">Allocated</th><th scope="col">Missing</th><th scope="col">Est. unit USD</th><th scope="col">Missing cost USD</th></tr></thead>
+      <tbody>{% for item in build['items'] %}
+        <tr id="build-{{ item.key }}">
+          <th scope="row"><span>{{ item.name }}</span><small>{{ item.identity_basis|replace('_', ' ') }}</small>
+            <details><summary>Printings ({{ item.matching_printings_count }})</summary>
+              <ul>{% for printing in item.matching_printings %}<li>#{{ printing.card_id }} {{ printing.set_code or 'Unknown set' }} / {{ printing.collector_number or '?' }}: {{ printing.owned }} owned{% if printing.unit_price_minor is not none %}; {{ printing.unit_price_minor|money_minor }}{% endif %}</li>{% endfor %}</ul>
+              {% if item.matching_printings_count > 20 %}<small>First 20 cached printings shown.</small>{% endif %}
+            </details>
+            <small>{{ item.price_basis|replace('_', ' ') }}{% if item.estimate_card_id %} (#{{ item.estimate_card_id }}){% endif %}; {{ item.price_as_of or 'date unknown' }}</small>
+          </th>
+          <td>{{ item.required }}</td><td>{{ item.owned }}</td><td>{{ item.available }}</td><td>{{ item.allocated }}</td><td><strong>{{ item.missing }}</strong></td>
+          <td>{{ item.est_unit_minor|money_minor if item.est_unit_minor is not none else 'Unknown' }}</td>
+          <td>{{ item.missing_cost_minor|money_minor if item.missing_cost_minor is not none else 'Unknown' }}</td>
+        </tr>
+      {% else %}<tr><td colspan="8">No cards on the selected boards.</td></tr>{% endfor %}</tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

@@ -123,16 +123,25 @@ class OperationsTests(unittest.TestCase):
         self.assertEqual(operations.list_reminder_rules(), [])
 
     def test_edit_status_cannot_bypass_dependency_check(self) -> None:
-        with (
-            patch.object(db, "_get_task_like", return_value={"completed": 0}),
-            patch.object(
-                db, "_assert_task_unblocked", side_effect=ValueError("Blocked by: B")
-            ),
-            patch.object(db, "get_engine") as engine,
-        ):
-            with self.assertRaisesRegex(ValueError, "Blocked by: B"):
-                db._update_task_like("tasks", "a", {"status": "In Progress"})
-        engine.assert_not_called()
+        from sqlalchemy import create_engine, text
+
+        engine = create_engine("sqlite+pysqlite:///:memory:")
+        self.addCleanup(engine.dispose)
+        with engine.begin() as connection:
+            for table in ("tasks", "recurring_tasks"):
+                columns = ", ".join(f"{column} TEXT" for column in db._TASK_COLUMNS)
+                connection.execute(text(f"CREATE TABLE {table} ({columns})"))
+                connection.execute(text(f"INSERT INTO {table} (uuid, task, completed, status, priority) VALUES ('example', 'Example blocked task', 0, 'Not Started', 1)"))
+        with patch.object(db, "get_engine", return_value=engine), \
+             patch.object(db, "_TABLES_MISSING_COLUMNS", {}), \
+             patch.object(db, "_assert_task_unblocked", side_effect=ValueError("Blocked by: B")) as check:
+            for table in ("tasks", "recurring_tasks"):
+                with self.subTest(table=table), self.assertRaisesRegex(ValueError, "Blocked by: B"):
+                    db._update_task_like(table, "example", {"status": "In Progress", "priority": 7})
+                with engine.connect() as connection:
+                    row = connection.execute(text(f"SELECT completed, status, priority FROM {table} WHERE uuid='example'")).one()
+                    self.assertEqual((str(row.completed), row.status, str(row.priority)), ("0", "Not Started", "1"))
+            self.assertEqual(check.call_count, 2)
 
     def test_database_completion_uses_dependency_enforcement(self) -> None:
         with patch.object(operations, "assert_unblocked", side_effect=ValueError("Blocked by: B")):

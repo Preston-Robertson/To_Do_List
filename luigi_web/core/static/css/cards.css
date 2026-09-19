@@ -458,7 +458,17 @@
 .deck-stack-column h3 { margin: 0; overflow-wrap: anywhere; font-size: 12px; line-height: 1.25; }
 .deck-stack-column header span { color: var(--text-muted); font-size: 9px; }
 .deck-stack-column header > strong { flex: 0 0 auto; color: var(--cards-accent-strong); font-size: 10px; }
-.deck-stack-list { min-width: 0; }
+.deck-stack-list {
+  min-width: 0;
+  max-height: min(700px, 72svh);
+  padding: 4px 4px 10px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-block: contain;
+  scrollbar-gutter: stable;
+  scroll-padding-block: 8px;
+}
+.deck-stack-list:focus-visible { outline: 2px solid var(--cards-accent); outline-offset: 2px; }
 .deck-stack-card {
   position: relative;
   z-index: calc(var(--stack-index) + 1);

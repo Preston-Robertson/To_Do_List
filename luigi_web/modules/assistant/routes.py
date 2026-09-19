@@ -23,6 +23,34 @@ def _chat_session_id(request: Request) -> str:
     return f"addr:{client}"
 
 
+@router.get("/chat/panel", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def chat_panel(request: Request):
+    from ... import application as host
+
+    provider = host._LLM_PROVIDER
+    with host._CHAT_LOCK:
+        messages = [
+            {"role": message["role"], "content": message["content"]}
+            for message in host.llm_mod.get_history(_chat_session_id(request))
+            if message.get("role") in {"user", "assistant"}
+            and isinstance(message.get("content"), str)
+            and message.get("content")
+            and not message.get("tool_calls")
+        ]
+    return host.templates.TemplateResponse(
+        "partials/chat_panel.html",
+        {
+            "request": request,
+            "chat_enabled": not isinstance(provider, host.llm_mod.DisabledProvider),
+            "chat_provider": getattr(provider, "name", "disabled"),
+            "chat_model": getattr(provider, "model", ""),
+            "chat_disabled_reason": getattr(provider, "reason", "Assistant is not configured"),
+            "chat_messages": messages,
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @router.post("/chat", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 def chat_send(request: Request, message: str = Form(...)):
     from ... import application as host

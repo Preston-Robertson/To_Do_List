@@ -112,10 +112,10 @@ class CardRouteTests(unittest.TestCase):
                 "type_line": "Land",
                 "prices": {"usd": "1.00"},
             }
-            for index in range(1, 10)
+            for index in range(1, 42)
         ])
         deck_id = cards.create_deck("mtg", "Balanced Stack Deck")
-        for index in range(1, 10):
+        for index in range(1, 42):
             card = cards.find_card("mtg", f"Stack Lane Card {index}")
             cards.add_card_to_deck(deck_id, card["id"], category="Lands")
 
@@ -123,8 +123,10 @@ class CardRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.text.count('class="deck-stack-column"'), 2)
-        self.assertIn("Stack 1 of 2 · Qty 8", response.text)
+        self.assertIn("Stack 1 of 2 · Qty 40", response.text)
         self.assertIn("Stack 2 of 2 · Qty 1", response.text)
+        self.assertEqual(response.text.count('class="deck-card-identity"'), 41)
+        self.assertEqual(response.text.count('class="deck-stack-card"'), 41)
 
     def test_stack_layout_uses_single_horizontal_rail(self) -> None:
         response = self.client.get("/static/css/cards.css")

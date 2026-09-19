@@ -7,6 +7,7 @@
 >
   <input type="hidden" name="profile" value="{{ item.profile }}">
   <input type="hidden" name="title" value="{{ item.title }}">
+  <input type="hidden" name="expected_version" value="{{ item.version }}">
 
   <h2>{{ item.title }}</h2>
   <p class="muted-hint">{{ item.profile }}{% if item.link %} · <a href="{{ item.link }}" target="_blank" rel="noopener noreferrer">source ↗</a>{% endif %}</p>
