@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "id": "tasks",
+      "module_id": "tasks",
+      "repository": "https://github.com/<owner>/luigi-web-tasks",
+      "distribution": "luigi-web-tasks",
+      "package": "luigi_web.modules.tasks",
+      "prefix": "/tasks"
+    },
+    {
+      "id": "example",
+      "module_id": "example",
+      "repository": "https://github.com/<owner>/luigi-web-example",
+      "distribution": "luigi-web-example",
+      "package": "luigi_web_extensions.example",
+      "prefix": "/extensions/example"
+    }
+  ]
+}

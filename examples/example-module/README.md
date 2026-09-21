@@ -10,7 +10,7 @@ No separate GitHub repository or published release is implied.
 
 | File | Purpose |
 |---|---|
-| [pyproject.toml](pyproject.toml) | Python 3.11+, `luigi-web>=0.1,<0.2`, wheel resources, and the `luigi_web.modules` entry point |
+| [pyproject.toml](pyproject.toml) | Python 3.11+, `luigi-web>=0.2,<0.3`, wheel resources, and the `luigi_web.modules` entry point |
 | [src/luigi_example/manifest.py](src/luigi_example/manifest.py) | Exports the version-1 `Module` object as `example = luigi_example.manifest:module` |
 | [src/luigi_example/routes.py](src/luigi_example/routes.py) | Uses `APIRouter(prefix="/extensions/example")` and the core `create_templates` API |
 | [src/luigi_example/templates/status.html](src/luigi_example/templates/status.html) | Renders as `example/status.html` and extends shared `base.html` |
@@ -71,8 +71,9 @@ deployment, use protected environment files and `LUIGI_WEB_SECURE_COOKIES=1`.
 `/modules` lists Example as an external package. Selection is read-only while
 `LUIGI_WEB_MODULES` is set. To use GUI selection instead, remove that variable
 from the deployment environment and restart, but keep
-`LUIGI_WEB_EXTERNAL_MODULES=example`. With no saved selection, only the built-ins
-are selected by default; approve, select, save, and restart deliberately.
+`LUIGI_WEB_EXTERNAL_MODULES=example`. With no saved selection, only available
+reserved features are selected by default (none in a host-only installation);
+approve, select, save, and restart deliberately.
 
 The three states are distinct: installed but unapproved packages are not
 discovered; approved but unselected packages have no mounted route or assets;
@@ -94,7 +95,7 @@ python -m unittest discover -s tests -p test_module_packaging.py -v
 In a separate activated environment, using those local wheel paths:
 
 ```powershell
-pip install ./dist/luigi_web-0.1.0-py3-none-any.whl
+pip install ./dist/luigi_web-0.2.0-py3-none-any.whl
 pip install ./dist/luigi_example-0.1.0-py3-none-any.whl --no-deps
 luigi-web --help
 ```
@@ -121,8 +122,11 @@ module's own project metadata.
 
 External modules are trusted code with the host's process secrets and data
 privileges, not sandboxed code. Review installation/build code as well as
-manifests and routes. For deployment from another repository, use reviewed
-`<owner>/<module-repo>` placeholders and an immutable commit pin as described
-in [../../docs/modules.md](../../docs/modules.md). The GUI never installs Git
-URLs or changes deployment approval. A genuine isolation boundary requires a
-separate process or container with an explicit HTTP contract.
+manifests and routes. This example uses ordinary deployment packaging and
+entry-point approval as described in [../../docs/modules.md](../../docs/modules.md).
+It is not a GUI-installable release module: that path requires a designated
+`luigi-web-<id>` distribution and `luigi_web_extensions.<id>` namespace. See
+[../../docs/module-repositories.md](../../docs/module-repositories.md) for that
+stricter public-wheel contract. The GUI never executes Git URLs or changes
+deployment policy. A genuine isolation boundary requires a separate process
+or container with an explicit HTTP contract.

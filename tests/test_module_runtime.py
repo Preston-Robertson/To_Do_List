@@ -23,7 +23,7 @@ from jinja2 import TemplateNotFound
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _SYSTEM_ENVIRONMENT = {
-    key: os.environ[key] for key in ("SYSTEMROOT", "WINDIR") if key in os.environ
+    key: os.environ[key] for key in ("SYSTEMROOT", "SYSTEMDRIVE", "WINDIR") if key in os.environ
 }
 
 with tempfile.TemporaryDirectory(prefix="luigi-module-import-") as import_directory:
@@ -42,6 +42,8 @@ def synthetic_module(module_id: str = "example", **overrides) -> module_registry
         "description": "Synthetic runtime fixture",
         "router": f"runtime_test_{module_id}:router",
     }
+    if module_id in module_registry.BUILTIN_MODULE_IDS:
+        values.update(router=f"luigi_web.modules.{module_id}.routes:router", package=f"luigi_web.modules.{module_id}")
     values.update(overrides)
     return module_registry.Module(**values)
 
@@ -76,8 +78,9 @@ def clean_environment(directory: Path) -> dict[str, str]:
         "LUIGI_WEB_MODULES_FILE": str(directory / "modules.json"),
         "LUIGI_WEB_UI_TOKEN": "synthetic-runtime-session",
         "LUIGI_WEB_TASK_METADATA_FILE": str(directory / "task-metadata.json"),
+        "LUIGI_WEB_DATA_DIR": str(directory),
         **{key: str(directory) for key in (
-            "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
+            "TEMP", "TMP", "TMPDIR", "SQLITE_TMPDIR", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
         )},
     }
 
@@ -127,12 +130,12 @@ class IsolatedRuntimeTestCase(unittest.TestCase):
 
 
 class ExternalDiscoveryTests(IsolatedRuntimeTestCase):
-    def test_installed_entry_point_is_not_discovered_or_loaded_without_allowlist(self) -> None:
+    def test_unapproved_external_entry_point_is_never_loaded(self) -> None:
         entry = synthetic_entry_point()
         with mock.patch.object(module_registry.metadata, "entry_points", return_value=[entry]) as discover:
             catalog = module_registry.discover_modules()
         self.assertEqual(tuple(module.id for module in catalog), module_registry.BUILTIN_MODULE_IDS)
-        discover.assert_not_called()
+        discover.assert_called_once_with(group=module_registry.ENTRY_POINT_GROUP)
         entry.load.assert_not_called()
 
     def test_allowlist_and_explicit_selection_load_valid_external_manifest(self) -> None:
@@ -397,13 +400,13 @@ class ModuleMountTests(IsolatedRuntimeTestCase):
         disabled = synthetic_module("disabled")
         registry = module_registry.ModuleRegistry([disabled, selected], "example")
         application = small_app()
-        with fake_references({selected.router: synthetic_router("/example")}) as load:
+        with fake_references({selected.router: synthetic_router("/extensions/example")}) as load:
             module_registry.mount_modules(application, registry)
         load.assert_called_once_with(selected.router)
-        self.assertEqual({route.path for route in application.routes}, {"/example"})
+        self.assertEqual({route.path for route in application.routes}, {"/extensions/example"})
         self.assertIs(application.state.modules, registry)
         client = self.authenticated_client(application)
-        self.assertEqual(client.get("/example").status_code, 200)
+        self.assertEqual(client.get("/extensions/example").status_code, 200)
         self.assertEqual(client.get("/disabled").status_code, 404)
 
     def test_external_router_without_own_dependencies_is_forced_to_authenticate(self) -> None:
@@ -451,15 +454,15 @@ class ModuleMountTests(IsolatedRuntimeTestCase):
 
     def test_duplicate_parameter_patterns_are_rejected_within_one_router(self) -> None:
         module = synthetic_module()
-        router = synthetic_router("/example/{first_id}")
-        router.include_router(synthetic_router("/example/{second_id}"))
+        router = synthetic_router("/extensions/example/{first_id}")
+        router.include_router(synthetic_router("/extensions/example/{second_id}"))
         with fake_references({module.router: router}):
             with self.assertRaisesRegex(module_registry.ModuleConfigurationError, "Conflicting route"):
                 module_registry.mount_modules(small_app(), module_registry.ModuleRegistry([module]))
 
     def test_conflicts_with_core_and_other_modules_do_not_partially_mount(self) -> None:
-        first = synthetic_module("first")
-        second = synthetic_module("second")
+        first = synthetic_module("tasks")
+        second = synthetic_module("discipline")
         conflicts = (
             ("/shared/{first_id}", "/shared/{second_id}"),
             ("/shared/{item_id}", "/shared/fixed"),
@@ -483,7 +486,7 @@ class ModuleMountTests(IsolatedRuntimeTestCase):
                     self.assertEqual(application.routes, previous)
 
     def test_same_path_with_disjoint_methods_is_allowed(self) -> None:
-        first, second = synthetic_module("first"), synthetic_module("second")
+        first, second = synthetic_module("tasks"), synthetic_module("discipline")
         references = {
             first.router: synthetic_router("/shared"),
             second.router: synthetic_router("/shared", methods=("POST",)),
@@ -549,7 +552,7 @@ class ModuleLifecycleTests(IsolatedRuntimeTestCase, unittest.IsolatedAsyncioTest
             synthetic_module("middle", requires=("foundation",), startup="runtime_test_middle:start", shutdown="runtime_test_middle:stop"),
             synthetic_module("foundation", startup="runtime_test_foundation:start", shutdown="runtime_test_foundation:stop"),
         ]
-        references = {module.router: synthetic_router("/" + module.id) for module in modules}
+        references = {module.router: synthetic_router("/extensions/" + module.id) for module in modules}
         references.update({
             "runtime_test_foundation:start": sync_start,
             "runtime_test_foundation:stop": sync_stop,
@@ -606,7 +609,7 @@ class ModuleLifecycleTests(IsolatedRuntimeTestCase, unittest.IsolatedAsyncioTest
             synthetic_module("broken", startup="runtime_test_broken:start", shutdown="runtime_test_broken:stop"),
             synthetic_module("healthy", startup="runtime_test_healthy:start", shutdown="runtime_test_healthy:stop"),
         ]
-        references = {module.router: synthetic_router("/" + module.id) for module in modules}
+        references = {module.router: synthetic_router("/extensions/" + module.id) for module in modules}
         references.update({
             "runtime_test_broken:start": fail_start,
             "runtime_test_broken:stop": broken_stop,
@@ -622,10 +625,10 @@ class ModuleLifecycleTests(IsolatedRuntimeTestCase, unittest.IsolatedAsyncioTest
             with TestClient(application) as client:
                 client.headers["Authorization"] = "Bearer " + os.environ["LUIGI_WEB_UI_TOKEN"]
                 for module_id in ("broken", "dependent", "transitive"):
-                    response = client.get("/" + module_id)
+                    response = client.get("/extensions/" + module_id)
                     self.assertEqual(response.status_code, 503)
                     self.assertEqual(response.json(), {"detail": "Module is unavailable"})
-                self.assertEqual(client.get("/healthy").status_code, 200)
+                self.assertEqual(client.get("/extensions/healthy").status_code, 200)
             await module_registry.stop_modules(application)
         self.assertEqual(events, ["broken:start", "healthy:start", "healthy:stop", "broken:stop"])
         self.assertEqual(application.state.module_cleanup, [])
@@ -693,7 +696,8 @@ class ModuleTemplatingTests(IsolatedRuntimeTestCase):
         directory.mkdir(parents=True)
         (directory / "runtime_entry.html").write_text("{{ label }}", encoding="utf-8")
         (directory / "base.html").write_text("Synthetic external shell", encoding="utf-8")
-        with mock.patch.object(templating.resources, "files", return_value=package):
+        original_files = templating.resources.files
+        with mock.patch.object(templating.resources, "files", side_effect=lambda name: package if name == "runtime_test_example" else original_files(name)):
             with self.assertRaisesRegex(ValueError, "namespace"):
                 templating.create_templates(package="runtime_test_example")
             templates = templating.create_templates(package="runtime_test_example", namespace="example")
@@ -731,7 +735,7 @@ class ModuleManagerTests(IsolatedRuntimeTestCase):
     def manager_app(self, selection: str = "none") -> FastAPI:
         application = small_app()
         application.include_router(modules_routes.router, dependencies=[Depends(auth.require_auth)])
-        references = {module.router: synthetic_router("/" + module.id) for module in self.catalog}
+        references = {module.router: synthetic_router("/extensions/" + module.id) for module in self.catalog}
         with fake_references(references):
             module_registry.mount_modules(application, module_registry.ModuleRegistry(self.catalog, selection))
         return application
@@ -794,8 +798,8 @@ class ModuleManagerTests(IsolatedRuntimeTestCase):
             self.assertEqual(module_settings.read_selection(), "unused")
             self.assertIs(application.state.modules, original_registry)
             self.assertEqual(application.routes, original_routes)
-            self.assertEqual(client.get("/foundation").status_code, 200)
-            self.assertEqual(client.get("/unused").status_code, 404)
+            self.assertEqual(client.get("/extensions/foundation").status_code, 200)
+            self.assertEqual(client.get("/extensions/unused").status_code, 404)
             following = client.get("/modules")
             self.assertTrue(following.context["pending_restart"])
             self.assertFalse(following.context["saved"])
@@ -804,8 +808,8 @@ class ModuleManagerTests(IsolatedRuntimeTestCase):
         restarted_registry = module_registry.build_registry()
         restarted = self.manager_app(",".join(module.id for module in restarted_registry.enabled))
         restarted_client = self.authenticated_client(restarted)
-        self.assertEqual(restarted_client.get("/unused").status_code, 200)
-        self.assertEqual(restarted_client.get("/foundation").status_code, 404)
+        self.assertEqual(restarted_client.get("/extensions/unused").status_code, 200)
+        self.assertEqual(restarted_client.get("/extensions/foundation").status_code, 404)
         self.assertFalse(restarted_client.get("/modules").context["pending_restart"])
 
     def test_empty_form_saves_explicit_none_but_keeps_current_routes_until_restart(self) -> None:
@@ -818,7 +822,7 @@ class ModuleManagerTests(IsolatedRuntimeTestCase):
         self.assertEqual(module_settings.read_selection(), "none")
         self.assertEqual(response.context["selected_ids"], set())
         self.assertEqual(response.context["enabled_ids"], {"foundation"})
-        self.assertEqual(client.get("/foundation").status_code, 200)
+        self.assertEqual(client.get("/extensions/foundation").status_code, 200)
 
     def test_invalid_selection_is_not_saved_and_never_shows_success(self) -> None:
         self.use_saved_selection()

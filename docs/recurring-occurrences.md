@@ -204,8 +204,8 @@ this documentation pass. No production queries, migrations, or deployment are
 part of these documentation changes, and no test-pass totals are claimed here.
 
 The contract is defined by
-[../luigi_web/modules/tasks/occurrences.py](../luigi_web/modules/tasks/occurrences.py)
-and [../luigi_web/modules/tasks/repository.py](../luigi_web/modules/tasks/repository.py).
+[../module-repos/tasks/src/luigi_web/modules/tasks/occurrences.py](../module-repos/tasks/src/luigi_web/modules/tasks/occurrences.py)
+and [../module-repos/tasks/src/luigi_web/modules/tasks/repository.py](../module-repos/tasks/src/luigi_web/modules/tasks/repository.py).
 Focused fixtures are in
 [../tests/test_occurrence_scheduler.py](../tests/test_occurrence_scheduler.py)
 and [../tests/test_recurring_occurrences.py](../tests/test_recurring_occurrences.py).

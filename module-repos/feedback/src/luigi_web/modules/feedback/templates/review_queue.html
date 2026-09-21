@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block head_scripts %}
+<link rel="stylesheet" href="/module-assets/feedback/review.css?v={{ asset_version }}">
+{% endblock %}
+{% block content %}
+<div class="maintenance-review-workspace">
+  <header class="board-header">
+    <div><h1>Maintenance review</h1><span class="muted-hint">{{ runs|length }} reviews</span></div>
+    <nav class="board-header-actions" aria-label="Review navigation">
+      <a class="btn" href="/feedback">Feedback</a>
+      <a class="btn review-icon-button" href="/feedback/reviews" aria-label="Refresh reviews" title="Refresh reviews">{{ shell_icon('rotate-ccw') }}</a>
+    </nav>
+  </header>
+  {% if not review_enabled %}<p class="review-notice" role="status">Review actions are disabled by deployment configuration.</p>{% endif %}
+  {% if not release_enabled %}<p class="muted-hint">Release controls are disabled.</p>{% endif %}
+  <div class="review-queue" role="list">
+    {% for run in runs %}
+    <a class="review-queue-row" role="listitem" href="/feedback/reviews/{{ run.id }}">
+      <span><strong>Review {{ run.id[:8] }}</strong><small>{{ run.created_at }}</small></span>
+      <span class="review-state" data-state="{{ run.state }}">{{ run.state_label }}</span>
+      <span>{% if run.version %}v{{ run.version }}{% else %}Version not chosen{% endif %}</span>
+      <span class="review-commit">{{ run.head_commit[:12] if run.head_commit else 'No test branch yet' }}</span>
+    </a>
+    {% else %}<p class="empty">No maintenance reviews.</p>{% endfor %}
+  </div>
+</div>
+{% endblock %}

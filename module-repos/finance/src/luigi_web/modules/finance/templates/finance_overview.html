@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% macro money(value, currency=state.currency) -%}
+<span class="fo-money" data-minor="{{ value }}" data-currency="{{ currency }}">{{ currency }} {{ minor_text(value) }}</span>
+{%- endmacro %}
+{% block head_scripts %}
+<link rel="stylesheet" href="/module-assets/finance/overview.css?v={{ shell_asset_version }}">
+<script src="/static/js/vendor/chart.umd.min.js?v={{ shell_asset_version }}" defer></script>
+<script src="/module-assets/finance/overview.js?v={{ shell_asset_version }}" defer></script>
+{% endblock %}
+{% block content %}
+<div id="finance-overview" class="finance-overview" hx-history="false" data-private="true">
+  <header class="fo-header">
+    <div><h1>Finance</h1><p class="fo-muted">{{ state.currency }} <span aria-hidden="true">/</span> {{ state.today }}</p></div>
+    <div class="fo-actions">
+      <button class="btn btn-primary" type="button" hx-get="/finance/transactions/new" hx-target="#modal-body" onclick="openModal()">{{ shell_icon('plus') }} Transaction</button>
+      <button class="btn" type="button" hx-get="/finance/accounts/new" hx-target="#modal-body" onclick="openModal()">{{ shell_icon('plus') }} Account</button>
+      <form id="fo-lock" method="post" action="/finance/lock" hx-post="/finance/lock" hx-swap="none">
+        <button class="btn btn-icon" type="submit" aria-label="Lock Finance" title="Lock Finance">{{ shell_icon('lock-keyhole') }}</button>
+      </form>
+    </div>
+  </header>
+  <nav class="fo-tabs" aria-label="Finance views">
+    <a href="/finance/overview" aria-current="page">Overview</a>
+    <a href="/finance/planning">Planning</a>
+    <a href="/finance/records">Records</a>
+  </nav>
+
+  <p class="fo-note"><strong>Privacy boundary:</strong> use account aliases only; do not enter personal or account identifiers.</p>
+
+  {% if state.foreign_currency_excluded %}<p class="fo-notice" role="status">Other-currency accounts are excluded from combined balances, flows, budgets and projections. No exchange rates applied.</p>{% endif %}
+  {% if state.stale_holdings_count %}<p class="fo-notice" role="status">{{ state.stale_holdings_count }} holding value(s) are more than seven days old. Net worth and allocation include their last recorded values.</p>{% endif %}
+  {% if state.invalid_schedule_count %}<p class="fo-notice" role="status">{{ state.invalid_schedule_count }} recurring schedule(s) could not be projected.</p>{% endif %}
+
+  <section class="fo-section" aria-labelledby="fo-current-title">
+    <div class="fo-section-heading"><h2 id="fo-current-title">Current balances</h2><span class="fo-muted">Active accounts, all recorded transaction dates</span></div>
+    <dl class="fo-summary">
+      <div><dt>Net worth</dt><dd>{{ money(state.net_worth_minor) }}</dd></div>
+      <div><dt>Liquid cash</dt><dd>{{ money(state.liquid_cash_minor) }}</dd></div>
+      <div><dt>Credit liabilities</dt><dd>{{ money(state.liabilities_minor) }}</dd></div>
+      <div><dt>Holding value</dt><dd>{{ money(state.holdings_minor) }}</dd></div>
+    </dl>
+    <p class="fo-note">Liquid cash: checking, savings and cash. Investment-account cash (uninvested): {{ money(state.investment_cash_minor) }}. Net worth adds account balances and holdings once. Net credit balance: {{ money(state.net_credit_balance_minor) }}; positive credit balances do not reduce credit liabilities.</p>
+  </section>
+
+  <form id="fo-filter" class="fo-filter" method="post" action="/finance/overview/filter" autocomplete="off"
+        hx-post="/finance/overview/filter" hx-target="#finance-overview" hx-select="#finance-overview" hx-swap="outerHTML" hx-push-url="false">
+    <label>Month<input type="month" name="month" value="{{ state.month }}" min="0002-01" max="9998-12" required></label>
+    <label>Account<select name="account_id"><option value="">All accounts</option>{% for account in state.accounts if not account.excluded_currency %}<option value="{{ account.id }}" {% if state.filters.account_id == account.id %}selected{% endif %}>{{ account.name }}{% if not account.active %} (inactive){% endif %}</option>{% endfor %}</select></label>
+    <label>Category<select name="category"><option value="">All categories</option>{% for row in state.categories %}<option value="{{ row.category }}" {% if state.filters.category|lower == row.category|lower %}selected{% endif %}>{{ row.category }}</option>{% endfor %}{% if state.filters.category and state.filters.category|lower not in state.categories|map(attribute='category')|map('lower')|list %}<option value="{{ state.filters.category }}" selected>{{ state.filters.category }}</option>{% endif %}</select></label>
+    <label>Flow<select name="status">{% for value, label in [('all', 'All recorded flows'), ('inflows', 'Inflows'), ('outflows', 'Outflows'), ('zero', 'Zero amount')] %}<option value="{{ value }}" {% if state.filters.status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+    <label class="fo-search">Search<input type="search" name="query" value="{{ state.filters.query }}" maxlength="120" placeholder="Account or category" spellcheck="false"></label>
+    <label class="fo-checkbox"><input type="checkbox" name="include_memo" value="1" {% if state.filters.include_memo %}checked{% endif %}>Include memos</label>
+    <input type="hidden" name="page_size" value="{{ state.page_size }}">
+    <button class="btn" type="submit">{{ shell_icon('settings-2') }} Apply</button>
+  </form>
+
+  <section class="fo-section" aria-labelledby="fo-month-title">
+    <div class="fo-section-heading"><h2 id="fo-month-title">{{ state.month }} recorded flows</h2><span class="fo-muted">All accounts and categories in {{ state.currency }}, including inactive accounts</span></div>
+    <dl class="fo-flows">
+      {% for label, field in [('Recorded inflows', 'inflow_minor'), ('Recorded outflows', 'outflow_minor'), ('Recorded net flow', 'net_minor')] %}
+      <div><dt>{{ label }}</dt><dd>{{ money(state.month_totals[field]) }}</dd><dd class="fo-comparison">vs {{ state.previous_month }}: {{ money(state.comparison[field].change_minor) }}
+        {% if state.comparison[field].change_bps is none %}<span>Percentage unavailable (zero prior total)</span>{% else %}<span>{{ minor_text(state.comparison[field].change_bps) }}%</span>{% endif %}</dd></div>
+      {% endfor %}
+    </dl>
+    <p class="fo-note">{{ state.month_totals.count }} recorded transactions. Inflows and gross outflows are not classified as income, expenses or transfers. Positive refunds do not reduce gross outflows. Ledger filters do not change these totals.</p>
+  </section>
+
+  <div class="fo-two-column">
+    <section class="fo-section" aria-labelledby="fo-trend-title">
+      <h2 id="fo-trend-title">Recorded flows <span class="fo-muted">/ 12 months</span></h2>
+      <div class="fo-chart"><canvas id="fo-trend-chart" role="img" aria-label="Monthly recorded inflows and gross outflows" aria-describedby="fo-trend-table"></canvas></div>
+      <p class="fo-chart-status fo-muted" hidden>Chart unavailable. Recorded values are in the table.</p>
+      <details><summary>Monthly values</summary><div class="fo-table-wrap"><table id="fo-trend-table"><caption class="sr-only">Twelve-month recorded flows in {{ state.currency }}</caption><thead><tr><th scope="col">Month</th><th scope="col">Inflows</th><th scope="col">Outflows</th><th scope="col">Count</th></tr></thead><tbody>{% for row in state.trend %}<tr><th scope="row">{{ row.month }}</th><td>{{ money(row.inflow_minor) }}</td><td>{{ money(row.outflow_minor) }}</td><td>{{ row.count }}</td></tr>{% endfor %}</tbody></table></div></details>
+    </section>
+    <section class="fo-section" aria-labelledby="fo-history-title">
+      <h2 id="fo-history-title">Net worth snapshots</h2>
+      {% if state.snapshots %}
+      <div class="fo-chart"><canvas id="fo-history-chart" role="img" aria-label="Recorded net worth snapshots only" aria-describedby="fo-history-table"></canvas></div>
+      <p class="fo-chart-status fo-muted" hidden>Chart unavailable. Recorded values are in the table.</p>
+      <details><summary>Recorded snapshot values</summary><div class="fo-table-wrap"><table id="fo-history-table"><caption class="sr-only">Exact recorded snapshot dates and totals; currency not stored</caption><thead><tr><th scope="col">Recorded date</th><th scope="col">Recorded total</th></tr></thead><tbody>{% for row in state.snapshots %}<tr><th scope="row">{{ row.snapshot_date }}</th><td>{{ money(row.total_minor, '') }}</td></tr>{% endfor %}</tbody></table></div></details>
+      {% else %}<p class="fo-empty">No snapshots recorded in this 12-month window. Opening baseline unknown.</p>{% endif %}
+      <p class="fo-note">{{ state.trend[0].month }} through {{ state.month }}. Snapshots retain their recorded totals; currency and account scope were not stored. No backfilled values or inferred change.</p>
+    </section>
+  </div>
+
+  <div class="fo-two-column">
+    <section class="fo-section" aria-labelledby="fo-categories-title">
+      <h2 id="fo-categories-title">Gross outflows by category <span class="fo-muted">/ {{ state.month }}</span></h2>
+      <ul class="fo-category-list">
+        {% set largest = state.categories|map(attribute='outflow_minor')|max if state.categories else 0 %}
+        {% for row in state.categories if row.outflow_minor > 0 %}
+        <li><div class="fo-row"><strong>{{ row.category }}</strong>{{ money(row.outflow_minor) }}</div><div class="fo-bar" aria-hidden="true"><span style="width: {{ row.outflow_minor * 100 // largest }}%"></span></div></li>
+        {% else %}<li class="fo-empty">No recorded outflows this month.</li>{% endfor %}
+      </ul>
+    </section>
+    <section class="fo-section" aria-labelledby="fo-accounts-title">
+      <h2 id="fo-accounts-title">Account balances</h2>
+      <div class="fo-account-columns">
+        {% for account in state.accounts %}<div class="fo-account"><strong>{{ account.name }}</strong>{{ money(account.balance_minor, account.currency) }}<span class="fo-muted">{{ account.account_type|title }}{% if account.account_type == 'investment' %} (uninvested cash){% endif %}{% if not account.active %} / Inactive{% endif %}{% if account.excluded_currency %} / Excluded currency{% endif %}</span></div>
+        {% else %}<p class="fo-empty">No accounts recorded.</p>{% endfor %}
+      </div>
+    </section>
+  </div>
+
+  <div class="fo-two-column">
+    <section class="fo-section" aria-labelledby="fo-budget-title">
+      <h2 id="fo-budget-title">Budgets <span class="fo-muted">/ {{ state.month }}</span></h2>
+      {% for budget in state.budgets %}<div class="fo-budget"><div class="fo-row"><strong>{{ budget.category }}</strong><span>{{ money(budget.spent_minor) }} / {{ money(budget.limit_minor) }}</span></div><meter min="0" max="{{ [budget.limit_minor, 1]|max }}" value="{{ [budget.spent_minor, budget.limit_minor]|min }}" aria-label="{{ budget.category }} gross outflows against budget"></meter><p class="{% if budget.overspend_minor %}fo-warning{% else %}fo-muted{% endif %}">{% if budget.overspend_minor %}Over budget {{ money(budget.overspend_minor) }}{% else %}Remaining {{ money(budget.remaining_minor) }}{% endif %}</p></div>{% else %}<p class="fo-empty">No budgets recorded for this month.</p>{% endfor %}
+    </section>
+    <section class="fo-section" aria-labelledby="fo-allocation-title">
+      <h2 id="fo-allocation-title">Holding allocation</h2>
+      {% if state.holdings_minor > 0 %}<div class="fo-chart fo-allocation-chart"><canvas id="fo-allocation-chart" role="img" aria-label="Holding value by active account" aria-describedby="fo-allocation-table"></canvas></div><p class="fo-chart-status fo-muted" hidden>Chart unavailable. Recorded values are in the table.</p>{% else %}<p class="fo-empty">No positive holding value recorded. Allocation unavailable.</p>{% endif %}
+      <div class="fo-table-wrap"><table id="fo-allocation-table"><caption>Holding value by account</caption><thead><tr><th scope="col">Account</th><th scope="col">Value</th></tr></thead><tbody>{% for row in state.allocation_accounts %}<tr><th scope="row">{{ row.label }}</th><td>{{ money(row.value_minor) }}</td></tr>{% else %}<tr><td colspan="2">No active-account holdings.</td></tr>{% endfor %}</tbody></table></div>
+      <details><summary>Holding value by symbol</summary><div class="fo-table-wrap"><table><caption class="sr-only">Holding value by symbol</caption><thead><tr><th scope="col">Symbol</th><th scope="col">Value</th></tr></thead><tbody>{% for row in state.allocation_symbols %}<tr><th scope="row">{{ row.label }}</th><td>{{ money(row.value_minor) }}</td></tr>{% else %}<tr><td colspan="2">No holdings.</td></tr>{% endfor %}</tbody></table></div></details>
+      <details><summary>Holding valuation dates</summary><ul class="fo-valuation-list">{% for row in state.holdings %}<li><strong>{{ row.symbol }}</strong> / {{ row.account_name }} / {{ row.as_of_date }}{% if row.stale %} <span class="fo-warning">Stale</span>{% endif %}</li>{% else %}<li>No valuations recorded.</li>{% endfor %}</ul></details>
+    </section>
+  </div>
+
+  <section class="fo-section" aria-labelledby="fo-upcoming-title">
+    <div class="fo-section-heading"><h2 id="fo-upcoming-title">Upcoming obligations <span class="fo-muted">/ next 30 days</span></h2><span class="fo-muted">{{ state.today }} through {{ state.upcoming_end }}</span></div>
+    <p class="fo-note">Scheduled inflows {{ money(state.upcoming_inflow_minor) }} / scheduled outflows {{ money(state.upcoming_outflow_minor) }}. Projected occurrences, not recorded payments.</p>
+    <div class="fo-table-wrap"><table class="fo-mobile-table"><caption class="sr-only">Projected recurring occurrences</caption><thead><tr><th scope="col">Scheduled date</th><th scope="col">Obligation</th><th scope="col">Account</th><th scope="col">Signed amount</th></tr></thead><tbody>{% for row in state.upcoming %}<tr><td data-label="Scheduled date">{{ row.scheduled_date }}</td><th scope="row" data-label="Obligation">{{ row.name }}</th><td data-label="Account">{{ row.account_name or 'Unassigned' }}</td><td data-label="Signed amount">{{ money(row.amount_minor) }}</td></tr>{% else %}<tr><td colspan="4">No projected occurrences.</td></tr>{% endfor %}</tbody></table></div>
+    {% if state.overdue %}<details class="fo-overdue" open><summary>{{ state.overdue|length }} overdue original due date(s)</summary><ul>{% for row in state.overdue %}<li><strong>{{ row.name }}</strong> / original next due {{ row.next_due_date }} / {{ money(row.amount_minor) }}</li>{% endfor %}</ul><p class="fo-note">Original due dates remain unchanged. Overdue entries are not added again to projected totals.</p></details>{% endif %}
+  </section>
+
+  <section class="fo-section" aria-labelledby="fo-transactions-title">
+    <div class="fo-section-heading"><h2 id="fo-transactions-title">Filtered transactions <span class="fo-muted">/ {{ state.month }}</span></h2><a href="/finance/records">Manage records</a></div>
+    <p class="fo-note" role="status">{{ state.filtered.count }} matching records. Filtered inflows {{ money(state.filtered.inflow_minor) }} / gross outflows {{ money(state.filtered.outflow_minor) }} / net {{ money(state.filtered.net_minor) }}. Totals cover every matching record, not just this page.</p>
+    <div class="fo-table-wrap"><table class="fo-mobile-table fo-ledger"><caption class="sr-only">Filtered recorded transactions, page {{ state.page }} of {{ state.pages }}</caption><thead><tr><th scope="col">Date</th><th scope="col">Account</th><th scope="col">Category</th><th scope="col">Memo</th><th scope="col">Amount</th></tr></thead><tbody>{% for row in state.transactions %}<tr><td data-label="Date">{{ row.transaction_date }}</td><td data-label="Account">{{ row.account_name }}</td><td data-label="Category">{{ row.category }}</td><td data-label="Memo">{{ row.memo or 'No memo' }}</td><td data-label="Amount">{{ money(row.amount_minor, row.currency) }}</td></tr>{% else %}<tr><td colspan="5">No matching records.</td></tr>{% endfor %}</tbody></table></div>
+    <nav class="fo-pagination" aria-label="Transaction pages"><button class="btn btn-icon" type="submit" form="fo-filter" name="page" value="{{ state.page - 1 }}" aria-label="Previous page" title="Previous page" {% if state.page <= 1 %}disabled{% endif %}>{{ shell_icon('arrow-left') }}</button><span>Page {{ state.page }} of {{ state.pages }}</span><button class="btn btn-icon" type="submit" form="fo-filter" name="page" value="{{ state.page + 1 }}" aria-label="Next page" title="Next page" {% if state.page >= state.pages %}disabled{% endif %}>{{ shell_icon('chevron-right') }}</button></nav>
+  </section>
+  <script id="fo-chart-seed" type="application/json">{{ chart_seed|tojson }}</script>
+</div>
+{% endblock %}

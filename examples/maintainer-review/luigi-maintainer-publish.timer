@@ -1,0 +1,10 @@
+[Unit]
+Description=Process human-selected maintenance publication
+
+[Timer]
+OnBootSec=1m
+OnUnitInactiveSec=1m
+Unit=luigi-maintainer-publish.service
+
+[Install]
+WantedBy=timers.target

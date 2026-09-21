@@ -1,5 +1,6 @@
 """Synthetic, offline, temporary-database checks for card planning and analysis."""
 from __future__ import annotations
+from importlib.resources import files as module_files
 
 import csv
 import io
@@ -462,6 +463,7 @@ def create_preview_app():
     from fastapi import FastAPI
     from fastapi.responses import HTMLResponse, RedirectResponse
     from fastapi.staticfiles import StaticFiles
+    from luigi_web.core.static_assets import ModuleStaticFiles
     from luigi_web import auth, paths
     from luigi_web.core.templating import shell_context
     from luigi_web.modules.cards import analysis_routes
@@ -501,8 +503,8 @@ def create_preview_app():
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.dependency_overrides[auth.require_auth] = lambda: None
     app.include_router(analysis_routes.router)
-    app.mount("/static", StaticFiles(directory=str(paths.STATIC_DIR)))
-    app.mount("/module-assets/cards", StaticFiles(directory=str(paths.PACKAGE_DIR / "modules" / "cards" / "static")))
+    app.mount("/static", ModuleStaticFiles(directory=str(paths.STATIC_DIR)))
+    app.mount("/module-assets/cards", StaticFiles(directory=str(module_files("luigi_web.modules.cards").joinpath("static"))))
 
     @app.get("/")
     def root():

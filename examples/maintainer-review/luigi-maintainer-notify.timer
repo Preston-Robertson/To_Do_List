@@ -1,0 +1,10 @@
+[Unit]
+Description=Deliver maintenance notification outbox
+
+[Timer]
+OnBootSec=1m
+OnUnitInactiveSec=1m
+Unit=luigi-maintainer-notify.service
+
+[Install]
+WantedBy=timers.target

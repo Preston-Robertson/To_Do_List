@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block head_scripts %}
+<link rel="stylesheet" href="/module-assets/feedback/review.css?v={{ asset_version }}">
+<script src="/module-assets/feedback/review.js?v={{ asset_version }}" defer></script>
+{% endblock %}
+{% block content %}
+<div class="maintenance-review-workspace" data-review-root>
+  <header class="board-header">
+    <div><h1>Review {{ run.id[:8] }}</h1><span class="review-state" data-state="{{ run.state }}">{{ run.state_label }}</span></div>
+    <nav class="board-header-actions" aria-label="Review navigation">
+      <a class="btn" href="/feedback/reviews">All reviews</a>
+      <a class="btn review-icon-button" href="/feedback/reviews/{{ run.id }}" aria-label="Refresh review" title="Refresh review">{{ shell_icon('rotate-ccw') }}</a>
+    </nav>
+  </header>
+  <p class="review-notice" role="alert" data-review-error hidden></p>
+  {% if not review_enabled %}<p class="review-notice" role="status">Review actions are disabled by deployment configuration.</p>{% endif %}
+  {% if run.state in ('needs_attention', 'failed') %}<p class="review-notice">This review needs operator attention. No automatic retry is queued.</p>{% endif %}
+  <section class="review-section" aria-labelledby="review-options-heading">
+    <h2 id="review-options-heading">Candidate options</h2>
+    <p class="muted-hint">Worker-reported candidate checks are advisory. Independent branch checks are required before release.</p>
+    <div class="review-options">
+      {% for option in options %}
+      <article class="review-option">
+        <header><h3>{{ option.label }}</h3>{% if option.id == run.selected_option_id %}<strong class="review-selected">Selected</strong>{% endif %}</header>
+        <p>{{ option.summary }}</p>
+        {% if option.notes %}<p class="muted-hint">{{ option.notes }}</p>{% endif %}
+        <dl class="review-test-results">
+          {% for result in option.test_results %}
+          <div><dt>{{ result.command_id }}</dt><dd>{{ 'Passed' if result.passed else 'Not passed' }}: {{ result.total }} total, {{ result.failed }} failed, {{ result.skipped }} skipped</dd></div>
+          {% endfor %}
+        </dl>
+        <div class="review-screenshots">
+          {% for image in option.images %}
+          <figure>
+            <a href="/feedback/reviews/{{ run.id }}/options/{{ option.id }}/artifacts/{{ image.filename }}" target="_blank" rel="noopener noreferrer">
+              <img src="/feedback/reviews/{{ run.id }}/options/{{ option.id }}/artifacts/{{ image.filename }}" width="{{ image.width }}" height="{{ image.height }}" alt="{{ option.label }} {{ 'desktop' if image.filename == 'desktop.png' else 'mobile' }} synthetic preview" loading="lazy">
+            </a>
+            <figcaption>{{ 'Desktop' if image.filename == 'desktop.png' else 'Mobile' }} screenshot</figcaption>
+          </figure>
+          {% else %}<p class="muted-hint">No verified screenshots available.</p>{% endfor %}
+        </div>
+        <a class="btn" href="/feedback/reviews/{{ run.id }}/options/{{ option.id }}/diff" target="_blank" rel="noopener noreferrer">Review patch</a>
+        {% if run.state == 'awaiting_approval' and review_enabled and option.tests_passed %}
+        <form method="post" action="/feedback/reviews/{{ run.id }}/approve" data-review-form>
+          <input type="hidden" name="expected_revision" value="{{ run.revision }}">
+          <input type="hidden" name="option_id" value="{{ option.id }}">
+          <label>Release version<input name="version" required maxlength="8" pattern="{{ version_pattern }}" autocomplete="off" inputmode="decimal" placeholder="X.Y or X.Y.Z"></label>
+          <label class="review-confirm"><input type="checkbox" name="confirm" required> <span>I reviewed the options and approve publishing this exact candidate.</span></label>
+          <button class="btn btn-primary" type="submit">Approve test branch</button>
+        </form>
+        {% endif %}
+      </article>
+      {% else %}<p class="empty">Candidate generation is pending.</p>{% endfor %}
+    </div>
+  </section>
+  {% if run.selected_option_id %}
+  <section class="review-section" aria-labelledby="review-branch-heading">
+    <h2 id="review-branch-heading">Test branch and release</h2>
+    <dl class="review-branch">
+      <dt>Branch</dt><dd><code>{{ run.branch }}</code></dd>
+      <dt>Current commit</dt><dd><code>{{ run.head_commit or 'Awaiting publication' }}</code></dd>
+      <dt>Chosen tag</dt><dd>{{ run.expected_tag }}</dd>
+      <dt>Branch checks</dt><dd>{{ 'Passed at current commit' if run.checks_ready else 'Not verified at current commit' }}</dd>
+      <dt>Test application</dt><dd>{% if run.preview_path and run.state == 'testing' %}<a class="btn" href="{{ run.preview_path }}" target="_blank" rel="noopener noreferrer">Open test application</a>{% else %}Not available{% endif %}</dd>
+      {% if run.tag %}<dt>Released tag</dt><dd>{{ run.tag }}</dd><dt>Merge commit</dt><dd><code>{{ run.merge_commit }}</code></dd>{% endif %}
+    </dl>
+    {% if run.state == 'testing' %}
+    {% if not release_enabled %}<p class="review-notice">Release actions are disabled by deployment configuration.</p>{% endif %}
+    {% if review_enabled and release_enabled and run.release_ready %}
+    <form method="post" action="/feedback/reviews/{{ run.id }}/release" class="review-release-form" data-review-form>
+      <input type="hidden" name="expected_revision" value="{{ run.revision }}">
+      <input type="hidden" name="head_commit" value="{{ run.head_commit }}">
+      <input type="hidden" name="version" value="{{ run.version }}">
+      <label class="review-confirm"><input type="checkbox" name="confirmed" required> <span>I tested this exact commit and approve merge and tag {{ run.expected_tag }}.</span></label>
+      <p class="muted-hint">Schema and data changes are not automatically rolled back. Release approval does not deploy the current application.</p>
+      <button class="btn btn-primary" type="submit">Approve merge and tag {{ run.expected_tag }}</button>
+    </form>
+    {% endif %}
+    {% endif %}
+  </section>
+  {% endif %}
+  {% if cancel_allowed and review_enabled %}
+  <section class="review-section">
+    <form method="post" action="/feedback/reviews/{{ run.id }}/cancel" class="review-cancel-form" data-review-form>
+      <input type="hidden" name="expected_revision" value="{{ run.revision }}">
+      <label class="review-confirm"><input type="checkbox" name="confirm" required> <span>I confirm cancellation of this review.</span></label>
+      <button class="btn btn-danger" type="submit">Cancel review</button>
+    </form>
+  </section>
+  {% endif %}
+  <noscript><p class="review-notice">Approval controls require JavaScript for request verification.</p></noscript>
+</div>
+{% endblock %}

@@ -4,10 +4,18 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "luigi-web"
-version = "0.1.0"
+version = "0.2.0"
 description = "A modular, server-rendered Luigi Web host"
 requires-python = ">=3.11"
-dynamic = ["dependencies"]
+dependencies = [
+    "fastapi==0.115.0",
+    "uvicorn[standard]==0.30.6",
+    "jinja2==3.1.4",
+    "python-multipart==0.0.9",
+    "httpx==0.27.2",
+    "packaging>=24,<27",
+    "tzdata>=2024.1",
+]
 
 [project.scripts]
 luigi-web = "luigi_web.core.cli:main"
@@ -15,20 +23,15 @@ luigi-web = "luigi_web.core.cli:main"
 [tool.setuptools]
 include-package-data = false
 
-[tool.setuptools.dynamic]
-dependencies = {file = ["requirements.txt"]}
-
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["luigi_web", "luigi_web.*"]
+include = ["luigi_web", "luigi_web.core", "luigi_web.core.*", "luigi_web.modules"]
 namespaces = false
 
 [tool.setuptools.package-data]
 luigi_web = [
     "core/templates/**/*.html",
     "core/static/**/*",
-    "modules/*/templates/**/*.html",
-    "modules/*/static/**/*",
 ]
 
 [tool.setuptools.exclude-package-data]

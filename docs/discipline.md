@@ -3,7 +3,7 @@
 The authenticated `/discipline` workspace tracks habits against the shared
 LuigiBot schema. The annual heatmap remains the main view; weekly progress and
 organization controls complement it. See [../README.md](../README.md) for setup
-and [architecture.md](architecture.md) for storage and module boundaries.
+and [modules.md](modules.md) for module boundaries.
 
 ## Approved scope
 
@@ -16,9 +16,9 @@ and [architecture.md](architecture.md) for storage and module boundaries.
 | #5 Search, category filters, pins, order | Live; filters are temporary and pins/order are browser-local. |
 
 UUID-keyed completion history, habit reminders, preferred weekdays, and
-successful-week streaks are not implemented. The coordinated
-[discipline-v2-plan.md](discipline-v2-plan.md) is future work with LuigiBot, not
-a migration delivered by these changes.
+successful-week streaks are not implemented. A future schema migration requires
+coordination with LuigiBot; those planning notes remain developer-local. No such
+migration is delivered by these changes.
 
 ## Annual history and weekly progress
 

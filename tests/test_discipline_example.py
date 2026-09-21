@@ -22,7 +22,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 
 from luigi_web.core.module_registry import Module, ModuleRegistry
+from luigi_web.core.static_assets import ModuleStaticFiles
 from luigi_web.modules.discipline import examples
+from luigi_web.paths import STATIC_DIR
 
 
 class ExampleMarkup(HTMLParser):
@@ -58,9 +60,9 @@ class DisciplineExampleTests(unittest.TestCase):
         self.application.state.modules = ModuleRegistry([])
         self.application.include_router(examples.router)
         self.module_directory = Path(examples.__file__).parent
-        self.static_directory = self.module_directory.parents[1] / "core" / "static"
+        self.static_directory = STATIC_DIR
         self.application.mount("/module-assets/discipline", StaticFiles(directory=self.module_directory / "static"))
-        self.application.mount("/static", StaticFiles(directory=self.static_directory))
+        self.application.mount("/static", ModuleStaticFiles(directory=self.static_directory))
         self.client = self.enterContext(TestClient(self.application, follow_redirects=False))
         self.authorization = {"Authorization": "Bearer synthetic-history-session"}
 
@@ -254,7 +256,7 @@ class DisciplineExampleTests(unittest.TestCase):
 
 def export_browser_fixture():
     module_directory = Path(examples.__file__).parent
-    static_directory = module_directory.parents[1] / "core" / "static"
+    static_directory = STATIC_DIR
     application = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     application.state.modules = ModuleRegistry([])
     application.include_router(examples.router)

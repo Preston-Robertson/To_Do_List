@@ -44,8 +44,43 @@ venv/
 .mypy_cache/
 .ruff_cache/
 
+# Local agent configuration and developer-only artifacts
+/AGENTS.md
+/**/AGENTS.md
+[Aa][Gg][Ee][Nn][Tt].md
+[Aa][Gg][Ee][Nn][Tt][Ss].md
+**/*.agent.md
+**/*.instructions.md
+**/*.prompt.md
+**/copilot-instructions.md
+**/SKILL.md
+/.github/copilot-instructions.md
+/.github/instructions/
+/.github/agents/
+/.github/prompts/
+**/.github/instructions/
+**/.github/agents/
+**/.github/prompts/
+**/.github/skills/
+**/.agents/skills/
+**/.claude/skills/
+/.local/
+/temp/
+/tmp/
+/%SystemDrive%/
+/docs/architecture.md
+/docs/*-plan.md
+/docs/*-audit-*.md
+/docs/*-validation-*.md
+/docs/screenshots/*.png
+/docs/screenshots/*.jpg
+/docs/screenshots/*.jpeg
+
 # Generated module selection and wheel output
 /data/modules.json
+/data/module-installations.db
+/data/module-installations.db-*
+/data/module-packages/
 /data/home-layout.json
 /data/.home-layout-*.tmp
 /build/

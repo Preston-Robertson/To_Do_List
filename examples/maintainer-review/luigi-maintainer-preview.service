@@ -1,0 +1,29 @@
+[Unit]
+Description=Luigi maintenance oldest eligible pending preview
+After=network-online.target luigi-maintainer-gateway.service
+Wants=network-online.target
+Requires=luigi-maintainer-gateway.service
+ConditionPathExists=/etc/luigi-web/maintainer-review/preview.env
+
+[Service]
+Type=oneshot
+User=luigi-maintainer
+Group=luigi-maintainer
+EnvironmentFile=/etc/luigi-web/maintainer-review/preview.env
+Environment=HOME=/var/lib/luigi-maintainer
+Environment=LUIGI_MAINTAINER_STATE_DIR=/var/lib/luigi-maintainer
+Environment=XDG_CONFIG_HOME=/var/lib/luigi-maintainer/config
+Environment=XDG_DATA_HOME=/var/lib/luigi-maintainer/share
+Environment=XDG_RUNTIME_DIR=/run/luigi-maintainer
+RuntimeDirectory=luigi-maintainer
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+ReadWritePaths=/var/lib/luigi-maintainer /var/lib/luigi-maintainer-preview
+InaccessiblePaths=-/var/lib/luigi-maintainer/copilot
+ExecStart=/usr/bin/flock --nonblock --conflict-exit-code 0 /var/lib/luigi-maintainer/controller.lock /opt/luigi-web/.venv/bin/python -m luigi_web.modules.feedback.review_worker --preview-pending
+TimeoutStartSec=15m
+KillMode=process
+Delegate=yes
+NoNewPrivileges=false
+RestrictNamespaces=false
+ProtectControlGroups=false

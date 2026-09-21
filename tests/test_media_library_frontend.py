@@ -2,6 +2,7 @@ from copy import deepcopy
 import hashlib
 import json
 from pathlib import Path
+from importlib.resources import files as module_files
 import re
 import struct
 import unittest
@@ -10,12 +11,13 @@ import zlib
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from luigi_web.core.static_assets import ModuleStaticFiles
 from fastapi.testclient import TestClient
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MEDIA = ROOT / "luigi_web" / "modules" / "media"
+MEDIA = Path(str(module_files("luigi_web.modules.media")))
 CORE = ROOT / "luigi_web" / "core"
 
 
@@ -125,7 +127,7 @@ def synthetic_media_app():
     runs = {}
     controls = {"mode": "normal", "block_reads": False}
     calls = []
-    app.mount("/static", StaticFiles(directory=CORE / "static"))
+    app.mount("/static", ModuleStaticFiles(directory=CORE / "static"))
     app.mount("/module-assets/media", StaticFiles(directory=MEDIA / "static"))
 
     def response(value, status=200):

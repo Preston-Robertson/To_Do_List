@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from html.parser import HTMLParser
 from pathlib import Path
+from importlib.resources import files as module_files
 from copy import deepcopy
 from datetime import date
 import json
@@ -23,7 +24,7 @@ from luigi_web.modules.planning import home_routes, home_service
 from luigi_web.modules.tasks import occurrences, routes as task_routes
 
 
-TASKS_ROOT = Path(__file__).resolve().parents[1] / "luigi_web" / "modules" / "tasks"
+TASKS_ROOT = Path(str(module_files("luigi_web.modules.tasks")))
 HISTORY_MESSAGE = "This occurrence has a successor and its history cannot be changed."
 
 
@@ -339,9 +340,10 @@ class HomeOccurrenceRouteTests(OccurrenceFixture):
 
 def synthetic_occurrence_app() -> FastAPI:
     from fastapi.staticfiles import StaticFiles
+    from luigi_web.core.static_assets import ModuleStaticFiles
     from test_home_frontend import render_home, synthetic_state
 
-    root = TASKS_ROOT.parents[2]
+    root = Path(str(module_files("luigi_web")))
     state = synthetic_state()
     parent = {
         **state["tasks"][1], "id": "recurring:example-parent", "uuid": "example-parent",
@@ -355,8 +357,8 @@ def synthetic_occurrence_app() -> FastAPI:
     }
     state["tasks"] = [state["tasks"][0], parent, child]
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
-    app.mount("/static", StaticFiles(directory=root / "luigi_web" / "core" / "static"))
-    app.mount("/module-assets/planning", StaticFiles(directory=TASKS_ROOT.parent / "planning" / "static"))
+    app.mount("/static", ModuleStaticFiles(directory=root / "core" / "static"))
+    app.mount("/module-assets/planning", StaticFiles(directory=Path(str(module_files("luigi_web.modules.planning"))) / "static"))
     app.mount("/module-assets/tasks", StaticFiles(directory=TASKS_ROOT / "static"))
 
     @app.get("/home", response_class=HTMLResponse)
@@ -382,7 +384,7 @@ def synthetic_occurrence_app() -> FastAPI:
     def task_rows():
         environment = template_environment()
         environment.loader = FileSystemLoader([
-            TASKS_ROOT / "templates", root / "luigi_web" / "core" / "templates",
+            TASKS_ROOT / "templates", root / "core" / "templates",
         ])
         return environment.from_string(
             '{% extends "base.html" %}{% block content %}'

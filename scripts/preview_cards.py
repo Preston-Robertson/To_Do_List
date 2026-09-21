@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from fastapi.staticfiles import StaticFiles
+from luigi_web.core.static_assets import ModuleStaticFiles
 import uvicorn
 
 def seed_cards() -> None:
@@ -96,7 +96,7 @@ def preview_app() -> FastAPI:
     session_token = secrets.token_urlsafe(32)
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.state.modules = ModuleRegistry([module])
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    app.mount("/static", ModuleStaticFiles(directory=str(STATIC_DIR)), name="static")
     mount_module_assets(app, app.state.modules)
     app.include_router(cards_routes.router)
 

@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% macro decimal_input(name, label, value='0.00', percent=false) -%}
+<label>{{ label }}{% if percent %} (%) {% else %} ({{ planning_seed.currency }}){% endif %}<input name="{{ name }}" type="text" inputmode="decimal" data-scale="2" value="{{ value }}" maxlength="20" required spellcheck="false"></label>
+{%- endmacro %}
+{% macro integer_input(name, label, value, maximum) -%}
+<label>{{ label }}<input name="{{ name }}" type="number" min="1" max="{{ maximum }}" step="1" value="{{ value }}" required></label>
+{%- endmacro %}
+{% block head_scripts %}
+<link rel="stylesheet" href="/module-assets/finance/planning.css?v={{ shell_asset_version }}">
+<script src="/static/js/vendor/chart.umd.min.js?v={{ shell_asset_version }}" defer></script>
+<script src="/module-assets/finance/planning.js?v={{ shell_asset_version }}" defer></script>
+{% endblock %}
+{% block content %}
+<div id="finance-planning" class="finance-planning" hx-history="false" hx-boost="false" data-private="true">
+  <header class="fp-header">
+    <div><h1>Finance planning</h1><p class="fp-note">{{ planning_seed.currency }} / Scenario estimates</p></div>
+    <form id="fp-lock" method="post" action="/finance/lock" autocomplete="off">
+      <button class="btn fp-icon" type="submit" aria-label="Lock Finance" title="Lock Finance">{{ shell_icon('lock-keyhole') }}</button>
+    </form>
+  </header>
+  <nav class="fp-nav" aria-label="Finance views"><a href="/finance">Overview</a><a href="/finance/planning" aria-current="page">Planning</a><a href="/finance/records">Records</a></nav>
+  <noscript><p role="alert">JavaScript is required for private planning forms.</p></noscript>
+  <p id="fp-status" class="fp-status" role="status" aria-live="polite"></p>
+  <div class="fp-tabs" role="tablist" aria-label="Planning views">
+    <button id="fp-tab-cashflow" type="button" role="tab" data-tab="cashflow" aria-controls="fp-cash-fields" aria-selected="true">Cash flow</button>
+    <button id="fp-tab-wealth" type="button" role="tab" data-tab="wealth" aria-controls="fp-cash-fields" aria-selected="false" tabindex="-1">Wealth</button>
+    <button id="fp-tab-housing" type="button" role="tab" data-tab="housing" aria-controls="fp-housing-fields" aria-selected="false" tabindex="-1">Housing</button>
+  </div>
+
+  <section class="fp-section" aria-labelledby="fp-scenario-title">
+    <div class="fp-heading"><h2 id="fp-scenario-title">Scenario</h2><span id="fp-version" class="fp-note">Unsaved</span></div>
+    <div class="fp-toolbar">
+      <label>Saved scenario<select id="fp-saved" autocomplete="off"><option value="">Choose a scenario</option></select></label>
+      <button id="fp-load" class="btn" type="button" disabled>{{ shell_icon('notebook-pen') }} Load</button>
+      <button id="fp-new" class="btn" type="button" disabled>{{ shell_icon('plus') }} New</button>
+      <label>Scenario alias<input id="fp-name" type="text" maxlength="60" autocomplete="off" spellcheck="false" required></label>
+      <button id="fp-save" class="btn" type="button" disabled>{{ shell_icon('save') }} Save</button>
+      <button id="fp-delete" class="btn fp-icon" type="button" title="Delete loaded scenario" aria-label="Delete loaded scenario" disabled>{{ shell_icon('trash-2') }}</button>
+    </div>
+    <form id="fp-calculate" method="post" action="/finance/planning/calculate" autocomplete="off">
+      <fieldset id="fp-cash-fields" role="tabpanel" aria-labelledby="fp-tab-cashflow" disabled>
+        <legend class="sr-only">Cash flow and wealth assumptions</legend>
+        <div class="fp-grid">
+          <label>First full month<input name="start_month" type="month" required></label>
+          <div data-cash-only>{{ integer_input('months', 'Cash-flow months', 12, 60) }}</div>
+          <div data-wealth-only hidden>{{ integer_input('years', 'Projection years', 1, 50) }}</div>
+          {{ decimal_input('opening_cash_minor', 'Opening cash') }}
+          {{ decimal_input('opening_investments_minor', 'Opening holdings') }}
+        </div>
+        <div class="fp-balance"><p id="fp-baseline" class="fp-note"></p><button id="fp-current" class="btn" type="button">{{ shell_icon('rotate-ccw') }} Use current balances</button></div>
+        <p class="fp-note">Cash includes active checking, savings and cash accounts. Holdings exclude investment-account cash. Credit balances and other assets or debts are not allocated. Opening amounts are what-if values immediately before the first projected month.</p>
+        <div class="fp-grid">
+          <label>Net income source<select name="income_mode"><option value="recurring">Recorded recurring income</option><option value="fixed">Fixed monthly take-home</option><option value="streams">Income schedules</option></select></label>
+          <div id="fp-fixed-income">{{ decimal_input('net_income_minor', 'Monthly take-home') }}</div>
+          {{ decimal_input('variable_expense_minor', 'Additional monthly spending') }}
+          {{ decimal_input('monthly_contribution_minor', 'Monthly investment transfer') }}
+          {{ decimal_input('reserve_minor', 'Cash reserve') }}
+          <div id="fp-income-growth">{{ decimal_input('annual_income_growth_bps', 'Annual net income growth', percent=true) }}</div>
+          {{ decimal_input('annual_expense_growth_bps', 'Annual spending growth', percent=true) }}
+          {{ decimal_input('annual_return_bps', 'Annual investment return', percent=true) }}
+          {{ decimal_input('inflation_bps', 'Annual inflation', percent=true) }}
+        </div>
+        <p class="fp-note">Fixed take-home or income schedules replace positive recurring income. Negative recurring items remain bills; additional spending is on top of those bills, not a full budget. No gross-pay or tax estimate is assumed. Transfers move cash into holdings, not out of projected net worth.</p>
+      </fieldset>
+      <fieldset id="fp-housing-fields" role="tabpanel" aria-labelledby="fp-tab-housing" hidden disabled>
+        <legend class="sr-only">Housing assumptions</legend>
+        <div class="fp-grid">
+          {{ decimal_input('home_price_minor', 'Home price', '') }}
+          {{ decimal_input('down_payment_minor', 'Down payment') }}
+          {{ decimal_input('mortgage_rate_bps', 'Fixed mortgage APR', percent=true) }}
+          {{ integer_input('term_years', 'Mortgage term years', 30, 50) }}
+          {{ decimal_input('rent_minor', 'Monthly rent') }}
+          {{ decimal_input('rent_growth_bps', 'Annual rent growth', percent=true) }}
+          {{ decimal_input('annual_property_tax_bps', 'Annual property tax', percent=true) }}
+          {{ decimal_input('annual_insurance_minor', 'Annual insurance') }}
+          {{ decimal_input('annual_maintenance_bps', 'Annual maintenance', percent=true) }}
+          {{ decimal_input('hoa_minor', 'Monthly HOA') }}
+          {{ decimal_input('closing_cost_minor', 'Closing costs') }}
+          {{ decimal_input('appreciation_bps', 'Annual appreciation', percent=true) }}
+          {{ integer_input('years', 'Comparison years', 1, 50) }}
+        </div>
+        <p class="fp-note">Fixed-rate principal and interest only. Ownership cash out includes principal; equity is not spendable cash. No PMI, tax deductions, sale costs, sale proceeds or opportunity return. Unspecified costs are zero assumptions, not verified costs.</p>
+      </fieldset>
+      <div class="fp-actions"><button id="fp-run" class="btn btn-primary" type="submit" disabled>{{ shell_icon('chart-no-axes-combined') }} Calculate</button></div>
+    </form>
+  </section>
+
+  <section id="fp-output" class="fp-section" aria-labelledby="fp-result-title" hidden>
+    <div class="fp-heading"><h2 id="fp-result-title">Projection</h2><span id="fp-result-state" class="fp-note"></span></div>
+    <div id="fp-warnings" class="fp-notice" role="status" hidden></div>
+    <div id="fp-summary" class="fp-summary"></div>
+    <div id="fp-chart-wrap" class="fp-chart"><canvas id="fp-chart" role="img" aria-label="Scenario projection" aria-describedby="fp-tables"></canvas></div>
+    <p id="fp-chart-status" class="fp-note" hidden>Chart unavailable. Projection values are in the tables.</p>
+    <div id="fp-tables"></div>
+    <details><summary>Assumptions</summary><ul id="fp-assumptions" class="fp-assumptions"></ul></details>
+  </section>
+
+  <section class="fp-section" aria-labelledby="fp-compare-title">
+    <div class="fp-heading"><h2 id="fp-compare-title">Compare scenarios</h2><button id="fp-reload" class="btn" type="button" disabled>{{ shell_icon('rotate-ccw') }} Reload saved lists</button></div>
+    <fieldset id="fp-compare-list" class="fp-comparisons"><legend>Saved scenarios (two or three)</legend></fieldset>
+    <div class="fp-toolbar">
+      <button id="fp-compare" class="btn" type="button" disabled>{{ shell_icon('chart-no-axes-combined') }} Compare selected</button>
+      <label>Compare with current draft<select id="fp-compare-draft"><option value="">Choose a scenario</option></select></label>
+      <button id="fp-compare-current" class="btn" type="button" disabled>{{ shell_icon('chart-no-axes-combined') }} Compare with draft</button>
+    </div>
+    <p class="fp-note">Cash-flow comparisons share the first month and horizon. Housing comparisons share the horizon. Wealth uses the selected number of years for each independent scenario; opening months remain separately labeled.</p>
+  </section>
+
+  <section class="fp-section" aria-labelledby="fp-income-title">
+    <div class="fp-heading"><h2 id="fp-income-title">Net income schedules</h2><span class="fp-note">Take-home per pay period</span></div>
+    <div class="fp-table-wrap"><table><caption class="sr-only">Saved income schedules</caption><thead><tr><th scope="col">Alias</th><th scope="col">Net pay</th><th scope="col">Cadence</th><th scope="col">Dates</th><th scope="col">Active</th><th scope="col">Edit</th></tr></thead><tbody id="fp-income-list"></tbody></table></div>
+    <form id="fp-income-form" method="post" action="/finance/planning/income/save" autocomplete="off">
+      <fieldset id="fp-income-fields" disabled>
+        <legend id="fp-income-version">New income schedule</legend>
+        <div class="fp-grid">
+          <label>Income alias<input name="name" type="text" maxlength="60" required spellcheck="false"></label>
+          {{ decimal_input('amount_minor', 'Net pay per period', '') }}
+          <label>Cadence<select name="cadence">{% for cadence in ['weekly', 'biweekly', 'monthly', 'quarterly', 'yearly'] %}<option value="{{ cadence }}" {% if cadence == 'monthly' %}selected{% endif %}>{{ cadence|title }}</option>{% endfor %}</select></label>
+          <label>First pay date<input name="start_date" type="date" required></label>
+          <label>Last pay date (optional)<input name="end_date" type="date"></label>
+          {{ decimal_input('annual_growth_bps', 'Annual net pay growth', percent=true) }}
+          <label class="fp-checkbox"><input name="active" type="checkbox" checked>Active</label>
+        </div>
+        <div class="fp-actions">
+          <button class="btn" type="submit">{{ shell_icon('save') }} Save income</button>
+          <button id="fp-income-new" class="btn" type="button">{{ shell_icon('plus') }} New income</button>
+          <button id="fp-income-delete" class="btn fp-icon" type="button" disabled title="Delete loaded income" aria-label="Delete loaded income">{{ shell_icon('trash-2') }}</button>
+        </div>
+      </fieldset>
+    </form>
+  </section>
+  <script id="fp-seed" type="application/json">{{ planning_seed|tojson }}</script>
+</div>
+{% endblock %}

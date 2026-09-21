@@ -2,10 +2,9 @@
 
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
-const path = require("node:path");
 const vm = require("node:vm");
 
-const source = fs.readFileSync(path.join(__dirname, "..", "luigi_web", "modules", "tasks", "static", "task-views.js"), "utf8");
+const source = fs.readFileSync(process.argv[3], "utf8");
 const statuses = ["Not Started", "In Progress", "Completed"];
 const plain = (value) => JSON.parse(JSON.stringify(value));
 const prefix = "luigi.tasks.views.v1.";

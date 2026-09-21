@@ -1,0 +1,30 @@
+[Unit]
+Description=Stage one approved Luigi Web module release
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/opt/luigi-web/data/module-installations.db
+
+[Service]
+Type=oneshot
+User=luigi-web
+Group=luigi-web
+WorkingDirectory=/opt/luigi-web
+EnvironmentFile=/etc/luigi-web/module-installer.env
+Environment=PYTHON_DOTENV_DISABLED=1
+Environment=PYTHONNOUSERSITE=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/luigi-web/.venv/bin/luigi-web module-install --pending
+TimeoutStartSec=300
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/luigi-web/data
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

@@ -610,6 +610,11 @@ def preview_context(occurrence_demo: bool = False, *, discipline_demo: bool = Fa
             environment[key] = str(directory / filename)
         stack.enter_context(patch.dict(os.environ, environment, clear=True))
 
+        from luigi_web import paths
+        from luigi_web.core import module_repositories
+
+        stack.enter_context(patch.object(paths, "DATA_DIR", directory))
+        stack.enter_context(patch.object(module_repositories, "DATA_DIR", directory))
         from starlette.middleware.trustedhost import TrustedHostMiddleware
         from luigi_web import application, rpg
         from luigi_web.modules.discipline import history

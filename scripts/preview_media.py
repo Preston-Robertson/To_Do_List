@@ -26,9 +26,10 @@ import zlib
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
-from fastapi.staticfiles import StaticFiles
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from luigi_web.core.static_assets import ModuleStaticFiles
 
 _HOST_IMPORTED = False
 _CONTEXT_ACTIVE = False
@@ -385,7 +386,7 @@ def preview_context():
         stack.enter_context(patch.object(workspace, "_picks", OrderedDict()))
         try:
             app = FastAPI(title="Synthetic media preview", docs_url=None, redoc_url=None, openapi_url=None)
-            app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+            app.mount("/static", ModuleStaticFiles(directory=str(STATIC_DIR)), name="static")
             mount_modules(app, ModuleRegistry([module], "media"))
 
             @app.get("/preview-media/covers/{cover_id}.png")

@@ -415,8 +415,10 @@ class DeckVersionRouteTests(DeckVersionFixture):
 def synthetic_versions_app():
     from contextlib import asynccontextmanager
     from pathlib import Path
+    from importlib.resources import files as module_files
     from fastapi.responses import RedirectResponse
     from fastapi.staticfiles import StaticFiles
+    from luigi_web.core.static_assets import ModuleStaticFiles
 
     fixture = DeckVersionRouteTests()
     fixture.setUp()
@@ -426,8 +428,8 @@ def synthetic_versions_app():
     versions.save_version("mtg", fixture.deck_id, "Example revised version")
     cards.add_card_to_deck(fixture.deck_id, fixture.card_id, qty=9, board="main", category="Example category")
     root = Path(__file__).resolve().parents[1]
-    fixture.app.mount("/static", StaticFiles(directory=root / "luigi_web/core/static"))
-    fixture.app.mount("/module-assets/cards", StaticFiles(directory=root / "luigi_web/modules/cards/static"))
+    fixture.app.mount("/static", ModuleStaticFiles(directory=root / "luigi_web/core/static"))
+    fixture.app.mount("/module-assets/cards", StaticFiles(directory=Path(str(module_files("luigi_web.modules.cards"))) / "static"))
 
     @fixture.app.get("/__fixture__")
     def enter_fixture():

@@ -11,18 +11,15 @@ import threading
 import time
 import calendar as calendar_mod
 from datetime import date, timedelta
-from importlib import import_module
 from inspect import isawaitable
 from pathlib import Path
 from typing import Any
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from fastapi.staticfiles import StaticFiles
-from .modules.tasks import repository as db
-from .modules.tasks import recurrence
-from .modules.tasks import events as task_events
+from .core.static_assets import ModuleStaticFiles
 from . import clock
 from .core.module_registry import build_registry, mount_modules, start_modules, stop_modules
+from .core.optional_modules import module_available, optional_module, require_module
 from .core.templating import create_templates
 from .auth import (
     COOKIE_NAME,
@@ -37,6 +34,10 @@ from .auth import (
     secure_cookies,
 )
 
+db = optional_module("luigi_web.modules.tasks.repository")
+recurrence = optional_module("luigi_web.modules.tasks.recurrence")
+task_events = optional_module("luigi_web.modules.tasks.events")
+
 app = FastAPI(
     title="LuigiBot Web GUI",
     docs_url=None,
@@ -48,7 +49,7 @@ logger = logging.getLogger("luigi_web.app")
 
 from .paths import PROJECT_ROOT, STATIC_DIR, TEMPLATES_DIR
 
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+app.mount("/static", ModuleStaticFiles(directory=str(STATIC_DIR)), name="static")
 
 templates = create_templates()
 
@@ -66,13 +67,23 @@ async def csrf_middleware(request: Request, call_next):
             request.headers.get("x-csrf-token"),
         )
     ):
-        return JSONResponse({"detail": "CSRF validation failed"}, status_code=403)
+        headers = {"Cache-Control": "no-store", "Pragma": "no-cache", "Expires": "0", "Referrer-Policy": "no-referrer"} if request.url.path.startswith("/finance") else None
+        return JSONResponse({"detail": "CSRF validation failed"}, status_code=403, headers=headers)
 
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception:
+        if not request.url.path.startswith("/finance"):
+            raise
+        response = JSONResponse({"detail": "Finance is temporarily unavailable"}, status_code=503)
     if request.url.path.startswith("/finance"):
+        if response.status_code == 422:
+            response = JSONResponse({"detail": "Invalid Finance request. Check the submitted fields."}, status_code=422)
         response.headers["Cache-Control"] = "no-store"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["X-Content-Type-Options"] = "nosniff"
     if request.url.path.startswith("/feedback"):
         response.headers["Cache-Control"] = "no-store"
         response.headers["Pragma"] = "no-cache"
@@ -121,30 +132,25 @@ def _asset_version() -> str:
 
 templates.env.globals["asset_version"] = _asset_version()
 
-templates.env.globals["reactivation_date"] = db.reactivation_date
-
-templates.env.globals["WEEKDAY_LABELS"] = db.WEEKDAY_LABELS
-
-templates.env.globals["recurring_days_list"] = db.recurring_days_list
-
-templates.env.globals["recurring_days_labels"] = db.recurring_days_labels
-
-templates.env.globals["recurrence_schedule_type"] = db.recurrence_schedule_type
-
-templates.env.globals["recurrence_schedule_label"] = db.recurrence_schedule_label
-
-templates.env.globals["MONTH_ORDINAL_OPTIONS"] = recurrence.MONTH_ORDINAL_OPTIONS
-
-templates.env.globals["has_web_column"] = db.has_web_column
-
-templates.env.globals["completion_day_policy"] = task_events.server_time_policy
+if module_available("luigi_web.modules.tasks"):
+    templates.env.globals.update(
+        reactivation_date=db.reactivation_date,
+        WEEKDAY_LABELS=db.WEEKDAY_LABELS,
+        recurring_days_list=db.recurring_days_list,
+        recurring_days_labels=db.recurring_days_labels,
+        recurrence_schedule_type=db.recurrence_schedule_type,
+        recurrence_schedule_label=db.recurrence_schedule_label,
+        MONTH_ORDINAL_OPTIONS=recurrence.MONTH_ORDINAL_OPTIONS,
+        has_web_column=db.has_web_column,
+        completion_day_policy=task_events.server_time_policy,
+    )
 
 _STARTUP_SCHEMA: dict[str, Any] = {"version": None, "error": None}
 _RECURRENCE_ERROR: str | None = None
 
 
 def recurrence_status() -> dict[str, Any]:
-    from .modules.tasks import occurrences
+    occurrences = require_module("luigi_web.modules.tasks.occurrences")
 
     try:
         state = occurrences.scheduler_state()
@@ -162,6 +168,7 @@ def _startup_schema_check() -> None:
     _STARTUP_SCHEMA.update(version=None, error=None)
     if not (_module_enabled("tasks") or _module_enabled("discipline")):
         return
+    require_module("luigi_web.modules.tasks.repository")
     try:
         version = db.check_schema_version()
         _STARTUP_SCHEMA["version"] = version
@@ -493,17 +500,17 @@ _LEGACY_EXPORTS = {
 }
 
 _LEGACY_MODULES = {
-    "cards": ".cards",
-    "cards_scryfall": ".cards_scryfall",
-    "cards_templating": ".cards_templating",
-    "chat_tools": ".chat_tools",
-    "env_file": ".env_file",
-    "finance": ".finance",
-    "gnw": ".gnw",
-    "llm_mod": ".llm",
-    "operations": ".operations",
-    "review": ".review",
-    "task_backup": ".task_backup",
+    "cards": "luigi_web.modules.cards.repository",
+    "cards_scryfall": "luigi_web.modules.cards.scryfall",
+    "cards_templating": "luigi_web.modules.cards.templating",
+    "chat_tools": "luigi_web.modules.assistant.tools",
+    "env_file": "luigi_web.modules.admin.environment",
+    "finance": "luigi_web.modules.finance.repository",
+    "gnw": "luigi_web.modules.media.service",
+    "llm_mod": "luigi_web.modules.assistant.providers",
+    "operations": "luigi_web.modules.tasks.operations",
+    "review": "luigi_web.modules.planning.repository",
+    "task_backup": "luigi_web.modules.tasks.backup",
 }
 
 _LAZY_STATE_LOCK = threading.RLock()
@@ -512,17 +519,17 @@ _LAZY_STATE_LOCK = threading.RLock()
 def __getattr__(name: str) -> Any:
     feature = _LEGACY_EXPORTS.get(name)
     if feature is not None:
-        return getattr(import_module(f".modules.{feature}.routes", __package__), name)
+        return getattr(require_module(f"luigi_web.modules.{feature}.routes"), name)
     module_path = _LEGACY_MODULES.get(name)
     if module_path is not None:
-        return import_module(module_path, __package__)
+        return require_module(module_path)
     if name in {"_LLM_PROVIDER", "_LLM_TOOLS"}:
         with _LAZY_STATE_LOCK:
             if name not in globals():
                 if name == "_LLM_PROVIDER":
-                    value = import_module(".llm", __package__).build_provider_from_env()
+                    value = require_module(_LEGACY_MODULES["llm_mod"]).build_provider_from_env()
                 else:
-                    value = import_module(".chat_tools", __package__).build_registry()
+                    value = require_module(_LEGACY_MODULES["chat_tools"]).build_registry()
                 globals()[name] = value
             return globals()[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
@@ -530,8 +537,10 @@ def __getattr__(name: str) -> Any:
 
 from .auth import COOKIE_NAME as _AUTH_COOKIE  # keep import local — no top-of-file churn
 from .core.modules_routes import router as modules_router
+from .core.repository_routes import router as repository_router
 
 app.include_router(modules_router, dependencies=[Depends(require_auth)])
+app.include_router(repository_router, dependencies=[Depends(require_auth)])
 
 mount_modules(app, build_registry())
 

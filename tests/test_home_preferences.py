@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from importlib.resources import files as module_files
 import tempfile
 import unittest
 from unittest.mock import Mock, call, patch
@@ -10,6 +11,7 @@ from unittest.mock import Mock, call, patch
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from luigi_web.core.static_assets import ModuleStaticFiles
 from fastapi.testclient import TestClient
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from starlette.requests import Request
@@ -22,7 +24,7 @@ def render_synthetic_home(media: bool = True) -> str:
     package = Path(__file__).resolve().parents[1] / "luigi_web"
     templates = Environment(
         loader=FileSystemLoader([
-            package / "modules" / "planning" / "templates",
+            Path(str(module_files("luigi_web.modules.planning"))) / "templates",
             package / "core" / "templates",
         ]),
         autoescape=select_autoescape(),
@@ -61,8 +63,8 @@ def synthetic_home_app() -> FastAPI:
     app = FastAPI()
     app.middleware("http")(csrf_middleware)
     app.include_router(router)
-    app.mount("/static", StaticFiles(directory=package / "core" / "static"))
-    app.mount("/module-assets/planning", StaticFiles(directory=package / "modules" / "planning" / "static"))
+    app.mount("/static", ModuleStaticFiles(directory=package / "core" / "static"))
+    app.mount("/module-assets/planning", StaticFiles(directory=Path(str(module_files("luigi_web.modules.planning"))) / "static"))
 
     @app.get("/home", response_class=HTMLResponse)
     def home(media: bool = True):

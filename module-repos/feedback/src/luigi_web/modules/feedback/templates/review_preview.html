@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<section hx-history="false">
+  <h1>Test application</h1>
+  <p>Approved branch: <code>{{ run.branch }}</code></p>
+  <p>Commit: <code>{{ run.head_commit }}</code></p>
+  <p>This separate preview uses synthetic data. It does not replace the running application.</p>
+  <form method="post" action="{{ preview_origin }}/session" target="_blank" autocomplete="off">
+    <input type="hidden" name="run_id" value="{{ run.id }}">
+    <input type="hidden" name="ticket" value="{{ ticket }}">
+    <button type="submit" class="btn btn-primary">Open test application</button>
+  </form>
+  <a href="/feedback/reviews/{{ run.id }}" class="btn">Back to review</a>
+</section>
+{% endblock %}

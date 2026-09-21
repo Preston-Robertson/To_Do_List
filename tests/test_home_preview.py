@@ -182,7 +182,9 @@ class HomePreviewTests(unittest.TestCase):
         template = (self.module_directory / "templates" / "home_preview.html").read_text(encoding="utf-8")
         self.assertNotRegex(template, r"https?://|hx-(get|post|put|patch|delete)")
         self.assertNotRegex(template, r"\son(?:click|change|submit)=")
-        icon_directory = self.module_directory.parents[1] / "core" / "static" / "icons" / "lucide"
+        from luigi_web.paths import STATIC_DIR
+
+        icon_directory = STATIC_DIR / "icons" / "lucide"
         for name in re.findall(r"shell_icon\('([\w-]+)'\)", template):
             self.assertTrue((icon_directory / (name + ".svg")).is_file(), name)
 

@@ -7,13 +7,14 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from html.parser import HTMLParser
 from pathlib import Path
+from importlib.resources import files as module_files
 from urllib.parse import parse_qs, urlsplit
 
 from jinja2 import ChoiceLoader, DictLoader, Environment, FileSystemLoader, select_autoescape
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MODULE = ROOT / "luigi_web/modules/discipline"
+MODULE = Path(str(module_files("luigi_web.modules.discipline")))
 BASE = """{% macro shell_icon(name) %}<span class="shell-icon" data-icon="{{ name }}"></span>{% endmacro %}
 {% block head_scripts %}{% endblock %}<button data-command-open>Search</button>
 {% if module_enabled('assistant') %}<button data-assistant-open>Assistant</button>{% endif %}
@@ -216,7 +217,7 @@ class SyntheticBrowserHandler(BaseHTTPRequestHandler):
             roots = {
                 "/static/": ROOT / "luigi_web/core/static",
                 "/module-assets/discipline/": MODULE / "static",
-                "/module-assets/assistant/": ROOT / "luigi_web/modules/assistant/static",
+                "/module-assets/assistant/": Path(str(module_files("luigi_web.modules.assistant"))) / "static",
             }
             for prefix, directory in roots.items():
                 if not parsed.path.startswith(prefix):

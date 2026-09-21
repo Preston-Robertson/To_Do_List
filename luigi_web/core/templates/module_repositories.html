@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block head_scripts %}
+<link rel="stylesheet" href="/static/css/module-repositories.css?v={{ asset_version }}">
+<script src="/static/js/module-repositories.js?v={{ asset_version }}" defer></script>
+{% endblock %}
+{% macro trust_fields(key) %}
+<input type="hidden" name="csrf_token" value="{{ csrf_value }}">
+<label class="repository-trust" for="trust-{{ key }}"><input id="trust-{{ key }}" type="checkbox" name="trust_confirmed" value="yes" required><span>I trust this executable module code and its publisher.</span></label>
+{% endmacro %}
+{% block content %}
+<section class="module-page repository-page" id="module-repositories-panel" aria-labelledby="repositories-title">
+  <header class="page-header module-header repository-header">
+    <h1 id="repositories-title">Module repositories</h1>
+    <nav class="repository-actions" aria-label="Repository actions">
+      <a href="/modules">{{ shell_icon('blocks') }}<span>Modules</span></a>
+      <a href="/modules/repositories" class="btn" data-repository-refresh>{{ shell_icon('rotate-ccw') }}<span>Refresh</span></a>
+    </nav>
+  </header>
+  <p class="module-notice module-notice-error" data-repository-error role="alert" tabindex="-1" {% if not error %}hidden{% endif %}>{{ error }}</p>
+  {% if notice %}<p class="module-notice module-notice-saved" role="status" tabindex="-1" data-repository-notice>{{ shell_icon('check') }}<span>{{ notice }}</span></p>{% endif %}
+  {% if setup %}
+  <section class="repository-section" aria-labelledby="repository-setup-title">
+    <h2 id="repository-setup-title">Deployment setup</h2>
+    <p>Repository permissions are configured once by the deployment administrator, outside the web environment editor.</p>
+    <ol>
+      <li>Set <code>LUIGI_WEB_MODULE_REPOSITORY_OWNERS</code> to approved public GitHub owners, separated by commas, to permit source registration. Leave it unset to disable registration.</li>
+      <li>Alternatively, use <code>LUIGI_WEB_MODULE_REPOSITORIES_FILE</code> for a deployment-owned version-1 JSON policy with a <code>sources</code> list. Each source has <code>id</code>, <code>module_id</code>, and a public HTTPS GitHub <code>repository</code>. Distribution, package, and route namespace are constrained by the backend. The policy must be protected against modification by the web process.</li>
+      <li>Review the publisher and release code. Register an approved source, then queue an exact release tag, pure Python wheel filename, and independently verified lowercase SHA256.</li>
+      <li>A separate deployment worker processes one queued request per invocation using <code>python -m luigi_web.core.module_installer --pending</code>. This page does not start it.</li>
+      <li>Refresh to check the result. Installation and rollback select a candidate for the next process start. Restart through deployment controls, then manage enablement in <a href="/modules">Modules</a>. This manager's verified releases use the repository approval. External packages installed outside this manager still require <code>LUIGI_WEB_EXTERNAL_MODULES</code>.</li>
+    </ol>
+    <p>Modules execute with application privileges after activation. A checksum pins an artifact; it does not establish that its code is trustworthy. No policy means installation is disabled.</p>
+    <a href="/modules/repositories">Back to repositories</a>
+  </section>
+  {% elif not loaded %}
+  <p class="repository-disclosure"><a href="/modules/repositories">Refresh repository state</a> before retrying. Current policy and installation status have not been loaded.</p>
+  {% else %}
+  {% if not policy.enabled %}
+  <p class="module-notice module-notice-managed">{{ shell_icon('lock-keyhole') }}<span>Read-only: repository installation is disabled. <a href="/modules/repositories/setup">One-time deployment setup</a></span></p>
+  {% else %}
+  <p class="module-notice module-notice-managed">{{ shell_icon('lock-keyhole') }}<span>Repository permissions are deployment-managed and cannot be edited here. <a href="/modules/repositories/setup">Deployment setup</a></span></p>
+  {% endif %}
+  <p class="repository-disclosure">Requests are queued only. A separate deployment worker installs the release; this page does not start it. Installing or rolling back does not change the running process. Restart is required to load a candidate. <a href="/modules">Enable modules separately</a>.</p>
+
+  <section class="repository-section" aria-labelledby="repository-sources-title">
+    <h2 id="repository-sources-title">Approved sources <span class="repository-count">{{ sources|length }}</span></h2>
+    {% for source in sources %}
+    <article class="repository-row" aria-labelledby="source-{{ source.id }}">
+      <header class="repository-row-header"><h3 id="source-{{ source.id }}">{{ source.id }}</h3><span class="module-state">{{ 'Deployment policy' if source.fixed else 'Approved owner' }}</span></header>
+      <dl class="repository-metadata">
+        <div><dt>Module</dt><dd>{{ source.module_id }}</dd></div>
+        <div><dt>Repository</dt><dd><a href="{{ source.repository }}" rel="noreferrer">{{ source.repository }}</a></dd></div>
+        <div><dt>Distribution</dt><dd>{{ source.distribution }}</dd></div>
+        <div><dt>Package</dt><dd>{{ source.package }}</dd></div>
+        <div><dt>Running registry</dt><dd>{{ source.running }}</dd></div>
+        <div><dt>Next-start candidate</dt><dd>{% if source.candidate %}{{ source.candidate.version }} (verified)<small>SHA256 {{ source.candidate.sha256 }}</small>{% else %}None installed{% endif %}</dd></div>
+      </dl>
+      <details class="repository-operation">
+        <summary>Queue installation</summary>
+        <form method="post" action="/modules/repositories/install" data-repository-form>
+          <input type="hidden" name="source_id" value="{{ source.id }}">
+          <div class="repository-fields">
+            <label for="tag-{{ source.id }}">Exact release tag<input id="tag-{{ source.id }}" name="tag" maxlength="128" required autocomplete="off" spellcheck="false"></label>
+            <label for="asset-{{ source.id }}">Wheel filename<input id="asset-{{ source.id }}" name="asset" maxlength="240" required autocomplete="off" spellcheck="false"></label>
+            <label class="repository-wide" for="sha-{{ source.id }}">SHA256<input id="sha-{{ source.id }}" name="sha256" minlength="64" maxlength="64" pattern="[0-9a-f]{64}" required autocomplete="off" spellcheck="false"></label>
+          </div>
+          {{ trust_fields('install-' ~ source.id) }}
+          <button class="btn btn-primary" type="submit">{{ shell_icon('download') }}<span>Queue installation</span></button>
+        </form>
+      </details>
+      {% set previous = source.releases|rejectattr('selected_for_restart')|list %}
+      {% if previous %}
+      <details class="repository-operation">
+        <summary>Queue rollback</summary>
+        <form method="post" action="/modules/repositories/rollback" data-repository-form>
+          <input type="hidden" name="source_id" value="{{ source.id }}">
+          <label for="release-{{ source.id }}">Previously installed release<select id="release-{{ source.id }}" name="sha256" required>
+            <option value="">Select a release</option>
+            {% for release in previous %}<option value="{{ release.sha256 }}">{{ release.version }} / {{ release.tag }} / {{ release.sha256[:12] }}</option>{% endfor %}
+          </select></label>
+          <p class="repository-disclosure">The worker re-verifies the selected release before selecting it for the next restart.</p>
+          {{ trust_fields('rollback-' ~ source.id) }}
+          <button class="btn" type="submit">{{ shell_icon('rotate-ccw') }}<span>Queue rollback</span></button>
+        </form>
+      </details>
+      {% endif %}
+    </article>
+    {% else %}<p class="module-empty">No approved sources.</p>{% endfor %}
+  </section>
+
+  <section class="repository-section" aria-labelledby="repository-register-title">
+    <h2 id="repository-register-title">Register source</h2>
+    {% if policy.registration_enabled %}
+    <p class="repository-disclosure">Approved owners: {{ policy.owners|join(', ') }}. Package and route namespace are assigned automatically.</p>
+    <form method="post" action="/modules/repositories/sources" data-repository-form>
+      <div class="repository-fields">
+        <label for="repository-id">Source ID<input id="repository-id" name="id" maxlength="48" pattern="[a-z][a-z0-9_-]{0,47}" required autocomplete="off" spellcheck="false"></label>
+        <label for="repository-module">Module ID<input id="repository-module" name="module_id" maxlength="48" pattern="[a-z][a-z0-9_-]{0,47}" required autocomplete="off" spellcheck="false"></label>
+        <label class="repository-wide" for="repository-url">Public GitHub repository URL<input id="repository-url" name="repository" type="url" maxlength="180" required autocomplete="off" spellcheck="false"></label>
+        <label class="repository-wide" for="repository-distribution">Distribution (optional)<input id="repository-distribution" name="distribution" maxlength="80" autocomplete="off" spellcheck="false" aria-describedby="repository-distribution-hint"><small id="repository-distribution-hint">Defaults to luigi-web-&lt;module-id&gt;.</small></label>
+      </div>
+      {{ trust_fields('register') }}
+      <button class="btn btn-primary" type="submit">{{ shell_icon('plus') }}<span>Register source</span></button>
+    </form>
+    {% else %}<p class="repository-disclosure">Registration is read-only. No deployment-approved owners are configured.</p>{% endif %}
+  </section>
+
+  <section class="repository-section" aria-labelledby="repository-jobs-title">
+    <h2 id="repository-jobs-title">Recent requests</h2>
+    {% for job in jobs %}
+    <article class="repository-row repository-job" data-job-state="{{ job.state }}" aria-labelledby="job-{{ job.id }}">
+      <header class="repository-row-header"><h3 id="job-{{ job.id }}">{{ job.source_id }} / {{ job.tag }}</h3><strong class="repository-job-state">{{ job.label }}</strong></header>
+      <p>{{ job.asset }}</p><small>SHA256 {{ job.sha256 }}</small>
+      {% if job.state == 'pending' %}<p>Waiting for the deployment worker.</p>{% elif job.state == 'installed' %}<p>Installation completed. The current next-start candidate is listed above.</p>{% endif %}
+      {% if job.error %}<p class="error">{{ job.error }}</p>{% endif %}
+    </article>
+    {% else %}<p class="module-empty">No installation requests.</p>{% endfor %}
+  </section>
+  {% endif %}
+</section>
+{% endblock %}

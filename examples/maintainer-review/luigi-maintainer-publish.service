@@ -1,0 +1,21 @@
+[Unit]
+Description=Luigi maintenance human-selected publication
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/luigi-web/maintainer-review/publish.env
+
+[Service]
+Type=oneshot
+User=luigi-maintainer
+Group=luigi-maintainer
+EnvironmentFile=/etc/luigi-web/maintainer-review/publish.env
+Environment=HOME=/var/lib/luigi-maintainer
+Environment=LUIGI_MAINTAINER_STATE_DIR=/var/lib/luigi-maintainer
+ReadWritePaths=/var/lib/luigi-maintainer
+InaccessiblePaths=-/var/lib/luigi-maintainer/copilot
+ExecStart=/usr/bin/flock --nonblock --conflict-exit-code 0 /var/lib/luigi-maintainer/controller.lock /opt/luigi-web/.venv/bin/python -m luigi_web.modules.feedback.review_worker --publish
+TimeoutStartSec=15m
+NoNewPrivileges=true
+RestrictNamespaces=true
+ProtectControlGroups=true
+CapabilityBoundingSet=

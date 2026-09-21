@@ -3,6 +3,7 @@ from contextlib import ExitStack
 from html.parser import HTMLParser
 import os
 from pathlib import Path
+from importlib.resources import files as module_files
 import socket
 import sqlite3
 import sys
@@ -66,7 +67,7 @@ class CardsPreviewUpgradeTests(unittest.TestCase):
         self.assertEqual(self.client.get("/").status_code, 200)
 
     def test_cards_module_stylesheets_are_mounted_and_no_store(self):
-        directory = ROOT / "luigi_web" / "modules" / "cards" / "static"
+        directory = Path(str(module_files("luigi_web.modules.cards"))) / "static"
         stylesheets = list(directory.rglob("*.css"))
         self.assertTrue(stylesheets)
         for stylesheet in stylesheets:

@@ -7,6 +7,10 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+if ! id luigi-web-preview >/dev/null 2>&1; then
+  useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin luigi-web-preview
+fi
+install -d -o luigi-web-preview -g luigi-web-preview -m 0700 /opt/luigi-web-preview-data
 install -o root -g root -m 0755 \
   "$ROOT/scripts/luigi_web_preview_helper.py" \
   /usr/local/sbin/luigi-web-preview

@@ -240,4 +240,4 @@ history, unknown Steam values, filtered empty states, rejected writes, and
 explicit recovery. Use an unused loopback port if another process owns the
 default. These are validation commands and acceptance checks, not a claim
 that a particular checkout has passed them. Broader repository validation
-remains documented in [architecture.md](architecture.md#validation).
+remains documented in [../README.md](../README.md).

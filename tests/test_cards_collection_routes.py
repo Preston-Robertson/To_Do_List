@@ -15,7 +15,7 @@ if __name__ == "__main__":
 
 from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
-from fastapi.staticfiles import StaticFiles
+from luigi_web.core.static_assets import ModuleStaticFiles
 from fastapi.testclient import TestClient
 
 from luigi_web import auth
@@ -32,7 +32,7 @@ def fixture_app() -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.include_router(router)
     app.include_router(collection_router)
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    app.mount("/static", ModuleStaticFiles(directory=str(STATIC_DIR)), name="static")
     return app
 
 

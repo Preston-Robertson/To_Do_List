@@ -1,0 +1,10 @@
+[Unit]
+Description=Process explicitly approved maintenance releases
+
+[Timer]
+OnBootSec=1m
+OnUnitInactiveSec=1m
+Unit=luigi-maintainer-release.service
+
+[Install]
+WantedBy=timers.target

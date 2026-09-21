@@ -63,19 +63,51 @@ The local Feedback database is excluded from the Assistant and global search.
 Exports require explicit review and are served with no-store cache controls.
 An explicit **Queue for maintainer** action separately approves a redacted copy
 of selected request fields and acceptance criteria for GitHub Copilot and a
-draft GitHub pull request. Raw Feedback and its database are not exposed to the
-worker. Approval never includes Finance, task, card, character, environment, or
+maintenance review. The local worker still uses remote Copilot inference; it
+is not offline or local-only inference. Raw Feedback and its database are not
+exposed to the worker. Approval never includes Finance, task, card, character, environment, or
 deployment records.
 
-The autonomous maintainer runs as a separate OS identity. Its Copilot session
+The maintenance worker runs separately from the web identity. Its Copilot session
 uses custom bounded repository tools only; shell, web, MCP, Git, deployment,
-email, queue, and secret tools are disabled. The controller owns publishing
-credentials, accepts only credential-free HTTPS repository configuration, and
-cannot merge or deploy. Agent-authored code runs only in pull-request CI, where
-checkout credentials are removed and workflow permissions are read-only.
-Branch protection and human review remain required. Email is notification-only
-and replies are never treated as authorization. Full boundaries and setup are
-documented in [`docs/autonomous-maintainer.md`](docs/autonomous-maintainer.md).
+email, queue, and secret tools are disabled. Generated code executes only in a
+secret-free rootless Linux sandbox or independent read-only CI, never in a host
+process holding tokens. The image is immutable, pinned locally, and built from
+reviewed source before secrets are provisioned; runtime networking and secret
+mounts are forbidden. Rootless containers still share the host kernel.
+
+Generation/fetch, publication, refresh, SMTP, release, and preview use distinct
+role environments. Only release receives `LUIGI_RELEASE_GITHUB_TOKEN`; it has
+no branch-protection bypass. Current controllers share a trusted OS identity and
+private state containing Copilot runtime files: separate environment files are
+not complete process isolation. The notifier and gateway have separate identities.
+All role secrets are root-owned, outside application-readable/writable paths.
+
+Protected `LUIGI_WEB_MAINTAINER_REVIEW_ENABLED` and `LUIGI_WEB_RELEASE_ENABLED`
+default off. Human option selection authorizes publication only. Explicit
+authenticated, CSRF-protected release approval binds a version to the selected
+option, exact published HEAD, successful independent CI, and live preview
+evidence. The separate controller rechecks required `offline-regression` status,
+strict branch protection, human review, and tag availability before merge/tag;
+the coding agent cannot approve or release. No controller deploys production.
+Partial remote outcomes require reconciliation, not blind retries.
+
+Candidate content is served only by a separately authenticated HTTPS gateway on
+a different hostname, never at the production origin. The production landing
+sends a 60-second, single-use HEAD-bound ticket in a POST body. The gateway uses
+a host-only Secure/HttpOnly/Strict session, proxies only a validated local Unix
+socket, and receives no main UI, Finance, Copilot, GitHub, or release token.
+Only the web ticket issuer and gateway share the protected gateway key; the
+preview controller and candidate never receive it. Stop/expiry blocks access;
+stopping clears readiness and blocks release. The shared queue contains audit
+and bounded-retry notification outbox records, not raw Feedback. Emails contain
+generic IDs and an authenticated review link, never approval capabilities or
+private request text; replies are not consumed.
+
+See [docs/autonomous-maintainer.md](docs/autonomous-maintainer.md) and
+[docs/maintainer-test-preview.md](docs/maintainer-test-preview.md). Live Linux,
+GitHub, SMTP, and HTTPS gateway integration remains a deployment acceptance
+requirement, not a claim established by the offline suite.
 
 ## Storage and backups
 

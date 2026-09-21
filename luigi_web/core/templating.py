@@ -13,14 +13,29 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from jinja2 import ChoiceLoader, FileSystemLoader, PrefixLoader
 
-from ..paths import PACKAGE_DIR, STATIC_DIR, TEMPLATES_DIR
+from ..paths import STATIC_DIR, TEMPLATES_DIR
 from .module_registry import BUILTIN_MODULE_IDS, ModuleRegistry, NavigationItem
 
 _TEMPLATES: WeakSet[Jinja2Templates] = WeakSet()
 
 
+def builtin_resource_directories(resource: str) -> list[Path]:
+    directories = []
+    for name in BUILTIN_MODULE_IDS:
+        package = f"luigi_web.modules.{name}"
+        try:
+            directory = Path(str(resources.files(package).joinpath(resource)))
+        except ModuleNotFoundError as error:
+            if error.name != package:
+                raise
+            continue
+        if directory.is_dir():
+            directories.append(directory)
+    return directories
+
+
 def asset_version() -> str:
-    roots = [STATIC_DIR, *(PACKAGE_DIR / "modules" / name / "static" for name in BUILTIN_MODULE_IDS)]
+    roots = [STATIC_DIR, *builtin_resource_directories("static")]
     return str(int(max((
         path.stat().st_mtime for root in roots if root.exists()
         for path in root.rglob("*") if path.is_file()
@@ -57,7 +72,7 @@ _ASSET_VERSION = asset_version()
 
 def create_templates(*, package: str = "", namespace: str = "") -> Jinja2Templates:
     directories = [str(TEMPLATES_DIR)]
-    directories.extend(str(PACKAGE_DIR / "modules" / name / "templates") for name in BUILTIN_MODULE_IDS)
+    directories.extend(str(directory) for directory in builtin_resource_directories("templates"))
     loaders: list[Any] = [FileSystemLoader(directories)]
     if package:
         if not namespace:

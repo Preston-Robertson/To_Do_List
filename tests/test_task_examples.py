@@ -18,7 +18,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 
 from luigi_web.core.module_registry import Module, ModuleRegistry
+from luigi_web.core.static_assets import ModuleStaticFiles
 from luigi_web.modules.tasks import examples
+from luigi_web.paths import STATIC_DIR
 
 
 class ExampleMarkup(HTMLParser):
@@ -56,7 +58,7 @@ class TaskExamplesTests(unittest.TestCase):
         self.application.include_router(examples.router)
         self.module_directory = Path(examples.__file__).parent
         self.application.mount("/module-assets/tasks", StaticFiles(directory=self.module_directory / "static"))
-        self.application.mount("/static", StaticFiles(directory=self.module_directory.parents[1] / "core" / "static"))
+        self.application.mount("/static", ModuleStaticFiles(directory=STATIC_DIR))
         self.client = self.enterContext(TestClient(self.application, follow_redirects=False))
         self.authorization = {"Authorization": "Bearer synthetic-examples-session"}
 
@@ -206,7 +208,7 @@ class TaskExamplesTests(unittest.TestCase):
         template = (self.module_directory / "templates" / "task_examples.html").read_text(encoding="utf-8")
         self.assertNotRegex(template, r"https?://|hx-(get|post|put|patch|delete)|\son(?:click|change|submit)=")
         self.assertNotRegex(template.lower() + script.lower(), r"today|datepresettoday|/home/today")
-        icons = self.module_directory.parents[1] / "core" / "static" / "icons" / "lucide"
+        icons = STATIC_DIR / "icons" / "lucide"
         for name in re.findall(r"shell_icon\('([\w-]+)'\)", template):
             self.assertTrue((icons / (name + ".svg")).is_file(), name)
 

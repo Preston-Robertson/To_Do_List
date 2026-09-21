@@ -2,12 +2,13 @@ import unittest
 from datetime import date, timedelta
 from html.parser import HTMLParser
 from pathlib import Path
+from importlib.resources import files as module_files
 
 from jinja2 import ChoiceLoader, DictLoader, Environment, FileSystemLoader, select_autoescape
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TEMPLATES = ROOT / "luigi_web" / "modules" / "discipline" / "templates"
+TEMPLATES = Path(str(module_files("luigi_web.modules.discipline"))) / "templates"
 
 
 class Markup(HTMLParser):
@@ -174,7 +175,7 @@ class DisciplinePageTests(unittest.TestCase):
 
 class DisciplineAssetTests(unittest.TestCase):
     def setUp(self):
-        assets = ROOT / "luigi_web/modules/discipline/static"
+        assets = Path(str(module_files("luigi_web.modules.discipline"))) / "static"
         self.script = (assets / "discipline.js").read_text(encoding="utf-8")
         self.styles = (assets / "discipline.css").read_text(encoding="utf-8")
 

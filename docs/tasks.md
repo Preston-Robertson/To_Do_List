@@ -219,11 +219,11 @@ preferences still use browser storage, unlike the memory-only examples.
 The implementation retains Python, FastAPI, Jinja, HTMX, and locally served
 assets, with no new language, framework, CDN, or dependency requirement.
 Relevant ownership is in
-[../luigi_web/modules/tasks/routes.py](../luigi_web/modules/tasks/routes.py),
-[../luigi_web/modules/tasks/templates/partials/task_form.html](../luigi_web/modules/tasks/templates/partials/task_form.html),
-[../luigi_web/modules/tasks/static/task-editor.js](../luigi_web/modules/tasks/static/task-editor.js),
-[../luigi_web/modules/tasks/static/task-views.js](../luigi_web/modules/tasks/static/task-views.js),
-and [../luigi_web/modules/tasks/examples.py](../luigi_web/modules/tasks/examples.py).
+[../module-repos/tasks/src/luigi_web/modules/tasks/routes.py](../module-repos/tasks/src/luigi_web/modules/tasks/routes.py),
+[../module-repos/tasks/src/luigi_web/modules/tasks/templates/partials/task_form.html](../module-repos/tasks/src/luigi_web/modules/tasks/templates/partials/task_form.html),
+[../module-repos/tasks/src/luigi_web/modules/tasks/static/task-editor.js](../module-repos/tasks/src/luigi_web/modules/tasks/static/task-editor.js),
+[../module-repos/tasks/src/luigi_web/modules/tasks/static/task-views.js](../module-repos/tasks/src/luigi_web/modules/tasks/static/task-views.js),
+and [../module-repos/tasks/src/luigi_web/modules/tasks/examples.py](../module-repos/tasks/src/luigi_web/modules/tasks/examples.py).
 
 From the repository root, in a clean development environment without production
 credentials, the focused and full regression entry points are:

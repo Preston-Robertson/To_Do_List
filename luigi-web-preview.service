@@ -5,12 +5,26 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=luigi-web
-Group=luigi-web
+User=luigi-web-preview
+Group=luigi-web-preview
 WorkingDirectory=/opt/luigi-web-preview
 EnvironmentFile=/etc/luigi-web/preview.env
 Environment=PIP_NO_CACHE_DIR=1
-ExecStart=/opt/luigi-web-preview-runtime/.venv/bin/uvicorn app:app \
+Environment=PYTHON_DOTENV_DISABLED=1
+Environment=LUIGI_WEB_DATA_DIR=/opt/luigi-web-preview-data
+Environment=LUIGI_WEB_MODULES=tasks,discipline,planning
+Environment=LUIGI_WEB_LLM_PROVIDER=disabled
+Environment=LUIGI_WEB_MAINTAINER_REVIEW_ENABLED=0
+Environment=LUIGI_WEB_RELEASE_ENABLED=0
+Environment=LUIGI_WEB_RECURRENCE_OWNER=external
+UnsetEnvironment=LUIGI_WEB_DEPLOY_TOKEN LUIGI_WEB_LLM_API_KEY LUIGI_WEB_GNW_SHEET_ID LUIGI_WEB_GNW_CREDS_FILE PGOPTIONS PGPASSWORD PGSERVICE PGSERVICEFILE PGPASSFILE
+ExecStartPre=+/usr/local/sbin/luigi-web-preview verify
+ExecStart=/usr/bin/env PYTHON_DOTENV_DISABLED=1 \
+  LUIGI_WEB_DATA_DIR=/opt/luigi-web-preview-data \
+  LUIGI_WEB_MODULES=tasks,discipline,planning LUIGI_WEB_LLM_PROVIDER=disabled \
+  LUIGI_WEB_MAINTAINER_REVIEW_ENABLED=0 LUIGI_WEB_RELEASE_ENABLED=0 \
+  LUIGI_WEB_RECURRENCE_OWNER=external \
+  /opt/luigi-web-preview-runtime/.venv/bin/uvicorn app:app \
   --host ${LUIGI_WEB_BIND} \
   --port ${LUIGI_WEB_PORT} \
   --workers 1 \
@@ -22,6 +36,7 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/opt/luigi-web-preview-data
+InaccessiblePaths=/opt/luigi-web /etc/luigi-web -/var/lib/luigi-web -/var/lib/luigi-maintainer -/var/lib/luigi-maintainer-queue
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

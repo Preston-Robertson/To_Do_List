@@ -9,6 +9,8 @@
     </dl>
   </header>
 
+  <p><a href="/modules/repositories">{{ shell_icon('blocks') }} Module repositories</a></p>
+
   <p class="module-notice module-notice-error error" data-module-error role="alert" tabindex="-1" {% if not error %}hidden{% endif %}>{{ error }}</p>
   {% if saved %}
   <p class="module-notice{% if pending_restart %} module-notice-restart{% else %} module-notice-saved{% endif %}" data-module-notice role="status" tabindex="-1">

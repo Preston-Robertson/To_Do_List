@@ -1,4 +1,5 @@
 from pathlib import Path
+from importlib.resources import files as module_files
 import json
 import re
 import unittest
@@ -6,12 +7,13 @@ import unittest
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from luigi_web.core.static_assets import ModuleStaticFiles
 from fastapi.testclient import TestClient
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PLANNING = ROOT / "luigi_web" / "modules" / "planning"
+PLANNING = Path(str(module_files("luigi_web.modules.planning")))
 
 
 def synthetic_state():
@@ -46,7 +48,7 @@ def render_home(state=None):
 def synthetic_home_app():
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     layout = None
-    app.mount("/static", StaticFiles(directory=ROOT / "luigi_web" / "core" / "static"))
+    app.mount("/static", ModuleStaticFiles(directory=ROOT / "luigi_web" / "core" / "static"))
     app.mount("/module-assets/planning", StaticFiles(directory=PLANNING / "static"))
 
     @app.get("/home", response_class=HTMLResponse)
@@ -74,7 +76,7 @@ def synthetic_home_app():
         from luigi_web.modules.tasks import recurrence, repository
 
         templates = Environment(loader=FileSystemLoader(
-            ROOT / "luigi_web" / "modules" / "tasks" / "templates"
+            Path(str(module_files("luigi_web.modules.tasks"))) / "templates"
         ), autoescape=select_autoescape())
         templates.globals.update(
             recurring_days_list=repository.recurring_days_list,

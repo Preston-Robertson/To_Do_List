@@ -13,6 +13,7 @@ from luigi_web.maintainer_agent import (
     PermissionRequiredError,
     SafeWorkspace,
     WorkspacePolicyError,
+    system_message,
 )
 from luigi_web.maintainer_worker import WorkerConfig, WorktreeContext, run_once
 from luigi_web.maintainer_worker import _askpass_path
@@ -120,6 +121,38 @@ class SafeWorkspaceTests(unittest.TestCase):
         )
         result = self.workspace.check_syntax(["luigi_web/example.py"])
         self.assertEqual(result["luigi_web/example.py"], "Python parsed")
+
+    def test_installed_feedback_instructions_do_not_depend_on_local_notes(self) -> None:
+        content = system_message()
+        self.assertIn("Feedback Agent Operating Instructions", content)
+        self.assertIn("Never read raw Feedback", content)
+        self.assertIn("PostgreSQL backup copy", content)
+        self.assertIn("separately approves release", content)
+        with self.assertRaises(PermissionRequiredError):
+            self.workspace.create_file(
+                "module-repos/feedback/src/luigi_web/modules/feedback/maintainer-policy.md",
+                "Replacement instructions",
+            )
+
+    def test_extracted_security_surfaces_cannot_be_changed(self) -> None:
+        for path in (
+            "luigi_web/core/module_installer.py",
+            "module-repos/feedback/src/luigi_web/modules/feedback/release.py",
+            "module-repos/finance/src/luigi_web/modules/finance/routes.py",
+            "module-repos/tasks/src/luigi_web/modules/tasks/repository.py",
+            "module-repos/media/pyproject.toml",
+            "module-repos/tasks/.github/workflows/release.yml",
+            "luigi_web/modules/__init__.py",
+            "luigi_web/__init__.py",
+            "requirements-modules.txt",
+            "module-repos/tasks/.gitattributes",
+            "examples/maintainer-review/common.conf",
+        ):
+            with self.subTest(path=path), self.assertRaises(PermissionRequiredError):
+                self.workspace.create_file(path, "Example protected content")
+        for path in (".env.example", "LOCAL_NOTES.md", "temp/example.txt", "examples/maintainer-review/publish.env.example"):
+            with self.subTest(path=path), self.assertRaises(WorkspacePolicyError):
+                self.workspace.read_file(path)
 
 
 class MaintainerWorkerFlowTests(unittest.TestCase):

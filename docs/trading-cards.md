@@ -246,7 +246,7 @@ estimate. Legacy partial priced quantities remain legacy after round-trip.
 ## Pages and routes
 
 The Cards manifest mounts
-[../luigi_web/modules/cards/composition.py](../luigi_web/modules/cards/composition.py),
+[../module-repos/cards/src/luigi_web/modules/cards/composition.py](../module-repos/cards/src/luigi_web/modules/cards/composition.py),
 which includes the library, analysis, collection, and version routers once.
 Existing Catalog, Decks, Collection, and Card Data URLs are unchanged. The new
 deck-header links are **Build checklist** and **Versions**; **Stats** remains a

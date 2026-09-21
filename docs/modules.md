@@ -1,15 +1,16 @@
 # Modules
 
 Luigi Web is a modular monolith: one Python/FastAPI host, a shared Jinja/HTMX
-shell, and purpose-built feature packages. All existing built-ins remain
-bundled and enabled by default. This refactor ships real module folders and
-an independently installable example; it does not publish separate feature
-repositories or releases.
+shell, and independently packaged features. The 11 canonical source roots in
+[../module-repos](../module-repos) can each become a separate GitHub repository.
+The combined checkout exposes all 11 through fixed namespace paths and enables
+available reserved features by default. An installed host alone exposes zero
+features. No remote repositories or releases have been created by extraction.
 
 ## Built-in catalog
 
 Each built-in has a manifest and HTTP controller under
-`luigi_web/modules/<id>/`, with its feature templates under `templates/` in
+`module-repos/<id>/src/luigi_web/modules/<id>/`, with feature templates under `templates/` in
 that package. The current catalog is:
 
 | ID | Responsibility | Required module IDs |
@@ -28,10 +29,11 @@ that package. The current catalog is:
 
 These are selection dependencies, not a claim of complete domain independence.
 Tasks and Discipline both use LuigiBot's shared PostgreSQL schema through
-[../luigi_web/modules/tasks/repository.py](../luigi_web/modules/tasks/repository.py).
+[../module-repos/tasks/src/luigi_web/modules/tasks/repository.py](../module-repos/tasks/src/luigi_web/modules/tasks/repository.py).
 The legacy [../luigi_web/db.py](../luigi_web/db.py) import is an identity alias
 to that adapter. Discipline therefore still needs shared task storage even
-when the Tasks UI is disabled.
+when the Tasks UI is disabled. It declares `luigi-web-tasks` as a Python package
+dependency; package dependencies and enabled-module dependencies are distinct.
 
 ## Selecting modules
 
@@ -41,7 +43,8 @@ resolves the selection in this order:
 1. An explicit non-`None` argument to `build_registry(selection=...)`.
 2. The `LUIGI_WEB_MODULES` process environment variable, if present.
 3. The saved module-selection file, if present.
-4. All 11 built-in IDs, never external modules by default.
+4. Available reserved feature IDs, never external modules by default. This is
+  all 11 in the combined checkout and none in a host-only wheel installation.
 
 The saved file is selected by `LUIGI_WEB_MODULES_FILE`, otherwise it is
 `modules.json` under `DATA_DIR`. Selection values are comma-separated IDs or
@@ -51,7 +54,8 @@ duplicates, missing dependencies, dependency cycles, and enabled navigation
 collisions are configuration errors. Dependencies are not silently added by
 the registry.
 
-For a local Cards and Characters deployment, after installing the host and
+For a local Cards and Characters deployment, after installing the host, both
+feature distributions and their declared dependencies, and
 supplying `LUIGI_WEB_UI_TOKEN` through your protected process environment:
 
 ```powershell
@@ -71,9 +75,10 @@ module manager without PostgreSQL startup or feature lifecycle hooks. Supplying
 module selection does not supply authentication credentials or load an env file.
 
 Disabling a module does not delete its data, import its router, or run its
-lifecycle hooks through the registry. Built-in manifests and the bundled
-shared task adapter still load for compatibility; built-in templates remain
-available to the shared loader. Disabling is not uninstallation or a data
+lifecycle hooks through the registry. Available manifests can still load for
+discovery, and installed feature templates remain available to the shared
+loader. The Tasks adapter is optional host-side but required by Discipline.
+Disabling is not uninstallation or a data
 security boundary. Existing domain-specific authentication and storage rules
 remain in force.
 
@@ -93,8 +98,13 @@ from running state. Missing dependencies are rejected by the server.
 If `LUIGI_WEB_MODULES` is present, selection is deployment-managed: the GUI is
 read-only for selection, and the save operation rejects changes. Remove that
 variable in deployment configuration and restart to return control to the
-saved file. The GUI cannot change the external-module allow-list, install
-packages from Git URLs, or broaden its own deployment permissions.
+saved file. The GUI cannot change deployment allow-lists or execute Git/pip.
+The separate core `/modules/repositories` manager registers policy-approved
+public repositories and queues exact release wheels, with authentication,
+same-origin browser CSRF and explicit code-trust confirmation. Its worker stages
+code for a later restart; see [module-repositories.md](module-repositories.md).
+Save an explicit selection before staging a new reserved feature if it must not
+join the default available-feature selection on restart.
 
 The version-1 file format, implemented in
 [../luigi_web/core/module_settings.py](../luigi_web/core/module_settings.py), is:
@@ -112,29 +122,35 @@ module. Keep instance selections out of version control.
 
 ## Packaging and paths
 
-[../pyproject.toml](../pyproject.toml) defines `luigi-web` version `0.1.0`,
-requires Python 3.11+, and takes runtime dependencies unchanged from
-[../requirements.txt](../requirements.txt). From the repository root, in an
+[../pyproject.toml](../pyproject.toml) defines the `luigi-web` version `0.2.0`
+host for Python 3.11+. Each feature has its own distribution and dependencies,
+with `luigi-web>=0.2,<0.3` compatibility and the existing version-1 manifest API.
+Transitional host helpers mean these packages are not standalone servers or
+compatible with arbitrary host versions. From the combined checkout, in an
 activated virtual environment:
 
 ```powershell
 pip install -r requirements.txt
-pip install -e . --no-deps
+pip install -r requirements-modules.txt
 luigi-web --help
 ```
 
 The CLI accepts `--host` and `--port`, defaulting to `127.0.0.1:8000`, and runs
 one Uvicorn worker. Its help path parses arguments without importing the
-application or initializing integrations. It has no module-install or
-module-selection command. Existing source deployments retain
+application or initializing integrations. `luigi-web module-install --pending`
+processes at most one queued release in a separate deployment worker; `--job`
+targets one job and `--abandon` requires `--confirm-worker-stopped`. That CLI path
+also avoids importing the application. Selection remains in `/modules` or
+deployment configuration. Existing source deployments retain
 `python -m uvicorn app:app --host 127.0.0.1 --port 8080`; the root compatibility
 [../app.py](../app.py) remains unchanged.
 
-To build the host and example wheels locally:
+To build the host, a feature, and example wheels locally:
 
 ```powershell
 pip install "setuptools>=68" wheel
 pip wheel . --no-deps --no-build-isolation --wheel-dir dist
+pip wheel ./module-repos/cards --no-deps --no-build-isolation --wheel-dir dist
 pip wheel ./examples/example-module --no-deps --no-build-isolation --wheel-dir dist
 ```
 
@@ -142,15 +158,19 @@ In a separate activated environment, installing the host wheel installs its
 declared runtime dependencies as well:
 
 ```powershell
-pip install ./dist/luigi_web-0.1.0-py3-none-any.whl
+pip install ./dist/luigi_web-0.2.0-py3-none-any.whl
+pip install ./dist/luigi_web_cards-0.2.0-py3-none-any.whl
 luigi-web --help
 ```
 
-The wheel contains Python packages, the four shared HTML templates in
-[../luigi_web/core/templates](../luigi_web/core/templates), feature templates,
-and locally served assets. Shared resources are rooted in
+The host wheel contains core Python packages, shared HTML templates in
+[../luigi_web/core/templates](../luigi_web/core/templates), and shell assets.
+Each feature wheel owns its Python package, templates and browser assets.
+Shared resources are rooted in
 [../luigi_web/core/static](../luigi_web/core/static); public `/static/...` URLs
-are unchanged. An installed host does not require a source checkout or root
+are unchanged through the legacy package-resource overlay. Missing feature
+assets return 404 rather than falling back to copies in the host wheel.
+An installed host does not require a source checkout or root
 template/static directories. Use `luigi-web` or
 `uvicorn luigi_web.application:app` outside a checkout, not `uvicorn app:app`.
 
@@ -184,15 +204,16 @@ explicit, authenticated HTTP contract; that sandbox is not supplied here.
 
 The working local package is documented in
 [../examples/example-module/README.md](../examples/example-module/README.md).
-For another reviewed repository, deployment installation can pin an immutable
-commit. Replace both repository placeholders and the commit placeholder;
-this is a syntax example, not a published module repository:
+For public release-wheel installation through the GUI, use the separately
+documented [repository policy and worker](module-repositories.md). That worker
+only parses and stages bounded pure-Python wheels: no source builds, Git, pip,
+package scripts, or imports of downloaded code. It does not install dependencies.
+The independently installable example uses its own package namespace; it
+demonstrates the general API, not the installer's stricter
+`luigi_web_extensions.<id>` namespace contract for new external release modules.
 
-```sh
-pip install "git+https://github.com/<owner>/<module-repo>.git@<full-immutable-commit-sha>"
-```
-
-Installation, approval, and enablement are separate steps:
+For ordinary deployment-installed external packages, installation, approval,
+and enablement are separate steps:
 
 1. Install a reviewed package into the same Python environment as the host.
 2. Approve its installed entry-point name in `LUIGI_WEB_EXTERNAL_MODULES`.
@@ -204,6 +225,9 @@ approved name. Unapproved packages are not loaded by discovery. The built-in
 default selection never enables an external package, even after approval.
 Before removing approval or uninstalling a module, remove it and any dependent
 modules from the next-start selection too; stale selected IDs fail validation.
+Repository-staged external entries instead derive discovery approval from their
+still-approved repository records; they are never enabled by default. Both
+paths load trusted code on restart, not sandboxed extensions.
 
 ### Version-1 contract
 
@@ -286,5 +310,5 @@ compile and serve its namespaced page separately.
 Frontend changes additionally require browser review at 1440x900 and 390x844,
 including remembered appearance modes and reduced-motion behavior. Do not use
 production records or private screenshots for validation. See
-[architecture.md](architecture.md) for the stack decision and remaining shared
-service work.
+[../README.md](../README.md) for repository-wide validation and synthetic preview
+commands.

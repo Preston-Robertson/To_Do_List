@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "luigi-web-tasks"
+version = "0.2.0"
+description = "Luigi Web task tracking and shared LuigiBot schema adapter"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["luigi-web>=0.2,<0.3", "fastapi==0.115.0", "sqlalchemy==2.0.34", "psycopg[binary]==3.2.13"]
+
+[project.entry-points."luigi_web.modules"]
+tasks = "luigi_web.modules.tasks.manifest:module"
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["luigi_web.modules.tasks*"]
+namespaces = true
+
+[tool.setuptools.package-data]
+"luigi_web.modules.tasks" = ["templates/**/*.html", "static/**/*"]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["**/__pycache__/*", "**/*.pyc", "**/.env*", "**/LOCAL_*", "**/*.db*", "**/*.sqlite*", "**/*credentials*"]

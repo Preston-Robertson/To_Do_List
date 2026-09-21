@@ -5,10 +5,28 @@ projects, personal media, and finance. Luigi Web is a server-rendered FastAPI
 application designed to run alongside
 the shared LuigiBot repository.
 
-The installable host now composes feature packages behind a shared Jinja/HTMX
-shell. All 11 built-ins remain enabled by default; smaller selections can run
-without PostgreSQL. The modular refactor preserves existing data ownership,
-authentication, and source deployment entry points.
+The 0.2 host composes independently packaged features behind a shared Jinja/HTMX
+shell. The 11 canonical feature roots live in [module-repos](module-repos), each
+ready for its own GitHub repository. The combined checkout makes all 11 available
+and selects them by default; an installed host alone has zero features. Smaller
+selections can run without PostgreSQL. Existing data ownership, authentication,
+and source deployment entry points are preserved. No remote repositories or
+releases are created simply by checking out this project.
+
+## Release Channels
+
+- `main` is the stable production branch. Admin self-update fetches only
+  `origin/main`, uses fast-forward-only updates, and retains the previous commit
+  under a local `rollback/pre-update-*` branch before changing code.
+- `testing` is the ongoing development and integration branch. Test changes
+  there, then promote reviewed changes to `main`; production never follows
+  `testing` automatically.
+- This checkout is prepared for the 1.0 launch. The application release label
+  is separate from the modular host/feature package compatibility version 0.2.
+  No release tag is implied by a branch name or an update operation.
+
+See [docs/releases.md](docs/releases.md) for promotion, first-update migration,
+rollback, and the remaining deployment acceptance checks.
 
 ## Highlights
 
@@ -51,9 +69,14 @@ authentication, and source deployment entry points.
   resources, abilities, saves, skills, spells, equipment, notes, and cloned
   level-path states, plus a reusable local rules library and guided class
   progression.
-- **Finance:** separately unlocked accounts, transactions, budgets,
-  investments, net worth, CSV import, reports, alerts, audit history, and
-  exports. Finance data is isolated from LuigiBot and the LLM.
+- **Finance:** separately unlocked overview with current balances, recorded
+  monthly flows, net worth, budgets, upcoming bills, and a filtered ledger.
+  Local cash-flow, wealth, and housing scenarios add take-home income streams
+  and saved assumptions without changing actual balances or transactions.
+  The records workspace retains accounts, investments, CSV import/export,
+  reports, alerts, audit history, and backups. Finance stays isolated from
+  LuigiBot and the LLM. See [docs/finance.md](docs/finance.md) for assumptions,
+  limits, privacy, and synthetic preview commands.
 - **Assistant:** optional GitHub Copilot subscription or OpenAI-compatible chat
   with an allow-listed task tool registry, opened on demand from the shared
   toolbar. Opening the panel does not send a message or capture page content.
@@ -66,37 +89,23 @@ authentication, and source deployment entry points.
   with sharing across devices opt-in. See [docs/home.md](docs/home.md).
 - **Operations:** guided Daily/Weekly Review, verified preview-first shared-task
   restore, integration health, environment editor, self-update, local Feedback,
-  approved-feedback draft PR automation, bulk task actions, isolated branch
+  bulk task actions, isolated branch
   Preview, responsive navigation, and `Ctrl+K` global commands.
+- **Maintenance review (opt-in):** privacy-approved Feedback becomes two or three
+  sandbox-tested options with synthetic screenshots. A human selects publication,
+  reviews an isolated test application, and separately approves a versioned
+  merge/tag after verified CI. Both review and release gates default off; see
+  [docs/autonomous-maintainer.md](docs/autonomous-maintainer.md).
 - **Modules:** authenticated catalog and restart-time selection, packaged
-  templates/assets, and an API for deployment-approved external packages.
+  templates/assets, and public GitHub release registration and queued installation
+  constrained by deployment policy. A separate worker stages pinned wheels;
+  nothing hot-loads or automatically restarts the app.
 
 ## Screenshots
 
-Production screenshot filenames and privacy-safe capture guidance are documented
-in [`docs/screenshots/README.md`](docs/screenshots/README.md). The image block
-below stays commented until those files are added, so GitHub never displays
-broken images.
-
-<!-- Uncomment after adding the PNG files.
-
-| Home dashboard | Tasks board |
-|---|---|
-| ![Home dashboard](docs/screenshots/home-dashboard.png) | ![Tasks board](docs/screenshots/tasks-board.png) |
-
-| Tasks list | Calendar |
-|---|---|
-| ![Tasks list](docs/screenshots/tasks-list.png) | ![Calendar](docs/screenshots/calendar.png) |
-
-| Games and ratings | Command palette |
-|---|---|
-| ![Games](docs/screenshots/games.png) | ![Command palette](docs/screenshots/command-palette.png) |
-
-![Finance dashboard with synthetic data](docs/screenshots/finance.png)
-
-![Mobile Tasks](docs/screenshots/mobile-tasks.png)
-
--->
+Screenshot images remain local and are excluded from publication. Privacy-safe
+capture guidance is documented in
+[docs/screenshots/README.md](docs/screenshots/README.md); use synthetic data only.
 
 ## Privacy and security
 
@@ -153,7 +162,7 @@ Requirements:
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-pip install -e . --no-deps
+pip install -r requirements-modules.txt
 luigi-web --help
 Copy-Item .env.example .env
 ```
@@ -175,7 +184,10 @@ The installed `luigi-web` command also runs the host, for example
 `luigi-web --host 127.0.0.1 --port 8080`. Its `--help` path does not import the
 application or initialize databases. Source deployments can keep using
 [`app.py`](app.py) unchanged. See [docs/modules.md](docs/modules.md) for module
-selection, wheel installation, and the independently installable example.
+selection, wheel installation, and the independently installable example. The
+editable requirements above install the host and all 11 feature distributions;
+`pip install -e .` alone installs only the host. Fixed checkout namespace paths
+make feature source importable, but do not install dependencies or metadata.
 
 ## Modules
 
@@ -194,25 +206,36 @@ luigi-web --host 127.0.0.1 --port 8080
 
 Use `none` for core-only startup without PostgreSQL. Disabling modules leaves
 their data intact and skips their routers and lifecycle hooks. It does not
-remove bundled compatibility code: Tasks and Discipline still share the
-LuigiBot adapter when those features are used.
+uninstall packages: Tasks and Discipline still share the Tasks package's
+LuigiBot adapter when those features are used. Discipline requires the Tasks
+Python distribution even with the Tasks UI off.
 
 Selection priority is an explicit registry argument, then `LUIGI_WEB_MODULES`,
-then the saved module-selection file, then all built-ins. The authenticated
+then the saved module-selection file, then all available reserved features. The authenticated
 `/modules` page filters the catalog and saves validated selections atomically
 for the **next restart**, without hot reload or deployment. When
 `LUIGI_WEB_MODULES` is set, selection is deployment-managed and read-only there.
 
-External modules require installed entry points approved through the
-deployment-only `LUIGI_WEB_EXTERNAL_MODULES` allow-list, followed by selection.
-Installation alone never enables one. The GUI cannot install Git URLs or
-change this allow-list. These modules are trusted code with the host process's
-privileges, not sandboxed plugins.
+The core `/modules/repositories` page remains available with Admin disabled;
+Admin also links to it. A deployment-approved owner list permits authenticated
+registration with explicit code-trust confirmation, or a read-only policy file
+supplies fixed repositories. Users queue an exact public GitHub release tag,
+wheel filename, and SHA-256. A separate worker validates and stages the wheel
+for the next restart, with dependencies already installed. It never clones Git,
+builds source, runs pip, or restarts Uvicorn. Save an explicit `/modules` selection
+before adding reserved features if they must not join the default at restart.
+
+Separately installed external packages can still use the deployment-only
+`LUIGI_WEB_EXTERNAL_MODULES` entry-point allow-list. Repository-staged external
+packages derive approval from the repository policy and still require selection.
+Neither policy is editable by Admin. Modules are trusted code with the host
+process's secrets and data privileges, not sandboxed plugins.
 
 See [docs/modules.md](docs/modules.md) for configuration and the versioned API,
-and [examples/example-module/README.md](examples/example-module/README.md) for
-the real independently installable example. This is a shipped framework and
-example package, not a claim that all features have separate published repos.
+and [docs/module-repositories.md](docs/module-repositories.md) for release
+publication, GUI installation, and the optional one-time worker setup. The
+[example package](examples/example-module/README.md) demonstrates the core API;
+the 11 feature roots are independent source packages, not already published repos.
 
 ## Configuration
 
@@ -224,6 +247,8 @@ control. Core settings:
 | `LUIGI_WEB_MODULES` | Comma-separated IDs or `none`; overrides saved selection and makes GUI selection read-only |
 | `LUIGI_WEB_MODULES_FILE` | Optional selection-file path; defaults to `DATA_DIR/modules.json` |
 | `LUIGI_WEB_EXTERNAL_MODULES` | Deployment-only allow-list of installed `luigi_web.modules` entry-point names |
+| `LUIGI_WEB_MODULE_REPOSITORY_OWNERS` | Deployment-only public GitHub owners allowed for GUI repository registration |
+| `LUIGI_WEB_MODULE_REPOSITORIES_FILE` | Optional absolute path to a deployment-owned, read-only JSON repository policy |
 | `LUIGI_WEB_DATA_DIR` | Optional writable defaults root; source `data/` or platform per-user storage when installed |
 | `LUIGI_WEB_PG_*` | Shared LuigiBot PostgreSQL connection |
 | `LUIGI_WEB_PG_CONNECT_TIMEOUT` | Connection timeout in seconds, clamped to `1`–`30` (default `5`) |
@@ -318,10 +343,13 @@ which authentication methods were unavailable without exposing credentials.
 Feedback stays in the local inbox until explicitly reviewed and exported or
 approved for the separate maintainer queue. Only privacy-screened requests
 enter that queue; raw Feedback and application records are not sent to the
-coding worker. The optional worker creates draft pull requests, never merges
-or deploys them. See
+coding worker. The local worker uses remote GitHub Copilot inference, not an
+offline LLM. Candidate execution is secret-free and rootless; publication
+requires human option selection. A separate release controller may merge and
+tag only after explicit UI approval bound to verified CI, preview HEAD, and
+version. It never deploys production. Email is notification-only. See
 [docs/autonomous-maintainer.md](docs/autonomous-maintainer.md) for the trust
-boundary and deployment requirements.
+boundary, protected default-off gates, and unverified Linux deployment checks.
 
 ## Future features
 
@@ -356,7 +384,9 @@ git diff --check
 
 Application code lives in [luigi_web](luigi_web), with core resources under
 [luigi_web/core](luigi_web/core) and feature routes/templates under
-[luigi_web/modules](luigi_web/modules). Root [app.py](app.py) intentionally
+[module-repos](module-repos), in each root's `src/luigi_web/modules/<id>` package.
+The host retains the namespace bridge and legacy import aliases, not duplicate
+feature implementations. Root [app.py](app.py) intentionally
 remains the stable `uvicorn app:app` compatibility entry point used by source
 development and the supplied systemd service. The installed CLI also runs one
 worker because Undo, chat history, and live integration state remain
@@ -375,9 +405,8 @@ namespaces are covered separately by the example's packaging tests.
 Frontend changes also need browser review at 1440x900 and 390x844. The shell
 uses local IBM Plex Sans fonts and Lucide icons, remembers Light/Dark/System
 appearance, and includes reduced-motion and responsive styles; no CDN or
-React/TypeScript build is required. The reasons for retaining the current
-stack and the remaining shared-service work are in
-[docs/architecture.md](docs/architecture.md).
+React/TypeScript build is required. Module boundaries and supported extension
+APIs are documented in [docs/modules.md](docs/modules.md).
 
 For a disposable local UI preview, run:
 
@@ -440,15 +469,10 @@ The approved Home layout is now live at `/home`. The separate authenticated
 `/home/preview` remains a synthetic comparison page: its simulated changes
 are browser-memory-only and reset on reload or **Reset demo**. See
 [docs/home.md](docs/home.md) for Today storage, layout compatibility, and
-focused validation. Earlier modular-workspace checks are recorded in
-[docs/modular-validation-2026-09-17.md](docs/modular-validation-2026-09-17.md).
+focused validation.
 
 Repository guidance:
 
-- [`AGENTS.md`](AGENTS.md) — coding-agent rules, privacy constraints, and
-  validation requirements
-- [`docs/architecture.md`](docs/architecture.md) — storage boundaries and
-  technical design
 - [docs/modules.md](docs/modules.md) - selection, packaging, and trusted
   external-module contracts
 - [examples/example-module/README.md](examples/example-module/README.md) -
@@ -456,17 +480,22 @@ Repository guidance:
 - [docs/discipline.md](docs/discipline.md) - live annual heatmaps, weekly targets,
   Month/Year/Log history, pause/resume, browser-local organization, and separate
   synthetic history example
-- [`docs/discipline-v2-plan.md`](docs/discipline-v2-plan.md) — coordinated
-  LuigiBot Discipline migration
-- [`docs/task-events-plan.md`](docs/task-events-plan.md) — shared completion
-  and task activity event contract
+- [docs/tasks.md](docs/tasks.md) - task workflows and completion history
+- [docs/recurring-occurrences.md](docs/recurring-occurrences.md) - recurring
+  task instances and history
 - [`docs/preview-deployment.md`](docs/preview-deployment.md) — isolated Git
   branch Preview worktree/service setup
-- [`docs/autonomous-maintainer.md`](docs/autonomous-maintainer.md) — reviewed
-  Feedback-to-draft-PR worker and daily timer
-- [`docs/screenshots/README.md`](docs/screenshots/README.md) — public screenshot
+- [docs/autonomous-maintainer.md](docs/autonomous-maintainer.md) - Phase 2
+  human-approved options, isolated testing, release gates, and role deployment
+- [docs/maintainer-test-preview.md](docs/maintainer-test-preview.md) - separate
+  HTTPS test application, ticket/session boundary, and preview lifecycle
+- [`docs/screenshots/README.md`](docs/screenshots/README.md) — privacy-safe local screenshot
   capture checklist
 - [`SECURITY.md`](SECURITY.md) — security and sensitive-data policy
+
+Agent instructions, internal architecture notes, future coordination plans,
+and dated development reports remain developer-local, outside the published
+documentation.
 
 ## License
 

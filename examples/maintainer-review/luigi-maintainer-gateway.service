@@ -1,0 +1,24 @@
+[Unit]
+Description=Luigi isolated maintenance preview gateway
+After=network.target
+ConditionPathExists=/etc/luigi-web/maintainer-review/gateway.env
+
+[Service]
+Type=simple
+User=luigi-maintainer-gateway
+Group=luigi-maintainer-gateway
+EnvironmentFile=/etc/luigi-web/maintainer-review/gateway.env
+Environment=HOME=/var/lib/luigi-maintainer-gateway
+ReadWritePaths=/var/lib/luigi-maintainer-gateway
+ReadOnlyPaths=/var/lib/luigi-maintainer-preview
+InaccessiblePaths=/var/lib/luigi-maintainer /var/lib/luigi-maintainer-notify
+ExecStart=/opt/luigi-web/.venv/bin/python -m luigi_web.modules.feedback.test_preview --serve --port 58120
+Restart=on-failure
+RestartSec=10s
+NoNewPrivileges=true
+RestrictNamespaces=true
+ProtectControlGroups=true
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

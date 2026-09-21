@@ -1,0 +1,10 @@
+[Unit]
+Description=Prepare oldest eligible approved maintenance preview
+
+[Timer]
+OnBootSec=1m
+OnUnitInactiveSec=1m
+Unit=luigi-maintainer-preview.service
+
+[Install]
+WantedBy=timers.target

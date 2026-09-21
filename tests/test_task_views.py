@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 from html.parser import HTMLParser
 from pathlib import Path
+from importlib.resources import files as module_files
 import re
 import shutil
 import subprocess
@@ -15,7 +16,7 @@ from luigi_web.modules.tasks import events, repository
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TASKS_ROOT = ROOT / "luigi_web" / "modules" / "tasks"
+TASKS_ROOT = Path(str(module_files("luigi_web.modules.tasks")))
 HARNESS = Path(__file__).with_name("task_views_harness.js")
 STATUSES = ("Not Started", "In Progress", "Completed")
 
@@ -61,7 +62,7 @@ class TaskViewsRuntimeTests(unittest.TestCase):
         }
         environment["ELECTRON_RUN_AS_NODE"] = "1"
         result = subprocess.run(
-            [self.node, str(HARNESS), name],
+            [self.node, str(HARNESS), name, str(TASKS_ROOT / "static" / "task-views.js")],
             cwd=ROOT,
             env=environment,
             capture_output=True,

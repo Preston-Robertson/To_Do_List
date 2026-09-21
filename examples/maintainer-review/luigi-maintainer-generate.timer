@@ -1,0 +1,11 @@
+[Unit]
+Description=Generate maintenance review options daily
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=30m
+Persistent=true
+Unit=luigi-maintainer-generate.service
+
+[Install]
+WantedBy=timers.target

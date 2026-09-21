@@ -1,11 +1,11 @@
 # Screenshot capture guide
 
-This directory is reserved for public screenshots embedded in the repository
-README. Capture the final responsive shell with a temporary, fully synthetic
+Screenshot images in this directory remain local and are excluded from
+publication. Capture the final responsive shell with a temporary, fully synthetic
 dataset created only for screenshots. Never capture real Finance or personal
-task data.
+task data. Do not force-add ignored captures or link public documentation to them.
 
-## Required files
+## Suggested local captures
 
 | File | Page/state | Recommended viewport |
 |---|---|---|
@@ -26,11 +26,11 @@ task data.
    routing numbers, tax identifiers, credentials, tokens, private paths, host
    addresses, real transaction descriptions, or real balances.
 4. Keep browser zoom at 100% and hide browser developer tools.
-5. Capture PNG files at the exact names above—README markup is already staged
-   in an HTML comment and can be uncommented once the files exist.
+5. Capture PNG files using the suggested local names above. Keep captures out of
+   the published repository.
 6. Prefer lossless optimization (`oxipng` or equivalent) without resizing.
 7. Delete the screenshot-only Finance database after capture and inspect each
-   image at full resolution before publishing.
+   image at full resolution before retaining it locally.
 
 The application intentionally uses stable page headers, persistent sidebar
 width, drawers, and deterministic Board/List layouts so captures remain aligned

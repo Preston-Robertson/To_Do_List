@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh published maintenance verification
+
+[Timer]
+OnBootSec=1m
+OnUnitInactiveSec=1m
+Unit=luigi-maintainer-refresh.service
+
+[Install]
+WantedBy=timers.target

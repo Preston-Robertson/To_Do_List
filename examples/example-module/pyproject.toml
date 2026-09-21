@@ -7,7 +7,7 @@ name = "luigi-example"
 version = "0.1.0"
 description = "A read-only external module for Luigi Web"
 requires-python = ">=3.11"
-dependencies = ["luigi-web>=0.1,<0.2"]
+dependencies = ["luigi-web>=0.2,<0.3"]
 
 [project.entry-points."luigi_web.modules"]
 example = "luigi_example.manifest:module"

@@ -54,8 +54,7 @@ def run(command: list[str], *, env: dict[str, str] | None = None,
         env=env, check=False,
     )
     if check and result.returncode:
-        detail = (result.stderr or result.stdout or "command failed").strip()[:500]
-        raise HelperError(detail)
+        raise HelperError("Preview operation failed; command output is withheld to protect copied data")
     return result
 
 
@@ -90,7 +89,29 @@ def db_config(path: Path) -> dict[str, str]:
     missing = [key for key in DB_KEYS if not values.get(key)]
     if missing:
         raise HelperError(f"{path.name} is missing Preview database settings")
+    for key in ("LUIGI_WEB_PG_DB", "LUIGI_WEB_PG_USER"):
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]{0,62}", values[key]):
+            raise HelperError("Preview database and role must be plain identifiers")
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,253}", values["LUIGI_WEB_PG_HOST"]):
+        raise HelperError("Preview requires an explicit PostgreSQL TCP host")
+    port = values["LUIGI_WEB_PG_PORT"]
+    if not port.isascii() or not port.isdigit() or not 1 <= int(port) <= 65535:
+        raise HelperError("Invalid PostgreSQL port")
+    if any(char in values[key] for key in DB_KEYS for char in ("\r", "\n", "\x00")):
+        raise HelperError("Invalid PostgreSQL configuration")
     return values
+
+
+def isolated_databases() -> tuple[dict[str, str], dict[str, str]]:
+    source = db_config(PRODUCTION_ENV)
+    target = db_config(PREVIEW_ENV)
+    if source["LUIGI_WEB_PG_DB"].casefold() == target["LUIGI_WEB_PG_DB"].casefold():
+        raise HelperError("Preview must use a different database name from Production")
+    if source["LUIGI_WEB_PG_USER"].casefold() == target["LUIGI_WEB_PG_USER"].casefold():
+        raise HelperError("Preview must use a dedicated PostgreSQL role")
+    if source["LUIGI_WEB_PG_PASSWORD"] == target["LUIGI_WEB_PG_PASSWORD"]:
+        raise HelperError("Preview must not reuse the Production database password")
+    return source, target
 
 
 def pgpass_line(config: dict[str, str]) -> str:
@@ -117,7 +138,10 @@ def with_pgpass(source: dict[str, str], target: dict[str, str]):
         handle.write(pgpass_line(source) + "\n" + pgpass_line(target) + "\n")
         handle.close()
         os.chmod(handle.name, 0o600)
-        env = {**os.environ, "PGPASSFILE": handle.name}
+        env = {
+            "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8",
+            "PGPASSFILE": handle.name, "PGCONNECT_TIMEOUT": "5",
+        }
         return Path(handle.name), env
     except Exception:
         handle.close()
@@ -126,29 +150,68 @@ def with_pgpass(source: dict[str, str], target: dict[str, str]):
 
 
 def snapshot_database() -> None:
-    source = db_config(PRODUCTION_ENV)
-    target = db_config(PREVIEW_ENV)
+    source, target = isolated_databases()
     pgpass, env = with_pgpass(source, target)
-    dump_path = PREVIEW_DATA / "snapshot.dump"
-    PREVIEW_DATA.mkdir(parents=True, exist_ok=True)
     try:
-        run(["pg_dump", *pg_args(source), "--format=custom", "--no-owner",
-             "--no-privileges", "--file", str(dump_path)], env=env)
-        run(["psql", *pg_args(target), "--set", "ON_ERROR_STOP=1", "--command",
-             "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"], env=env)
-        run(["pg_restore", *pg_args(target), "--no-owner", "--no-privileges",
-             str(dump_path)], env=env)
+        verify_target(source, target, env)
+        with tempfile.TemporaryDirectory(prefix="luigi-preview-snapshot-") as directory:
+            dump_path = Path(directory) / "snapshot.dump"
+            run(["pg_dump", *pg_args(source), "--no-password", "--format=custom",
+                 "--schema=public", "--no-owner", "--no-privileges", "--file", str(dump_path)],
+                env={**env, "PGOPTIONS": "-c default_transaction_read_only=on"})
+            verify_target(source, target, env)
+            run(["pg_restore", *pg_args(target), "--no-password", "--no-owner", "--no-privileges",
+                 "--clean", "--if-exists", "--single-transaction", "--exit-on-error",
+                 str(dump_path)], env=env)
     finally:
-        dump_path.unlink(missing_ok=True)
         pgpass.unlink(missing_ok=True)
 
 
 def clear_preview_database() -> None:
-    target = db_config(PREVIEW_ENV)
+    source, target = isolated_databases()
     pgpass, env = with_pgpass(target, target)
     try:
-        run(["psql", *pg_args(target), "--set", "ON_ERROR_STOP=1", "--command",
-             "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"], env=env)
+        verify_target(source, target, env)
+        run(["psql", *pg_args(target), "--no-password", "--no-psqlrc", "--set", "ON_ERROR_STOP=1", "--command",
+             "BEGIN; DROP SCHEMA public CASCADE; CREATE SCHEMA public; COMMIT;"], env=env)
+    finally:
+        pgpass.unlink(missing_ok=True)
+
+
+def verify_target(source: dict[str, str], target: dict[str, str], env: dict[str, str]) -> None:
+    query = """
+        SELECT json_build_object(
+            'database', current_database(), 'role', current_user, 'session_role', session_user,
+            'unsafe_role', EXISTS (
+                SELECT 1 FROM pg_roles
+                                WHERE (rolname = current_user
+                                             AND (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls))
+                                     OR (rolname <> current_user AND pg_has_role(current_user, oid, 'MEMBER'))
+            ),
+            'source_access', EXISTS (
+                SELECT 1 FROM pg_database
+                WHERE datname = '%s' AND has_database_privilege(current_user, oid, 'CONNECT')
+            )
+        )
+    """ % source["LUIGI_WEB_PG_DB"]
+    result = run(["psql", *pg_args(target), "--no-password", "--no-psqlrc", "--tuples-only",
+                  "--no-align", "--set", "ON_ERROR_STOP=1", "--command", query],
+                 env={**env, "PGOPTIONS": "-c default_transaction_read_only=on"}, timeout=15)
+    try:
+        metadata = json.loads(result.stdout) if len(result.stdout) <= 4096 else None
+    except (ValueError, TypeError):
+        metadata = None
+    expected = {"database": target["LUIGI_WEB_PG_DB"], "role": target["LUIGI_WEB_PG_USER"],
+                "session_role": target["LUIGI_WEB_PG_USER"], "unsafe_role": False, "source_access": False}
+    if metadata != expected:
+        raise HelperError("Preview PostgreSQL isolation check failed: require a dedicated role without elevated privileges, memberships, or Production CONNECT access")
+
+
+def verify_database() -> None:
+    source, target = isolated_databases()
+    pgpass, env = with_pgpass(target, target)
+    try:
+        verify_target(source, target, env)
     finally:
         pgpass.unlink(missing_ok=True)
 
@@ -177,8 +240,9 @@ def assert_remote_branch(branch: str) -> None:
 def ensure_layout() -> None:
     if not PREVIEW_ENV.is_file() or not PREVIEW_UNIT.is_file():
         raise HelperError("Preview environment or service unit is not installed")
+    verify_database()
     PREVIEW_DATA.mkdir(parents=True, exist_ok=True)
-    user = pwd.getpwnam("luigi-web")
+    user = pwd.getpwnam("luigi-web-preview")
     os.chown(PREVIEW_DATA, user.pw_uid, user.pw_gid)
 
 
@@ -188,7 +252,7 @@ def install_dependencies() -> None:
         PREVIEW_RUNTIME.mkdir(parents=True, exist_ok=True)
         run(["/usr/bin/python3", "-m", "venv", str(PREVIEW_RUNTIME / ".venv")])
     run([str(python), "-m", "pip", "install", "--disable-pip-version-check",
-         "--no-cache-dir", "-r", str(PREVIEW_ROOT / "requirements.txt")])
+            "--no-cache-dir", "-r", str(PRODUCTION_ROOT / "requirements.txt")])
 
 
 def service_active() -> bool:
@@ -258,6 +322,7 @@ def update() -> dict:
 
 
 def restart() -> dict:
+    verify_database()
     if not PREVIEW_ROOT.exists():
         raise HelperError("Preview does not exist")
     run(["systemctl", "restart", SERVICE])
@@ -282,6 +347,9 @@ def main() -> None:
     if len(sys.argv) not in {2, 3}:
         raise HelperError("expected one allow-listed operation")
     action = sys.argv[1]
+    if action == "verify" and len(sys.argv) == 2:
+        verify_database()
+        emit({"ok": True})
     if action == "status" and len(sys.argv) == 2:
         emit({"ok": True, **status()})
     if action == "branches" and len(sys.argv) == 2:
@@ -301,4 +369,5 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as exc:  # noqa: BLE001 - safe metadata-only response
-        emit({"ok": False, "configured": True, "error": str(exc)[:500]}, code=1)
+        detail = str(exc) if isinstance(exc, HelperError) else "Preview operation failed"
+        emit({"ok": False, "configured": True, "error": detail[:500]}, code=1)

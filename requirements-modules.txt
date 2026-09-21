@@ -1,0 +1,13 @@
+# Run from the workspace root. This explicitly installs the host and all features.
+-e .
+-e ./module-repos/tasks
+-e ./module-repos/discipline
+-e ./module-repos/planning
+-e ./module-repos/media
+-e ./module-repos/cards
+-e ./module-repos/characters
+-e ./module-repos/finance
+-e ./module-repos/assistant
+-e ./module-repos/admin
+-e ./module-repos/preview
+-e ./module-repos/feedback

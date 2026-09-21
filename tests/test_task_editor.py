@@ -8,7 +8,7 @@ import unittest
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 
-TASKS_ROOT = Path(__file__).resolve().parents[1] / "luigi_web" / "modules" / "tasks"
+TASKS_ROOT = Path(__file__).resolve().parents[1] / "module-repos" / "tasks" / "src" / "luigi_web" / "modules" / "tasks"
 
 
 class FormMarkup(HTMLParser):

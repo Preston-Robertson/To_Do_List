@@ -1,5 +1,6 @@
 """Offline browser checks with synthetic card stacks and local assets only."""
 from pathlib import Path
+from importlib.resources import files as module_files
 import unittest
 
 from luigi_web.modules.cards import routes
@@ -11,7 +12,7 @@ except ImportError:
 
 
 ROOT = Path(__file__).resolve().parents[1]
-STATIC = ROOT / "luigi_web" / "core" / "static"
+STATIC = Path(str(module_files("luigi_web.modules.cards"))) / "static" / "legacy"
 
 
 def stack_fixture(deck_id=1):

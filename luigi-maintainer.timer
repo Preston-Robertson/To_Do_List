@@ -1,5 +1,5 @@
 [Unit]
-Description=Run one approved Luigi Web maintenance job daily
+Description=Legacy maintenance generation schedule (leave disabled; use luigi-maintainer-generate.timer)
 
 [Timer]
 OnCalendar=*-*-* 03:30:00

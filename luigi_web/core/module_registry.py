@@ -6,20 +6,20 @@ import logging
 import os
 import re
 from dataclasses import dataclass, replace
-from importlib import import_module, metadata
+from importlib import import_module, metadata, util
+from pathlib import Path
 from typing import Any, Iterable
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.routing import APIRoute
 from starlette.concurrency import run_in_threadpool
 
+from .optional_modules import FEATURE_MODULE_IDS, module_available
+
 MODULE_API_VERSION = 1
 ENTRY_POINT_GROUP = "luigi_web.modules"
 _IDENTIFIER = re.compile(r"[a-z][a-z0-9_-]{0,47}\Z")
-BUILTIN_MODULE_IDS = (
-    "tasks", "discipline", "planning", "media", "cards", "characters", "finance",
-    "assistant", "admin", "preview", "feedback",
-)
+BUILTIN_MODULE_IDS = FEATURE_MODULE_IDS
 logger = logging.getLogger("luigi_web.modules")
 
 
@@ -91,7 +91,10 @@ class ModuleRegistry:
             selected = set(names)
         unknown = selected.difference(catalog)
         if unknown:
-            raise ModuleConfigurationError(f"Unknown modules: {', '.join(sorted(unknown))}")
+            available = ", ".join(sorted(catalog)) or "none"
+            raise ModuleConfigurationError(
+                f"Unknown modules: {', '.join(sorted(unknown))}; not installed or approved. Available: {available}"
+            )
 
         ordered: list[Module] = []
         visiting: set[str] = set()
@@ -106,7 +109,8 @@ class ModuleRegistry:
             module = catalog[module_id]
             for dependency in module.requires:
                 if dependency not in selected:
-                    raise ModuleConfigurationError(f"Module {module_id} requires {dependency}")
+                    reason = "not installed or approved" if dependency not in catalog else "not selected"
+                    raise ModuleConfigurationError(f"Module {module_id} requires {dependency} ({reason})")
                 visit(dependency)
             visiting.remove(module_id)
             visited.add(module_id)
@@ -152,20 +156,87 @@ def _load_reference(reference: str) -> Any:
     return getattr(import_module(module_name), attribute)
 
 
+def is_trusted_feature(module: Module) -> bool:
+    package = f"luigi_web.modules.{module.id}"
+    return (
+        module.id in BUILTIN_MODULE_IDS
+        and module.source == "Built-in"
+        and module.package == package
+        and bool(module.router)
+        and all(
+            not reference or reference.split(":", 1)[0].startswith(package + ".")
+            for reference in (module.router, module.startup, module.shutdown, module.template_setup)
+        )
+    )
+
+
+def _checkout_manifest(module_id: str) -> bool:
+    root = Path(__file__).resolve().parents[2]
+    if not (root / "pyproject.toml").is_file():
+        return False
+    spec = util.find_spec(f"luigi_web.modules.{module_id}.manifest")
+    origin = getattr(spec, "origin", None)
+    if not origin:
+        return False
+    relative = Path("luigi_web") / "modules" / module_id / "manifest.py"
+    return Path(origin).resolve() in {
+        root / relative, root / "module-repos" / module_id / "src" / relative,
+    }
+
+
 def discover_modules() -> tuple[Module, ...]:
-    modules = [
-        import_module(f"luigi_web.modules.{module_id}.manifest").module
-        for module_id in BUILTIN_MODULE_IDS
-    ]
+    from .module_bootstrap import staged_modules
+
+    staged = {record["module_id"]: record for record in staged_modules()}
     approved = os.environ.get("LUIGI_WEB_EXTERNAL_MODULES", "").strip()
-    if not approved:
-        return tuple(modules)
-    names = [name.strip() for name in approved.split(",")]
+    names = [name.strip() for name in approved.split(",")] if approved else []
     if len(names) != len(set(names)) or any(not _IDENTIFIER.fullmatch(name) for name in names):
         raise ModuleConfigurationError("Invalid external module allow-list")
-    available = metadata.entry_points(group=ENTRY_POINT_GROUP)
+    reserved = set(names).intersection(BUILTIN_MODULE_IDS)
+    if reserved:
+        raise ModuleConfigurationError(f"Duplicate module ID: {', '.join(sorted(reserved))}; reserved feature")
+    names.extend(name for name in staged if name not in BUILTIN_MODULE_IDS and name not in names)
+    available = tuple(metadata.entry_points(group=ENTRY_POINT_GROUP))
+
+    def entries_for(module_id: str):
+        entries = [entry for entry in available if entry.name == module_id]
+        if module_id not in staged:
+            return entries
+        from .module_repositories import _storage_path
+
+        expected = _storage_path(*str(staged[module_id]["site_path"]).split("/")).resolve()
+        return [entry for entry in entries if getattr(entry, "dist", None) is not None
+                and Path(str(entry.dist.locate_file(""))).resolve() == expected]
+
+    modules: list[Module] = []
+    for module_id in BUILTIN_MODULE_IDS:
+        package = f"luigi_web.modules.{module_id}"
+        reference = package + ".manifest"
+        matches = entries_for(module_id)
+        if len(matches) > 1:
+            raise ModuleConfigurationError(f"Expected one installed entry point for {module_id}")
+        if matches:
+            entry = matches[0]
+            distribution = getattr(entry, "dist", None)
+            name = distribution.metadata.get("Name", "") if distribution is not None else ""
+            normalized = re.sub(r"[-_.]+", "-", name).lower()
+            if normalized != f"luigi-web-{module_id}" or entry.value != reference + ":module":
+                raise ModuleConfigurationError(f"Untrusted reserved feature entry point: {module_id}")
+        if not module_available(reference):
+            if matches:
+                raise ModuleConfigurationError(f"Installed feature manifest is unavailable: {module_id}")
+            continue
+        if matches:
+            module = matches[0].load()
+        else:
+            if not _checkout_manifest(module_id):
+                raise ModuleConfigurationError(f"Feature {module_id} requires its installed distribution entry point")
+            module = import_module(reference).module
+        if not isinstance(module, Module) or module.id != module_id or not is_trusted_feature(module):
+            raise ModuleConfigurationError(f"Invalid reserved feature manifest: {module_id}")
+        modules.append(module)
     for name in names:
-        matches = [entry for entry in available if entry.name == name]
+        matches = entries_for(name)
         if len(matches) != 1:
             raise ModuleConfigurationError(f"Expected one installed entry point for {name}")
         try:
@@ -187,9 +258,10 @@ def build_registry(selection: str | None = None) -> ModuleRegistry:
         selection = os.environ.get("LUIGI_WEB_MODULES")
     if selection is None:
         selection = read_selection()
+    modules = discover_modules()
     if selection is None:
-        selection = ",".join(BUILTIN_MODULE_IDS)
-    return ModuleRegistry(discover_modules(), selection)
+        selection = ",".join(module.id for module in modules if is_trusted_feature(module)) or "none"
+    return ModuleRegistry(modules, selection)
 
 
 def _availability_dependency(module_id: str, app: FastAPI):
@@ -223,7 +295,7 @@ def mount_modules(app: FastAPI, registry: ModuleRegistry) -> None:
                 route.path == prefix or route.path.startswith(prefix + "/") for prefix in reserved
             ):
                 raise ModuleConfigurationError(f"Module {module.id} claims a reserved route")
-            if module.source != "Built-in":
+            if not is_trusted_feature(module):
                 prefix = f"/extensions/{module.id}"
                 if route.path != prefix and not route.path.startswith(prefix + "/"):
                     raise ModuleConfigurationError("External routes must use their extension namespace")
